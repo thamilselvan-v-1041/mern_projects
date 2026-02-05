@@ -8,6 +8,7 @@
 const SARVAM_BASE = 'https://api.sarvam.ai';
 const TRANSLATE_PATH = '/translate';
 const TTS_PATH = '/text-to-speech';
+const TRANSLITERATE_PATH = '/transliterate';
 
 export type SourceLanguageCode =
   | 'auto'
@@ -121,6 +122,21 @@ export interface TTSResponse {
   audios: string[]; // Base64-encoded WAV files
 }
 
+export interface TransliterateRequest {
+  input: string;
+  source_language_code: SourceLanguageCode;
+  target_language_code: TargetLanguageCode;
+  numerals_format?: 'international' | 'native';
+  spoken_form?: boolean;
+  spoken_form_numerals_language?: 'english' | 'native';
+}
+
+export interface TransliterateResponse {
+  request_id: string | null;
+  transliterated_text: string;
+  source_language_code: string;
+}
+
 const getApiKey = (): string => {
   const key = import.meta.env.VITE_SARVAM_API_KEY;
   if (!key || key.trim() === '') {
@@ -208,6 +224,46 @@ export async function textToSpeech(params: TTSRequest): Promise<TTSResponse> {
   }
 
   const data = (await response.json()) as TTSResponse;
+  return data;
+}
+
+/**
+ * Transliterate text using Sarvam.ai API
+ * Converts text between different scripts while preserving pronunciation
+ */
+export async function transliterate(params: TransliterateRequest): Promise<TransliterateResponse> {
+  const apiKey = getApiKey();
+  const url = `${SARVAM_BASE}${TRANSLITERATE_PATH}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-subscription-key': apiKey,
+    },
+    body: JSON.stringify({
+      input: params.input,
+      source_language_code: params.source_language_code,
+      target_language_code: params.target_language_code,
+      ...(params.numerals_format && { numerals_format: params.numerals_format }),
+      ...(params.spoken_form !== undefined && { spoken_form: params.spoken_form }),
+      ...(params.spoken_form_numerals_language && { spoken_form_numerals_language: params.spoken_form_numerals_language }),
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    let message = `Sarvam Transliteration API error ${response.status}`;
+    try {
+      const errJson = JSON.parse(errText);
+      message = (errJson.detail ?? errJson.message ?? errText) || message;
+    } catch {
+      message = errText || message;
+    }
+    throw new Error(message);
+  }
+
+  const data = (await response.json()) as TransliterateResponse;
   return data;
 }
 
