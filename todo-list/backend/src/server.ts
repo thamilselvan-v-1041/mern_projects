@@ -10,9 +10,21 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 
+// Parse CORS origins (comma-separated string to array)
+const allowedOrigins = CORS_ORIGIN.split(',').map(origin => origin.trim());
+
 // Middleware
 app.use(cors({
-  origin: CORS_ORIGIN,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 app.use(express.json());
@@ -39,4 +51,23 @@ const startServer = async () => {
   }
 };
 
-startServer();
+// Middleware to ensure database connection for Vercel serverless functions
+app.use(async (req, res, next) => {
+  if (process.env.VERCEL === 'true') {
+    try {
+      await connectDatabase();
+    } catch (error) {
+      console.error('Database connection error in serverless:', error);
+      return res.status(500).json({ error: 'Database connection failed' });
+    }
+  }
+  next();
+});
+
+// Start server only if not in Vercel serverless environment
+if (process.env.VERCEL !== 'true') {
+  startServer();
+}
+
+// Export app for Vercel serverless functions
+export default app;
