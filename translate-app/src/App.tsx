@@ -65,7 +65,7 @@ function App() {
     <div className="app">
       <header className="header">
         <h1>Translate</h1>
-        <p className="subtitle">Powered by Sarvam.ai</p>
+        <p className="subtitle">Thamil</p>
       </header>
 
       <main className="main">
@@ -77,9 +77,9 @@ function App() {
             onChange={(e) => setInputText(e.target.value)}
             placeholder="Enter text..."
             rows={4}
-            maxLength={2000}
+            maxLength={1000}
           />
-          <span className="hint">Max 2000 characters</span>
+          <span className="hint">Max 1000 characters</span>
 
           <div className="lang-row">
             <div className="field">
