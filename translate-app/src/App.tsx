@@ -65,7 +65,7 @@ function App() {
     <div className="app">
       <header className="header">
         <h1>Translate</h1>
-        <p className="subtitle">Powered by DuRai</p>
+        <p className="subtitle">Powered by Jambav</p>
       </header>
 
       <main className="main">
