@@ -15,6 +15,7 @@
   --error-bg: rgba(239, 68, 68, 0.12);
   --error-border: rgba(239, 68, 68, 0.35);
   --error-text: #fca5a5;
+  --hover-border: rgba(128, 128, 128, 0.4);
 }
 
 @media (prefers-color-scheme: light) {
@@ -31,6 +32,7 @@
     --error-bg: rgba(239, 68, 68, 0.08);
     --error-border: rgba(239, 68, 68, 0.4);
     --error-text: #b91c1c;
+    --hover-border: rgba(107, 114, 128, 0.5);
   }
 }
 
