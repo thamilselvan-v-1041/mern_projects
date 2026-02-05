@@ -23,7 +23,7 @@ export default function TranslationHistory({ refreshTrigger, selectedSpeaker = '
   const [audioErrors, setAudioErrors] = useState<Record<string, string>>({});
   const [pronunciations, setPronunciations] = useState<Record<string, string>>({});
   const audioRefs = useRef<Record<string, { source?: HTMLAudioElement; translated?: HTMLAudioElement }>>({});
-  const sequenceTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
+  const sequenceTimeoutRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const loadHistory = async () => {
     setLoading(true);

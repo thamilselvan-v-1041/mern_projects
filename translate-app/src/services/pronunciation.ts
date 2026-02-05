@@ -9,7 +9,7 @@
  */
 export async function getPronunciation(
   text: string,
-  languageCode: string
+  _languageCode: string
 ): Promise<string> {
   // For now, return a simple phonetic representation
   // This can be enhanced with a pronunciation API later
@@ -20,7 +20,7 @@ export async function getPronunciation(
  * Format pronunciation with phonetic hints
  * This is a simple implementation - can be enhanced with actual pronunciation API
  */
-export function formatPronunciation(text: string, languageCode: string): string {
+export function formatPronunciation(text: string, _languageCode: string): string {
   // Simple phonetic guide - for now just return the text
   // In production, this would call a pronunciation API or use phonetic rules
   return text;
@@ -45,7 +45,6 @@ export async function getPronunciationFromAPI(
   try {
     // Split text into words
     const words = text.trim().split(/\s+/);
-    const pronunciations: string[] = [];
 
     // Fetch pronunciation for all words using Free Dictionary API
     // API: https://api.dictionaryapi.dev/api/v2/entries/en/{word}
