@@ -159,8 +159,8 @@ function toMockBanner(
   const publishedText = Number.isNaN(publishedDate.getTime())
     ? 'Published time unavailable'
     : publishedDate.toLocaleString()
-  const sourceText = escapeXml(`Source: ${truncate(source || 'Unknown source', 44)}`)
-  const timeText = escapeXml(`Published: ${publishedText}`)
+  const sourceValueText = escapeXml(truncate(source || 'Unknown source', 44))
+  const timeValueText = escapeXml(publishedText)
   const titleLines = titleLinesArray.map((line, index) => {
     const y = titleStartY + index * titleLineHeight
     return `<text x='70' y='${y}' font-size='48' font-family='-apple-system,Segoe UI,Roboto,Arial' fill='white' font-weight='700'>${escapeXml(line)}</text>`
@@ -177,8 +177,8 @@ function toMockBanner(
     </clipPath>
   </defs>
   <rect width='1200' height='${bannerHeight}' fill='url(#g)'/>
-  <text x='${horizontalPadding}' y='74' font-size='24' font-family='-apple-system,Segoe UI,Roboto,Arial' fill='rgba(255,255,255,0.95)'>${sourceText}</text>
-  <text x='${horizontalPadding}' y='110' font-size='22' font-family='-apple-system,Segoe UI,Roboto,Arial' fill='rgba(255,255,255,0.92)'>${timeText}</text>
+  <text x='${horizontalPadding}' y='74' font-size='24' font-family='-apple-system,Segoe UI,Roboto,Arial' fill='rgba(255,255,255,0.95)'>Source: <tspan font-weight='600'>${sourceValueText}</tspan></text>
+  <text x='${horizontalPadding}' y='110' font-size='22' font-family='-apple-system,Segoe UI,Roboto,Arial' fill='rgba(255,255,255,0.92)'>Published: <tspan font-weight='600'>${timeValueText}</tspan></text>
   <g clip-path='url(#titleClip)'>${titleLines}</g>
 </svg>`
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
