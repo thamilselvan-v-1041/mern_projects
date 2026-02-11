@@ -1,1 +1,4 @@
 .DS_Store
+daily-trends/node_modules/
+daily-trends/dist/
+daily-trends/vite.config.js
