@@ -26,9 +26,10 @@ export default function FeedDetail() {
   const [displayTitle, setDisplayTitle] = useState<string>('')
   const bannerSrc = useMemo(() => {
     if (!feed) return ''
-    const generated = buildBannerForFeed(feed, displayTitle || 'Loading title...')
+    if (!displayReady) return ''
+    const generated = buildBannerForFeed(feed, displayTitle || feed.title)
     return generated || feed.imageUrl || ''
-  }, [feed, displayTitle])
+  }, [feed, displayReady, displayTitle])
 
   useEffect(() => {
     setContentReady(false)
@@ -86,8 +87,19 @@ export default function FeedDetail() {
     if (summaryDoneForId === feed.id) return
 
     let active = true
+    let revealTimeoutId: number | null = null
     setSummaryBusy(true)
     setDisplayReady(false)
+
+    const reveal = (title: string, summaryHtml: string) => {
+      revealTimeoutId = window.setTimeout(() => {
+        if (!active) return
+        setContentHtml(summaryHtml)
+        setDisplayTitle(title)
+        setSummaryDoneForId(feed.id)
+        setDisplayReady(true)
+      }, 1000)
+    }
 
     summarizeWithSarvam(feed.id, feed.title, rawContentHtml)
       .then((result) => {
@@ -97,13 +109,11 @@ export default function FeedDetail() {
           : rawContentHtml || `<p>${feed.excerpt}</p>`
         const finalTitle = result.title?.trim() ? result.title : feed.title
 
-        window.setTimeout(() => {
-          if (!active) return
-          setContentHtml(finalContent)
-          setDisplayTitle(finalTitle)
-          setSummaryDoneForId(feed.id)
-          setDisplayReady(true)
-        }, 1000)
+        reveal(finalTitle, finalContent)
+      })
+      .catch(() => {
+        if (!active) return
+        reveal(feed.title, rawContentHtml || `<p>${feed.excerpt}</p>`)
       })
       .finally(() => {
         if (active) setSummaryBusy(false)
@@ -111,6 +121,7 @@ export default function FeedDetail() {
 
     return () => {
       active = false
+      if (revealTimeoutId !== null) window.clearTimeout(revealTimeoutId)
     }
   }, [feed, contentReady, rawContentHtml, summaryDoneForId])
 
@@ -144,27 +155,31 @@ export default function FeedDetail() {
         </div>
       </header>
       <article className="article">
-        {bannerSrc ? (
-          <img
-            src={bannerSrc}
-            alt=""
-            className={`article-image ${summaryDoneForId === feed.id ? 'article-image-expanded' : ''}`}
-            loading="eager"
-            decoding="async"
-          />
-        ) : null}
-        <div className="article-body">
-          {!displayReady || summaryBusy ? (
-            <div className="summary-spinner-wrap" aria-label="Refining content">
+        {!displayReady || summaryBusy ? (
+          <div className="article-pending-view" aria-label="Refining content">
+            <div className="summary-spinner-wrap">
               <span className="loader-spinner" aria-hidden="true" />
             </div>
-          ) : (
-            <div
-              className="article-content"
-              dangerouslySetInnerHTML={{ __html: contentHtml || `<p>${feed.excerpt}</p>` }}
-            />
-          )}
-        </div>
+          </div>
+        ) : (
+          <>
+            {bannerSrc ? (
+              <img
+                src={bannerSrc}
+                alt=""
+                className={`article-image ${summaryDoneForId === feed.id ? 'article-image-expanded' : ''}`}
+                loading="eager"
+                decoding="async"
+              />
+            ) : null}
+            <div className="article-body">
+              <div
+                className="article-content"
+                dangerouslySetInnerHTML={{ __html: contentHtml || `<p>${feed.excerpt}</p>` }}
+              />
+            </div>
+          </>
+        )}
       </article>
     </div>
   )

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import BookmarkToggle from '../components/BookmarkToggle'
 import { categories } from '../data/mockData'
@@ -7,13 +7,53 @@ import type { Feed } from '../types'
 import { BOOKMARKS_UPDATED_EVENT, getBookmarkedFeedIds } from '../utils/bookmarks'
 import { getSelectedCategories, hasEnteredHome } from '../utils/session'
 
+const HOME_FEEDS_CACHE_KEY = 'daily-trends-home-feeds-v1'
+const PULL_REFRESH_TRIGGER = 72
+
+interface HomeFeedsCache {
+  selectedKey: string
+  feeds: Feed[]
+}
+
+function toSelectedKey(ids: string[]): string {
+  return [...ids].sort().join('|')
+}
+
+function readHomeFeedsCache(selectedKey: string): Feed[] {
+  try {
+    const raw = sessionStorage.getItem(HOME_FEEDS_CACHE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as HomeFeedsCache
+    if (parsed.selectedKey !== selectedKey) return []
+    return Array.isArray(parsed.feeds) ? parsed.feeds : []
+  } catch {
+    return []
+  }
+}
+
+function writeHomeFeedsCache(selectedKey: string, feeds: Feed[]): void {
+  try {
+    const payload: HomeFeedsCache = { selectedKey, feeds }
+    sessionStorage.setItem(HOME_FEEDS_CACHE_KEY, JSON.stringify(payload))
+  } catch {
+    // Ignore cache write failures in private mode/quota limits.
+  }
+}
+
 export default function Home() {
   const enteredHome = hasEnteredHome()
   const [bookmarkCount, setBookmarkCount] = useState<number>(() => getBookmarkedFeedIds().length)
-  const [feeds, setFeeds] = useState<Feed[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
   const selectedCategoryIds = useMemo(() => getSelectedCategories(), [])
+  const selectedKey = useMemo(() => toSelectedKey(selectedCategoryIds), [selectedCategoryIds])
+  const cachedFeeds = useMemo(() => readHomeFeedsCache(selectedKey), [selectedKey])
+  const [feeds, setFeeds] = useState<Feed[]>(cachedFeeds)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState<boolean>(cachedFeeds.length > 0)
+  const [loading, setLoading] = useState<boolean>(cachedFeeds.length === 0)
+  const [error, setError] = useState<string | null>(null)
+  const [pullDistance, setPullDistance] = useState(0)
+  const mainRef = useRef<HTMLElement | null>(null)
+  const pullStartY = useRef<number | null>(null)
+  const pullActive = pullDistance > 0
   const selectedCategoryMap = useMemo(
     () =>
       new Map(
@@ -24,6 +64,25 @@ export default function Home() {
     [selectedCategoryIds]
   )
 
+  const loadFeeds = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await fetchTopFeedsForSelectedCategories(selectedCategoryIds, 10)
+      setFeeds(result)
+      writeHomeFeedsCache(selectedKey, result)
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to load news right now. Please try again.'
+      )
+    } finally {
+      setLoading(false)
+      setHasLoadedOnce(true)
+    }
+  }, [selectedCategoryIds, selectedKey])
+
   useEffect(() => {
     const onBookmarksUpdated = () => setBookmarkCount(getBookmarkedFeedIds().length)
     window.addEventListener(BOOKMARKS_UPDATED_EVENT, onBookmarksUpdated)
@@ -33,31 +92,45 @@ export default function Home() {
   useEffect(() => {
     if (!enteredHome) return
 
-    let active = true
-    setLoading(true)
-    setError(null)
-
-    fetchTopFeedsForSelectedCategories(selectedCategoryIds, 10)
-      .then((result) => {
-        if (!active) return
-        setFeeds(result)
-      })
-      .catch((err: unknown) => {
-        if (!active) return
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Unable to load news right now. Please try again.'
-        )
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-
-    return () => {
-      active = false
+    if (cachedFeeds.length > 0) {
+      setFeeds(cachedFeeds)
+      setHasLoadedOnce(true)
+      setLoading(false)
+      return
     }
-  }, [enteredHome, selectedCategoryIds])
+
+    void loadFeeds()
+  }, [enteredHome, cachedFeeds, loadFeeds])
+
+  const handleTouchStart = (event: TouchEvent<HTMLElement>) => {
+    if (loading) return
+    const container = mainRef.current
+    if (!container || container.scrollTop > 0) return
+    pullStartY.current = event.touches[0]?.clientY ?? null
+  }
+
+  const handleTouchMove = (event: TouchEvent<HTMLElement>) => {
+    const startY = pullStartY.current
+    if (startY === null) return
+    const container = mainRef.current
+    if (!container || container.scrollTop > 0) return
+    const currentY = event.touches[0]?.clientY ?? startY
+    const delta = currentY - startY
+    if (delta <= 0) {
+      setPullDistance(0)
+      return
+    }
+    setPullDistance(Math.min(96, delta * 0.55))
+  }
+
+  const handleTouchEnd = () => {
+    if (pullStartY.current === null) return
+    const shouldRefresh = pullDistance >= PULL_REFRESH_TRIGGER
+    pullStartY.current = null
+    setPullDistance(0)
+    if (!shouldRefresh || loading) return
+    void loadFeeds()
+  }
 
   if (!enteredHome) {
     return <Navigate to="/" replace />
@@ -78,8 +151,35 @@ export default function Home() {
           Edit interests
         </Link>
       </header>
-      <main className="main">
-        {loading ? <p className="status-text">Loading latest news...</p> : null}
+      <main
+        className="main"
+        ref={mainRef}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
+      >
+        {pullActive ? (
+          <div
+            className={`pull-refresh-indicator ${
+              pullDistance >= PULL_REFRESH_TRIGGER ? 'ready' : ''
+            }`}
+            style={{ height: `${Math.max(26, pullDistance)}px` }}
+            aria-hidden="true"
+          >
+            <span className="loader-spinner" />
+          </div>
+        ) : null}
+        {loading && !hasLoadedOnce ? (
+          <div className="center-loader" role="status" aria-live="polite">
+            <span className="loader-spinner" aria-hidden="true" />
+          </div>
+        ) : null}
+        {loading && hasLoadedOnce ? (
+          <div className="center-loader-overlay" role="status" aria-live="polite">
+            <span className="loader-spinner" aria-hidden="true" />
+          </div>
+        ) : null}
         {error ? <p className="status-text">{error}</p> : null}
         {!loading && feeds.length === 0 ? (
           <div className="empty-state">
