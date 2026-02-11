@@ -2,3 +2,4 @@
 daily-trends/node_modules/
 daily-trends/dist/
 daily-trends/vite.config.js
+daily-trends/.env.local

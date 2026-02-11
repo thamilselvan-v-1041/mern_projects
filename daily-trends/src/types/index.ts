@@ -14,4 +14,5 @@ export interface Feed {
   imageUrl?: string
   publishedAt: string
   source: string
+  link?: string
 }

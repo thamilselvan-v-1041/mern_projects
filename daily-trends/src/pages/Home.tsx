@@ -1,29 +1,67 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import BookmarkToggle from '../components/BookmarkToggle'
-import { categories, getTopFeedsForCategories } from '../data/mockData'
+import { categories } from '../data/mockData'
+import { fetchTopFeedsForSelectedCategories } from '../services/news'
+import type { Feed } from '../types'
 import { BOOKMARKS_UPDATED_EVENT, getBookmarkedFeedIds } from '../utils/bookmarks'
 import { getSelectedCategories, hasEnteredHome } from '../utils/session'
 
 export default function Home() {
-  if (!hasEnteredHome()) {
-    return <Navigate to="/" replace />
-  }
-
+  const enteredHome = hasEnteredHome()
   const [bookmarkCount, setBookmarkCount] = useState<number>(() => getBookmarkedFeedIds().length)
-  const selectedCategoryIds = getSelectedCategories()
-  const selectedCategoryMap = new Map(
-    categories
-      .filter((category) => selectedCategoryIds.includes(category.id))
-      .map((category) => [category.id, category])
+  const [feeds, setFeeds] = useState<Feed[]>([])
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string | null>(null)
+  const selectedCategoryIds = useMemo(() => getSelectedCategories(), [])
+  const selectedCategoryMap = useMemo(
+    () =>
+      new Map(
+        categories
+          .filter((category) => selectedCategoryIds.includes(category.id))
+          .map((category) => [category.id, category])
+      ),
+    [selectedCategoryIds]
   )
-  const feeds = getTopFeedsForCategories(selectedCategoryIds, 10)
 
   useEffect(() => {
     const onBookmarksUpdated = () => setBookmarkCount(getBookmarkedFeedIds().length)
     window.addEventListener(BOOKMARKS_UPDATED_EVENT, onBookmarksUpdated)
     return () => window.removeEventListener(BOOKMARKS_UPDATED_EVENT, onBookmarksUpdated)
   }, [])
+
+  useEffect(() => {
+    if (!enteredHome) return
+
+    let active = true
+    setLoading(true)
+    setError(null)
+
+    fetchTopFeedsForSelectedCategories(selectedCategoryIds, 10)
+      .then((result) => {
+        if (!active) return
+        setFeeds(result)
+      })
+      .catch((err: unknown) => {
+        if (!active) return
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Unable to load news right now. Please try again.'
+        )
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [enteredHome, selectedCategoryIds])
+
+  if (!enteredHome) {
+    return <Navigate to="/" replace />
+  }
 
   return (
     <div className="page feeds-page">
@@ -41,6 +79,13 @@ export default function Home() {
         </Link>
       </header>
       <main className="main">
+        {loading ? <p className="status-text">Loading latest news...</p> : null}
+        {error ? <p className="status-text">{error}</p> : null}
+        {!loading && feeds.length === 0 ? (
+          <div className="empty-state">
+            <p>No stories found for your interests right now.</p>
+          </div>
+        ) : null}
         <ol className="feed-list">
           {feeds.map((feed, index) => {
             const category = selectedCategoryMap.get(feed.categoryId)
@@ -51,7 +96,7 @@ export default function Home() {
                   <Link
                     to={`/feed/${feed.id}`}
                     className="feed-card"
-                    state={{ backTo: '/home' }}
+                    state={{ backTo: '/home', feed }}
                   >
                     <span className="feed-rank">#{index + 1}</span>
                     <div className="feed-info">
@@ -67,7 +112,7 @@ export default function Home() {
                       ) : null}
                     </div>
                   </Link>
-                  <BookmarkToggle feedId={feed.id} />
+                  <BookmarkToggle feed={feed} />
                 </div>
               </li>
             )

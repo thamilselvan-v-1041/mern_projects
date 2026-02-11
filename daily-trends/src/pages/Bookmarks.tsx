@@ -1,13 +1,8 @@
 import { Link } from 'react-router-dom'
-import { getFeedById } from '../data/mockData'
-import { getBookmarkedFeedIds } from '../utils/bookmarks'
+import { getBookmarkedFeeds } from '../utils/bookmarks'
 
 export default function Bookmarks() {
-  const bookmarkedFeedIds = getBookmarkedFeedIds()
-  const bookmarkedFeeds = [...bookmarkedFeedIds]
-    .reverse()
-    .map((feedId) => getFeedById(feedId))
-    .filter((feed): feed is NonNullable<typeof feed> => Boolean(feed))
+  const bookmarkedFeeds = getBookmarkedFeeds()
 
   return (
     <div className="page feeds-page">
@@ -30,7 +25,7 @@ export default function Bookmarks() {
                 <Link
                   to={`/feed/${feed.id}`}
                   className="feed-card"
-                  state={{ backTo: '/bookmarks' }}
+                  state={{ backTo: '/bookmarks', feed }}
                 >
                   <span className="feed-rank">#{index + 1}</span>
                   <div className="feed-info">

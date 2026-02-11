@@ -1,4 +1,5 @@
 import { useEffect, useState, type MouseEvent } from 'react'
+import type { Feed } from '../types'
 import {
   BOOKMARKS_UPDATED_EVENT,
   isFeedBookmarked,
@@ -6,27 +7,27 @@ import {
 } from '../utils/bookmarks'
 
 interface BookmarkToggleProps {
-  feedId: string
+  feed: Feed
 }
 
-export default function BookmarkToggle({ feedId }: BookmarkToggleProps) {
-  const [bookmarked, setBookmarked] = useState<boolean>(() => isFeedBookmarked(feedId))
+export default function BookmarkToggle({ feed }: BookmarkToggleProps) {
+  const [bookmarked, setBookmarked] = useState<boolean>(() => isFeedBookmarked(feed.id))
 
   useEffect(() => {
-    setBookmarked(isFeedBookmarked(feedId))
+    setBookmarked(isFeedBookmarked(feed.id))
 
     const onBookmarksUpdated = () => {
-      setBookmarked(isFeedBookmarked(feedId))
+      setBookmarked(isFeedBookmarked(feed.id))
     }
 
     window.addEventListener(BOOKMARKS_UPDATED_EVENT, onBookmarksUpdated)
     return () => window.removeEventListener(BOOKMARKS_UPDATED_EVENT, onBookmarksUpdated)
-  }, [feedId])
+  }, [feed.id])
 
   const onToggle = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    setBookmarked(toggleFeedBookmark(feedId))
+    setBookmarked(toggleFeedBookmark(feed))
   }
 
   return (

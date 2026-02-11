@@ -1,4 +1,5 @@
 import type { Category, Feed } from '../types'
+import { getCachedFeedById } from '../utils/feedCache'
 
 export const categories: Category[] = [
   { id: '1', name: 'Business', slug: 'business', icon: '💼' },
@@ -61,6 +62,9 @@ export function getTopFeedsForCategories(categoryIds: string[], limit = 10): Fee
 }
 
 export function getFeedById(feedId: string): Feed | undefined {
+  const cached = getCachedFeedById(feedId)
+  if (cached) return cached
+
   for (const feeds of allFeedsByCategory.values()) {
     const found = feeds.find((f) => f.id === feedId)
     if (found) return found
