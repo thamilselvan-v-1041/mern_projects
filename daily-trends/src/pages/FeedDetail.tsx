@@ -11,12 +11,20 @@ import { getBookmarkedFeedById } from '../utils/bookmarks'
 export default function FeedDetail() {
   const { feedId } = useParams<{ feedId: string }>()
   const location = useLocation()
-  const state = (location.state as { backTo?: unknown; feed?: Feed } | null) ?? null
+  const state = (location.state as {
+    backTo?: unknown
+    feed?: Feed
+    fromHomeScrollTop?: unknown
+  } | null) ?? null
   const feed = state?.feed || (feedId ? getBookmarkedFeedById(feedId) || getFeedById(feedId) : undefined)
   const backTo =
     typeof state?.backTo === 'string'
       ? state.backTo
       : '/home'
+  const backScrollTop =
+    typeof state?.fromHomeScrollTop === 'number' && Number.isFinite(state.fromHomeScrollTop)
+      ? Math.max(0, state.fromHomeScrollTop)
+      : undefined
   const [contentReady, setContentReady] = useState(false)
   const [rawContentHtml, setRawContentHtml] = useState<string>('')
   const [displayReady, setDisplayReady] = useState(false)
@@ -148,7 +156,12 @@ export default function FeedDetail() {
     <div className="page detail-page">
       <header className="header header-detail">
         <div className="header-row">
-          <Link to={backTo} className="back-link" aria-label="Back">
+          <Link
+            to={backTo}
+            state={feed ? { lastSelectedFeedId: feed.id, restoreScrollTop: backScrollTop } : undefined}
+            className="back-link"
+            aria-label="Back"
+          >
             ← Back
           </Link>
           <BookmarkToggle feed={feed} />

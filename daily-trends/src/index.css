@@ -358,6 +358,15 @@ body {
   transform: scale(0.99);
 }
 
+.feed-card.selected {
+  background: #eaf1ff;
+  box-shadow: inset 0 0 0 1px #bfdbfe;
+}
+
+.feed-card.selected .feed-title {
+  color: #1e3a8a;
+}
+
 .feed-rank {
   flex-shrink: 0;
   width: 32px;

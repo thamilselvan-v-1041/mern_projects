@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useLocation } from 'react-router-dom'
 import BookmarkToggle from '../components/BookmarkToggle'
 import { categories } from '../data/mockData'
+import { translateFeedsBatchToEnglish, type FeedTranslationItem } from '../services/feedTranslation'
 import { fetchTopFeedsPageForSelectedCategories } from '../services/news'
 import type { Feed } from '../types'
 import { BOOKMARKS_UPDATED_EVENT, getBookmarkedFeedIds } from '../utils/bookmarks'
 import { getSelectedCategories, hasEnteredHome } from '../utils/session'
 
 const HOME_FEEDS_CACHE_KEY = 'daily-trends-home-feeds-v1'
+const LAST_SELECTED_FEED_KEY = 'daily-trends-last-selected-feed'
+const LAST_HOME_SCROLL_KEY = 'daily-trends-home-scroll-top'
+const LAST_HOME_SELECTED_OFFSET_KEY = 'daily-trends-home-selected-offset'
 const PULL_REFRESH_TRIGGER = 72
 const PAGE_SIZE = 15
 
@@ -61,22 +65,28 @@ function mergeUniqueFeeds(prev: Feed[], next: Feed[]): Feed[] {
 }
 
 export default function Home() {
+  const location = useLocation()
   const enteredHome = hasEnteredHome()
   const [bookmarkCount, setBookmarkCount] = useState<number>(() => getBookmarkedFeedIds().length)
   const selectedCategoryIds = useMemo(() => getSelectedCategories(), [])
   const selectedKey = useMemo(() => toSelectedKey(selectedCategoryIds), [selectedCategoryIds])
   const cachedHome = useMemo(() => readHomeFeedsCache(selectedKey), [selectedKey])
-  const [feeds, setFeeds] = useState<Feed[]>(cachedHome?.feeds ?? [])
-  const [nextPage, setNextPage] = useState<number>(cachedHome?.nextPage ?? 0)
-  const [hasMore, setHasMore] = useState<boolean>(cachedHome?.hasMore ?? true)
-  const [initialLoading, setInitialLoading] = useState<boolean>((cachedHome?.feeds.length ?? 0) === 0)
+  const [feeds, setFeeds] = useState<Feed[]>([])
+  const [nextPage, setNextPage] = useState<number>(0)
+  const [hasMore, setHasMore] = useState<boolean>(true)
+  const [initialLoading, setInitialLoading] = useState<boolean>(true)
   const [loadingMore, setLoadingMore] = useState<boolean>(false)
   const [refreshing, setRefreshing] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedFeedId, setSelectedFeedId] = useState<string>(
+    () => sessionStorage.getItem(LAST_SELECTED_FEED_KEY) || ''
+  )
+  const [feedTextMap, setFeedTextMap] = useState<Record<string, FeedTranslationItem>>({})
   const [pullDistance, setPullDistance] = useState(0)
   const mainRef = useRef<HTMLElement | null>(null)
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
   const pullStartY = useRef<number | null>(null)
+  const didRestoreSelectionRef = useRef(false)
   const pullActive = pullDistance > 0
   const selectedCategoryMap = useMemo(
     () =>
@@ -88,14 +98,27 @@ export default function Home() {
     [selectedCategoryIds]
   )
 
+  const translateFeedChunks = useCallback(async (items: Feed[]) => {
+    const translated: Record<string, FeedTranslationItem> = {}
+    for (let offset = 0; offset < items.length; offset += PAGE_SIZE) {
+      const chunk = items.slice(offset, offset + PAGE_SIZE)
+      if (chunk.length === 0) continue
+      const batch = await translateFeedsBatchToEnglish(chunk)
+      Object.assign(translated, batch)
+    }
+    return translated
+  }, [])
+
   const loadFirstPage = useCallback(async (asRefresh: boolean) => {
     if (asRefresh) setRefreshing(true)
     else setInitialLoading(true)
     setError(null)
     try {
       const result = await fetchTopFeedsPageForSelectedCategories(selectedCategoryIds, PAGE_SIZE, 0)
+      const translatedMap = await translateFeedsBatchToEnglish(result.feeds)
       const next = result.feeds.length > 0 ? 1 : 0
       setFeeds(result.feeds)
+      setFeedTextMap(translatedMap)
       setNextPage(next)
       setHasMore(result.hasMore)
       writeHomeFeedsCache({
@@ -127,6 +150,7 @@ export default function Home() {
         PAGE_SIZE,
         nextPage
       )
+      const translatedMap = await translateFeedsBatchToEnglish(result.feeds)
       const targetPage = nextPage + 1
       setFeeds((prev) => {
         const merged = mergeUniqueFeeds(prev, result.feeds)
@@ -138,6 +162,7 @@ export default function Home() {
         })
         return merged
       })
+      setFeedTextMap((prev) => ({ ...prev, ...translatedMap }))
       setNextPage(targetPage)
       setHasMore(result.hasMore)
     } catch (err: unknown) {
@@ -161,15 +186,35 @@ export default function Home() {
     if (!enteredHome) return
 
     if (cachedHome && cachedHome.feeds.length > 0) {
-      setFeeds(cachedHome.feeds)
-      setNextPage(cachedHome.nextPage)
-      setHasMore(cachedHome.hasMore)
-      setInitialLoading(false)
-      return
+      let active = true
+      setInitialLoading(true)
+      setError(null)
+      void (async () => {
+        try {
+          const translatedMap = await translateFeedChunks(cachedHome.feeds)
+          if (!active) return
+          setFeeds(cachedHome.feeds)
+          setFeedTextMap((prev) => ({ ...prev, ...translatedMap }))
+          setNextPage(cachedHome.nextPage)
+          setHasMore(cachedHome.hasMore)
+        } catch (err: unknown) {
+          if (!active) return
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Unable to translate feeds right now. Please pull to refresh.'
+          )
+        } finally {
+          if (active) setInitialLoading(false)
+        }
+      })()
+      return () => {
+        active = false
+      }
     }
 
     void loadFirstPage(false)
-  }, [cachedHome, enteredHome, loadFirstPage])
+  }, [cachedHome, enteredHome, loadFirstPage, translateFeedChunks])
 
   useEffect(() => {
     if (!enteredHome) return
@@ -194,6 +239,92 @@ export default function Home() {
     observer.observe(target)
     return () => observer.disconnect()
   }, [enteredHome, hasMore, loadNextPage, feeds.length])
+
+  useEffect(() => {
+    if (didRestoreSelectionRef.current) return
+    if (initialLoading) return
+    if (feeds.length === 0) return
+    const main = mainRef.current
+    if (!main) return
+
+    const routeState =
+      (
+        location.state as {
+          lastSelectedFeedId?: unknown
+          restoreScrollTop?: unknown
+          restoreSelectedOffset?: unknown
+        } | null
+      ) ?? null
+    const routeScrollTop =
+      typeof routeState?.restoreScrollTop === 'number' && Number.isFinite(routeState.restoreScrollTop)
+        ? Math.max(0, routeState.restoreScrollTop)
+        : null
+    const fromSessionScrollRaw = sessionStorage.getItem(LAST_HOME_SCROLL_KEY)
+    const fromSessionScroll = fromSessionScrollRaw !== null ? Number(fromSessionScrollRaw) : Number.NaN
+    const savedScrollTop = Number.isFinite(fromSessionScroll) ? Math.max(0, fromSessionScroll) : null
+    const routeSelectedOffset =
+      typeof routeState?.restoreSelectedOffset === 'number' &&
+      Number.isFinite(routeState.restoreSelectedOffset)
+        ? Math.max(0, routeState.restoreSelectedOffset)
+        : null
+    const fromSessionOffsetRaw = sessionStorage.getItem(LAST_HOME_SELECTED_OFFSET_KEY)
+    const fromSessionOffset = fromSessionOffsetRaw !== null ? Number(fromSessionOffsetRaw) : Number.NaN
+    const savedSelectedOffset = Number.isFinite(fromSessionOffset)
+      ? Math.max(0, fromSessionOffset)
+      : null
+    const targetScrollTop = routeScrollTop ?? savedScrollTop
+    if (targetScrollTop !== null) {
+      // Wait one paint so list height is ready before restoring.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          main.scrollTo({ top: targetScrollTop, behavior: 'auto' })
+        })
+      })
+      sessionStorage.removeItem(LAST_HOME_SCROLL_KEY)
+      sessionStorage.removeItem(LAST_HOME_SELECTED_OFFSET_KEY)
+      didRestoreSelectionRef.current = true
+      return
+    }
+
+    const selectedStateId = routeState?.lastSelectedFeedId
+    const routeSelectedId = typeof selectedStateId === 'string' ? selectedStateId : ''
+    const routeStateId = routeSelectedId
+    const fromRoute = routeStateId
+    const fromSession = sessionStorage.getItem(LAST_SELECTED_FEED_KEY) || ''
+    const targetFeedId = fromRoute || fromSession
+    if (targetFeedId) {
+      setSelectedFeedId(targetFeedId)
+    }
+
+    if (!targetFeedId) {
+      didRestoreSelectionRef.current = true
+      return
+    }
+
+    const target = main.querySelector<HTMLElement>(`[data-feed-id="${targetFeedId}"]`)
+    if (!target) return
+
+    const targetOffset = routeSelectedOffset ?? savedSelectedOffset
+    const top =
+      targetOffset !== null
+        ? Math.max(0, Math.round(target.offsetTop - targetOffset))
+        : Math.max(0, target.offsetTop - 12)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        main.scrollTo({ top, behavior: 'auto' })
+      })
+    })
+    sessionStorage.removeItem(LAST_SELECTED_FEED_KEY)
+    sessionStorage.removeItem(LAST_HOME_SCROLL_KEY)
+    sessionStorage.removeItem(LAST_HOME_SELECTED_OFFSET_KEY)
+    didRestoreSelectionRef.current = true
+  }, [feeds, feedTextMap, initialLoading, location.state])
+
+  const handleMainScroll = () => {
+    const main = mainRef.current
+    if (!main) return
+    sessionStorage.setItem(LAST_HOME_SCROLL_KEY, String(Math.max(0, Math.round(main.scrollTop))))
+  }
 
   const handleTouchStart = (event: TouchEvent<HTMLElement>) => {
     if (initialLoading || loadingMore || refreshing) return
@@ -251,6 +382,7 @@ export default function Home() {
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchEnd}
+        onScroll={handleMainScroll}
       >
         {pullActive ? (
           <div
@@ -282,19 +414,41 @@ export default function Home() {
         <ol className="feed-list">
           {feeds.map((feed, index) => {
             const category = selectedCategoryMap.get(feed.categoryId)
+            const displayText = feedTextMap[feed.id]
+            if (!displayText) return null
 
             return (
               <li key={feed.id}>
                 <div className="feed-row">
                   <Link
                     to={`/feed/${feed.id}`}
-                    className="feed-card"
-                    state={{ backTo: '/home', feed }}
+                    className={`feed-card ${selectedFeedId === feed.id ? 'selected' : ''}`}
+                    state={{
+                      backTo: '/home',
+                      feed,
+                      fromHomeScrollTop: Math.max(0, Math.round(mainRef.current?.scrollTop ?? 0)),
+                    }}
+                    onClick={(event) => {
+                      const main = mainRef.current
+                      const card = event.currentTarget as HTMLElement
+                      const selectedOffset = main ? Math.max(0, card.offsetTop - main.scrollTop) : 0
+                      setSelectedFeedId(feed.id)
+                      sessionStorage.setItem(LAST_SELECTED_FEED_KEY, feed.id)
+                      sessionStorage.setItem(
+                        LAST_HOME_SCROLL_KEY,
+                        String(Math.max(0, Math.round(mainRef.current?.scrollTop ?? 0)))
+                      )
+                      sessionStorage.setItem(
+                        LAST_HOME_SELECTED_OFFSET_KEY,
+                        String(Math.max(0, Math.round(selectedOffset)))
+                      )
+                    }}
+                    data-feed-id={feed.id}
                   >
                     <span className="feed-rank">#{index + 1}</span>
                     <div className="feed-info">
-                      <h2 className="feed-title">{feed.title}</h2>
-                      <p className="feed-excerpt">{feed.excerpt}</p>
+                      <h2 className="feed-title">{displayText.title}</h2>
+                      <p className="feed-excerpt">{displayText.excerpt}</p>
                       <span className="feed-meta">
                         {feed.source} · {new Date(feed.publishedAt).toLocaleDateString()}
                       </span>
