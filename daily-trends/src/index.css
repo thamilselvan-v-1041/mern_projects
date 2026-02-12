@@ -318,6 +318,17 @@ body {
   margin: 0;
 }
 
+.feed-load-more-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 0 8px;
+}
+
+.feed-load-more-anchor {
+  height: 1px;
+}
+
 .feed-row {
   position: relative;
   display: flex;

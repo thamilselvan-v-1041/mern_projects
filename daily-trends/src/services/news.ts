@@ -17,6 +17,11 @@ interface GdeltResponse {
   articles?: GdeltArticle[]
 }
 
+export interface FeedPageResult {
+  feeds: Feed[]
+  hasMore: boolean
+}
+
 const GDELT_BASE = 'https://api.gdeltproject.org/api/v2/doc/doc'
 
 const CATEGORY_QUERY: Record<string, string> = {
@@ -287,25 +292,49 @@ export async function fetchFeedsForCategory(categoryId: string, limit = 10): Pro
   return fetchCategoryFromGdelt(category, limit)
 }
 
-export async function fetchTopFeedsForSelectedCategories(categoryIds: string[], limit = 10): Promise<Feed[]> {
+export async function fetchTopFeedsPageForSelectedCategories(
+  categoryIds: string[],
+  pageSize = 15,
+  page = 0
+): Promise<FeedPageResult> {
   const selected = categories.filter((category) => categoryIds.includes(category.id))
-  if (selected.length === 0) return []
+  if (selected.length === 0) return { feeds: [], hasMore: false }
+
+  const safePage = Math.max(0, page)
+  const safePageSize = Math.max(1, pageSize)
+  const start = safePage * safePageSize
+  const end = start + safePageSize
+  const fetchLimitPerCategory = Math.max(15, safePageSize * (safePage + 1) * 2)
 
   const result = await Promise.allSettled(
-    selected.map((category) => fetchCategoryFromGdelt(category, Math.max(5, limit)))
+    selected.map((category) => fetchCategoryFromGdelt(category, fetchLimitPerCategory))
   )
 
   const merged = result.flatMap((entry) => (entry.status === 'fulfilled' ? entry.value : []))
   const deduped = dedupeFeeds(merged)
     .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
-    .slice(0, limit)
+  const pageFeeds = deduped.slice(start, end)
 
-  if (deduped.length > 0) return deduped
+  if (pageFeeds.length > 0) {
+    return { feeds: pageFeeds, hasMore: deduped.length > end }
+  }
 
-  // Global fallback so home is never empty when category queries are sparse.
+  // Global fallback if category fetches are sparse.
   const primaryCategory = selected[0]
-  const globalArticles = await fetchGdeltArticles('breaking news world technology business sports', limit)
-  const fallbackFeeds = mapArticlesToFeeds(globalArticles, primaryCategory, limit)
-  cacheFeeds(fallbackFeeds)
-  return fallbackFeeds
+  const fallbackLimit = Math.max(20, safePageSize * (safePage + 1) * 2)
+  const globalArticles = await fetchGdeltArticles(
+    'breaking news world technology business sports',
+    fallbackLimit
+  )
+  const fallbackFeeds = mapArticlesToFeeds(globalArticles, primaryCategory, fallbackLimit)
+  const fallbackDeduped = dedupeFeeds(fallbackFeeds)
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+  const fallbackPageFeeds = fallbackDeduped.slice(start, end)
+  cacheFeeds(fallbackPageFeeds)
+  return { feeds: fallbackPageFeeds, hasMore: fallbackDeduped.length > end }
+}
+
+export async function fetchTopFeedsForSelectedCategories(categoryIds: string[], limit = 10): Promise<Feed[]> {
+  const page = await fetchTopFeedsPageForSelectedCategories(categoryIds, limit, 0)
+  return page.feeds
 }

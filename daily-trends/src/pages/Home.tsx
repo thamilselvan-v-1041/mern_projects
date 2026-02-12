@@ -2,42 +2,62 @@ import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } fr
 import { Link, Navigate } from 'react-router-dom'
 import BookmarkToggle from '../components/BookmarkToggle'
 import { categories } from '../data/mockData'
-import { fetchTopFeedsForSelectedCategories } from '../services/news'
+import { fetchTopFeedsPageForSelectedCategories } from '../services/news'
 import type { Feed } from '../types'
 import { BOOKMARKS_UPDATED_EVENT, getBookmarkedFeedIds } from '../utils/bookmarks'
 import { getSelectedCategories, hasEnteredHome } from '../utils/session'
 
 const HOME_FEEDS_CACHE_KEY = 'daily-trends-home-feeds-v1'
 const PULL_REFRESH_TRIGGER = 72
+const PAGE_SIZE = 15
 
 interface HomeFeedsCache {
   selectedKey: string
   feeds: Feed[]
+  nextPage: number
+  hasMore: boolean
 }
 
 function toSelectedKey(ids: string[]): string {
   return [...ids].sort().join('|')
 }
 
-function readHomeFeedsCache(selectedKey: string): Feed[] {
+function readHomeFeedsCache(selectedKey: string): HomeFeedsCache | null {
   try {
     const raw = sessionStorage.getItem(HOME_FEEDS_CACHE_KEY)
-    if (!raw) return []
+    if (!raw) return null
     const parsed = JSON.parse(raw) as HomeFeedsCache
-    if (parsed.selectedKey !== selectedKey) return []
-    return Array.isArray(parsed.feeds) ? parsed.feeds : []
+    if (parsed.selectedKey !== selectedKey) return null
+    if (!Array.isArray(parsed.feeds)) return null
+    return {
+      selectedKey,
+      feeds: parsed.feeds,
+      nextPage: Number.isInteger(parsed.nextPage) ? Math.max(0, parsed.nextPage) : 0,
+      hasMore: typeof parsed.hasMore === 'boolean' ? parsed.hasMore : true,
+    }
   } catch {
-    return []
+    return null
   }
 }
 
-function writeHomeFeedsCache(selectedKey: string, feeds: Feed[]): void {
+function writeHomeFeedsCache(cache: HomeFeedsCache): void {
   try {
-    const payload: HomeFeedsCache = { selectedKey, feeds }
-    sessionStorage.setItem(HOME_FEEDS_CACHE_KEY, JSON.stringify(payload))
+    sessionStorage.setItem(HOME_FEEDS_CACHE_KEY, JSON.stringify(cache))
   } catch {
     // Ignore cache write failures in private mode/quota limits.
   }
+}
+
+function mergeUniqueFeeds(prev: Feed[], next: Feed[]): Feed[] {
+  if (next.length === 0) return prev
+  const seen = new Set(prev.map((feed) => feed.id))
+  const merged = [...prev]
+  for (const feed of next) {
+    if (seen.has(feed.id)) continue
+    seen.add(feed.id)
+    merged.push(feed)
+  }
+  return merged
 }
 
 export default function Home() {
@@ -45,13 +65,17 @@ export default function Home() {
   const [bookmarkCount, setBookmarkCount] = useState<number>(() => getBookmarkedFeedIds().length)
   const selectedCategoryIds = useMemo(() => getSelectedCategories(), [])
   const selectedKey = useMemo(() => toSelectedKey(selectedCategoryIds), [selectedCategoryIds])
-  const cachedFeeds = useMemo(() => readHomeFeedsCache(selectedKey), [selectedKey])
-  const [feeds, setFeeds] = useState<Feed[]>(cachedFeeds)
-  const [hasLoadedOnce, setHasLoadedOnce] = useState<boolean>(cachedFeeds.length > 0)
-  const [loading, setLoading] = useState<boolean>(cachedFeeds.length === 0)
+  const cachedHome = useMemo(() => readHomeFeedsCache(selectedKey), [selectedKey])
+  const [feeds, setFeeds] = useState<Feed[]>(cachedHome?.feeds ?? [])
+  const [nextPage, setNextPage] = useState<number>(cachedHome?.nextPage ?? 0)
+  const [hasMore, setHasMore] = useState<boolean>(cachedHome?.hasMore ?? true)
+  const [initialLoading, setInitialLoading] = useState<boolean>((cachedHome?.feeds.length ?? 0) === 0)
+  const [loadingMore, setLoadingMore] = useState<boolean>(false)
+  const [refreshing, setRefreshing] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
   const [pullDistance, setPullDistance] = useState(0)
   const mainRef = useRef<HTMLElement | null>(null)
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
   const pullStartY = useRef<number | null>(null)
   const pullActive = pullDistance > 0
   const selectedCategoryMap = useMemo(
@@ -64,13 +88,22 @@ export default function Home() {
     [selectedCategoryIds]
   )
 
-  const loadFeeds = useCallback(async () => {
-    setLoading(true)
+  const loadFirstPage = useCallback(async (asRefresh: boolean) => {
+    if (asRefresh) setRefreshing(true)
+    else setInitialLoading(true)
     setError(null)
     try {
-      const result = await fetchTopFeedsForSelectedCategories(selectedCategoryIds, 10)
-      setFeeds(result)
-      writeHomeFeedsCache(selectedKey, result)
+      const result = await fetchTopFeedsPageForSelectedCategories(selectedCategoryIds, PAGE_SIZE, 0)
+      const next = result.feeds.length > 0 ? 1 : 0
+      setFeeds(result.feeds)
+      setNextPage(next)
+      setHasMore(result.hasMore)
+      writeHomeFeedsCache({
+        selectedKey,
+        feeds: result.feeds,
+        nextPage: next,
+        hasMore: result.hasMore,
+      })
     } catch (err: unknown) {
       setError(
         err instanceof Error
@@ -78,10 +111,45 @@ export default function Home() {
           : 'Unable to load news right now. Please try again.'
       )
     } finally {
-      setLoading(false)
-      setHasLoadedOnce(true)
+      if (asRefresh) setRefreshing(false)
+      else setInitialLoading(false)
     }
   }, [selectedCategoryIds, selectedKey])
+
+  const loadNextPage = useCallback(async () => {
+    if (initialLoading || refreshing || loadingMore || !hasMore) return
+
+    setLoadingMore(true)
+    setError(null)
+    try {
+      const result = await fetchTopFeedsPageForSelectedCategories(
+        selectedCategoryIds,
+        PAGE_SIZE,
+        nextPage
+      )
+      const targetPage = nextPage + 1
+      setFeeds((prev) => {
+        const merged = mergeUniqueFeeds(prev, result.feeds)
+        writeHomeFeedsCache({
+          selectedKey,
+          feeds: merged,
+          nextPage: targetPage,
+          hasMore: result.hasMore,
+        })
+        return merged
+      })
+      setNextPage(targetPage)
+      setHasMore(result.hasMore)
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to load more news right now. Please try again.'
+      )
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [hasMore, initialLoading, loadingMore, nextPage, refreshing, selectedCategoryIds, selectedKey])
 
   useEffect(() => {
     const onBookmarksUpdated = () => setBookmarkCount(getBookmarkedFeedIds().length)
@@ -92,18 +160,43 @@ export default function Home() {
   useEffect(() => {
     if (!enteredHome) return
 
-    if (cachedFeeds.length > 0) {
-      setFeeds(cachedFeeds)
-      setHasLoadedOnce(true)
-      setLoading(false)
+    if (cachedHome && cachedHome.feeds.length > 0) {
+      setFeeds(cachedHome.feeds)
+      setNextPage(cachedHome.nextPage)
+      setHasMore(cachedHome.hasMore)
+      setInitialLoading(false)
       return
     }
 
-    void loadFeeds()
-  }, [enteredHome, cachedFeeds, loadFeeds])
+    void loadFirstPage(false)
+  }, [cachedHome, enteredHome, loadFirstPage])
+
+  useEffect(() => {
+    if (!enteredHome) return
+    const root = mainRef.current
+    const target = loadMoreRef.current
+    if (!root || !target) return
+    if (!hasMore) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        if (!entry?.isIntersecting) return
+        void loadNextPage()
+      },
+      {
+        root,
+        rootMargin: '0px 0px 240px 0px',
+        threshold: 0.05,
+      }
+    )
+
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [enteredHome, hasMore, loadNextPage, feeds.length])
 
   const handleTouchStart = (event: TouchEvent<HTMLElement>) => {
-    if (loading) return
+    if (initialLoading || loadingMore || refreshing) return
     const container = mainRef.current
     if (!container || container.scrollTop > 0) return
     pullStartY.current = event.touches[0]?.clientY ?? null
@@ -128,8 +221,8 @@ export default function Home() {
     const shouldRefresh = pullDistance >= PULL_REFRESH_TRIGGER
     pullStartY.current = null
     setPullDistance(0)
-    if (!shouldRefresh || loading) return
-    void loadFeeds()
+    if (!shouldRefresh || initialLoading || loadingMore || refreshing) return
+    void loadFirstPage(true)
   }
 
   if (!enteredHome) {
@@ -146,7 +239,7 @@ export default function Home() {
             {bookmarkCount > 0 ? <span className="bookmark-count">{bookmarkCount}</span> : null}
           </Link>
         </div>
-        <p className="subtitle">Top 10 trending from your interests</p>
+        <p className="subtitle">Trending from your interests</p>
         <Link to="/interests" className="sub-link">
           Edit interests
         </Link>
@@ -170,18 +263,18 @@ export default function Home() {
             <span className="loader-spinner" />
           </div>
         ) : null}
-        {loading && !hasLoadedOnce ? (
+        {initialLoading ? (
           <div className="center-loader" role="status" aria-live="polite">
             <span className="loader-spinner" aria-hidden="true" />
           </div>
         ) : null}
-        {loading && hasLoadedOnce ? (
+        {refreshing ? (
           <div className="center-loader-overlay" role="status" aria-live="polite">
             <span className="loader-spinner" aria-hidden="true" />
           </div>
         ) : null}
         {error ? <p className="status-text">{error}</p> : null}
-        {!loading && feeds.length === 0 ? (
+        {!initialLoading && feeds.length === 0 ? (
           <div className="empty-state">
             <p>No stories found for your interests right now.</p>
           </div>
@@ -218,6 +311,12 @@ export default function Home() {
             )
           })}
         </ol>
+        {loadingMore ? (
+          <div className="feed-load-more-spinner" role="status" aria-live="polite">
+            <span className="loader-spinner" aria-hidden="true" />
+          </div>
+        ) : null}
+        <div ref={loadMoreRef} className="feed-load-more-anchor" aria-hidden="true" />
       </main>
     </div>
   )
