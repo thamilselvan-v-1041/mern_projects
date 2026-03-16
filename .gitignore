@@ -1,4 +1,7 @@
 .DS_Store
+Llama_local/
+new-live-stock/
+
 daily-trends/node_modules/
 daily-trends/dist/
 daily-trends/vite.config.js

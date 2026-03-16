@@ -1,0 +1,1528 @@
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import './App.css';
+
+const API = import.meta.env.VITE_API_URL || '/api';
+
+async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  try {
+    return (text ? JSON.parse(text) : {}) as T;
+  } catch {
+    const isHtml = text.trimStart().startsWith('<');
+    const hint = isHtml
+      ? 'Backend may not be running or API route not found.'
+      : `Server returned non-JSON (${res.status}).`;
+    throw new Error(res.ok
+      ? `Invalid server response. ${hint}`
+      : `Server error (${res.status}). Make sure the backend is running.`);
+  }
+}
+
+const MARKET_OPTIONS = [
+  { value: 'in', label: 'India' },
+  { value: 'us', label: 'United States' },
+] as const;
+
+const SEGMENT_OPTIONS = [
+  { value: 'all', label: 'All Cap' },
+  { value: 'large', label: 'Large Cap' },
+  { value: 'mid', label: 'Mid Cap' },
+  { value: 'small', label: 'Small Cap' },
+  { value: 'flexi', label: 'Flexi Cap' },
+] as const;
+
+type Stock = {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  segment: string;
+  segmentName: string;
+  rank: number;
+  market?: string;
+  weekChange?: number;
+  history?: { date: string; close: number }[];
+  volume?: number;
+  marketCap?: number;
+  bestRank?: number;
+};
+
+type SegmentData = {
+  segment: string;
+  segmentName: string;
+  topGainers: Stock[];
+  topLosers: Stock[];
+};
+
+type Analysis = {
+  pros: string[];
+  cons: string[];
+};
+
+type TabType = 'fundamentals' | 'chart' | 'proscons';
+type ChartPeriod = '7d' | '1m' | '1y' | '3y' | '5y';
+
+const CHART_PERIOD_LABELS: Record<ChartPeriod, string> = {
+  '7d': '7D',
+  '1m': '1M',
+  '1y': '1Y',
+  '3y': '3Y',
+  '5y': '5Y',
+};
+
+const MAX_CHART_BARS = 120;
+
+function sampleForChart<T>(arr: T[], maxBars: number): T[] {
+  if (arr.length <= maxBars) return arr;
+  const step = (arr.length - 1) / (maxBars - 1);
+  const result: T[] = [];
+  for (let i = 0; i < maxBars; i++) {
+    const idx = Math.round(i * step);
+    result.push(arr[idx]);
+  }
+  return result;
+}
+
+function StockItem({
+  stock,
+  expanded,
+  activeTab,
+  onStockTap,
+  onTabClick,
+  analysis,
+  loadingAnalysis,
+  fundamentals,
+  loadingFundamentals,
+  chartData,
+  chartPeriod,
+  onChartPeriodChange,
+  loadingChart,
+  selected,
+  onSelectChange,
+  showSelect,
+}: {
+  stock: Stock;
+  expanded: boolean;
+  activeTab: TabType | null;
+  onStockTap: () => void;
+  onTabClick: (tab: TabType) => void;
+  analysis: Analysis | null;
+  loadingAnalysis: boolean;
+  fundamentals: Record<string, string> | null;
+  loadingFundamentals: boolean;
+  chartData: { date: string; close: number }[] | null;
+  chartPeriod: ChartPeriod;
+  onChartPeriodChange: (period: ChartPeriod) => void;
+  loadingChart: boolean;
+  selected?: boolean;
+  onSelectChange?: (checked: boolean) => void;
+  showSelect?: boolean;
+}) {
+  const isUp = (stock.changePercent ?? 0) >= 0;
+  const currency = stock.market === 'us' ? '$' : '₹';
+  const history = chartData ?? stock.history ?? [];
+  const [hoveredPoint, setHoveredPoint] = useState<{ date: string; close: number } | null>(null);
+
+  return (
+    <div className="stock-item">
+      <div className="stock-row" onClick={onStockTap} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onStockTap()}>
+        {showSelect && onSelectChange && (
+          <input
+            type="checkbox"
+            className="stock-select-cb"
+            checked={selected ?? false}
+            onChange={(e) => {
+              e.stopPropagation();
+              onSelectChange(e.target.checked);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select ${stock.symbol} for buy`}
+          />
+        )}
+        <div className="stock-main">
+          <span className="stock-rank">#{stock.rank}</span>
+          <div>
+            <div className="stock-name">{stock.name}</div>
+            <div className="stock-symbol-row">
+              <span className="stock-symbol">{stock.symbol}</span>
+              {stock.bestRank != null && (
+                <span className="stock-best-tag" title={`Best buy rank #${stock.bestRank} among top 150 losers`}>
+                  Best #{stock.bestRank}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="stock-price">
+          <span className="price">{currency}{stock.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+          <span className={`change ${isUp ? 'up' : 'down'}`}>
+            {isUp ? '+' : ''}{stock.changePercent?.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+      {expanded && (
+        <div className="stock-detail">
+          <div className="stock-detail-icons" onClick={(e) => e.stopPropagation()}>
+            <button
+              className={`icon-btn ${activeTab === 'fundamentals' ? 'active' : ''}`}
+              onClick={() => onTabClick('fundamentals')}
+              title="Fundamentals"
+              aria-label="Fundamentals"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 3v18h18" />
+                <path d="M7 16v-5h3v5" />
+                <path d="M11 16V9h3v7" />
+                <path d="M15 16v-3h3v3" />
+              </svg>
+            </button>
+            <button
+              className={`icon-btn ${activeTab === 'chart' ? 'active' : ''}`}
+              onClick={() => onTabClick('chart')}
+              title="Today & recent progress"
+              aria-label="Chart"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              </svg>
+            </button>
+            <button
+              className={`icon-btn ${activeTab === 'proscons' ? 'active' : ''}`}
+              onClick={() => onTabClick('proscons')}
+              title="Pros and Cons"
+              aria-label="Pros and Cons"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M8 12h8" />
+                <path d="M12 8v8" />
+              </svg>
+            </button>
+          </div>
+          <div className="stock-detail-content">
+            {activeTab === 'fundamentals' && (
+            fundamentals ? (
+              <div className="fundamentals-grid">
+                {[
+                  ['Market Cap', fundamentals.marketCap, stock.segmentName?.replace(/\s+Cap$/, '')],
+                  ['Volume', fundamentals.volume, null],
+                  ['Avg Volume', fundamentals.avgVolume, null],
+                  ['P/E', fundamentals.pe, null],
+                  ['Forward P/E', fundamentals.forwardPE, null],
+                  ['EPS', fundamentals.eps, null],
+                  ['Dividend Yield', fundamentals.dividendYield, null],
+                  ['52W High', fundamentals.fiftyTwoWeekHigh, null],
+                  ['52W Low', fundamentals.fiftyTwoWeekLow, null],
+                  ['Beta', fundamentals.beta, null],
+                  ['Open', fundamentals.open, null],
+                  ['Day Range', `${fundamentals.dayLow} - ${fundamentals.dayHigh}`, null],
+                ].map(([label, val, cap]) => (
+                  <div key={label} className="fund-row">
+                    <span className="fund-label">{label}</span>
+                    <span className="fund-value">
+                      {val}
+                      {cap && <span className="fund-cap-type"> ({cap})</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              ) : loadingFundamentals ? (
+              <div className="loading">Loading fundamentals...</div>
+            ) : null
+            )}
+            {activeTab === 'chart' && (
+              <div className="chart-panel">
+                <div className="chart-period-btns">
+                  {(['7d', '1m', '1y', '3y', '5y'] as ChartPeriod[]).map((p) => (
+                    <button
+                      key={p}
+                      className={`period-btn ${chartPeriod === p ? 'active' : ''}`}
+                      onClick={() => onChartPeriodChange(p)}
+                      disabled={loadingChart}
+                    >
+                      {CHART_PERIOD_LABELS[p]}
+                    </button>
+                  ))}
+                </div>
+                {history.length > 0 ? (
+                  (() => {
+                    const displayData = sampleForChart(history, MAX_CHART_BARS);
+                    const min = Math.min(...displayData.map((h) => h.close));
+                    const max = Math.max(...displayData.map((h) => h.close));
+                    const range = max - min || 1;
+                    const chartH = 100;
+                    return (
+                      <>
+                        <div className="mini-chart-wrapper">
+                          <div className="mini-chart">
+                            {displayData.map((p, i) => (
+                              <div
+                                key={i}
+                                className="chart-bar"
+                                style={{
+                                  height: `${((p.close - min) / range) * chartH}px`,
+                                  minHeight: 2,
+                                }}
+                                onMouseEnter={() => setHoveredPoint(p)}
+                                onMouseLeave={() => setHoveredPoint(null)}
+                                title={`${new Date(p.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · ${currency}${p.close?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                              >
+                                {hoveredPoint === p && (
+                                  <div className="chart-tooltip">
+                                    {new Date(p.date).toLocaleDateString('en-IN', {
+                                      day: 'numeric',
+                                      month: 'short',
+                                      year: 'numeric',
+                                    })}
+                                    <br />
+                                    <strong>{currency}{p.close?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()
+                ) : loadingChart ? (
+                  <div className="loading">Loading chart...</div>
+                ) : (
+                  <div className="loading">No chart data</div>
+                )}
+              </div>
+            )}
+          {activeTab === 'proscons' && (
+            analysis ? (
+              <div className="pros-cons">
+                <div className="list pros">
+                  <h4>Pros</h4>
+                  <ul>
+                    {analysis.pros.map((p, i) => (
+                      <li key={i}>{p}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="list cons">
+                  <h4>Cons</h4>
+                  <ul>
+                    {analysis.cons.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : loadingAnalysis ? (
+              <div className="loading">Analyzing...</div>
+            ) : null
+          )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SortOrder = 'asc' | 'desc' | 'best' | 'bestprice';
+
+function StockListSection({
+  stocks,
+  activeStockId,
+  activeTab,
+  onStockTap,
+  onTabClick,
+  analysisCache,
+  loadingAnalysisId,
+  fundamentalsCache,
+  loadingFundamentalsId,
+  chartCache,
+  chartPeriod,
+  onChartPeriodChange,
+  loadingChartId,
+  selectedStockIds,
+  onSelectStock,
+  showSelect,
+}: {
+  stocks: Stock[];
+  activeStockId: string | null;
+  activeTab: TabType | null;
+  onStockTap: (stock: Stock) => void;
+  onTabClick: (stock: Stock, tab: TabType) => void;
+  analysisCache: Record<string, Analysis>;
+  loadingAnalysisId: string | null;
+  fundamentalsCache: Record<string, Record<string, string>>;
+  loadingFundamentalsId: string | null;
+  chartCache: Record<string, Partial<Record<ChartPeriod, { date: string; close: number }[]>>>;
+  chartPeriod: Record<string, ChartPeriod>;
+  onChartPeriodChange: (stock: Stock, period: ChartPeriod) => void;
+  loadingChartId: string | null;
+  selectedStockIds: Set<string>;
+  onSelectStock: (id: string, checked: boolean) => void;
+  showSelect: boolean;
+}) {
+  return (
+    <section className="stock-list-section">
+      <div className="stock-list">
+        {stocks.length === 0 ? (
+          <div className="select-category-placeholder">
+            No stocks to display. Try refreshing.
+          </div>
+        ) : stocks.map((stock) => {
+          const id = `${stock.symbol}-${stock.segment}`;
+          const isExpanded = activeStockId === id;
+          const period = chartPeriod[id] ?? '1m';
+          const chartDataForPeriod = chartCache[id]?.[period] ?? null;
+          return (
+            <StockItem
+              key={id}
+              stock={stock}
+              expanded={isExpanded}
+              activeTab={isExpanded ? activeTab : null}
+              onStockTap={() => onStockTap(stock)}
+              onTabClick={(tab) => onTabClick(stock, tab)}
+              analysis={analysisCache[id] ?? null}
+              loadingAnalysis={loadingAnalysisId === id}
+              fundamentals={fundamentalsCache[id] ?? null}
+              loadingFundamentals={loadingFundamentalsId === id}
+              chartData={chartDataForPeriod}
+              chartPeriod={period}
+              onChartPeriodChange={(p) => onChartPeriodChange(stock, p)}
+              loadingChart={loadingChartId === id}
+              selected={selectedStockIds.has(id)}
+              onSelectChange={(checked) => onSelectStock(id, checked)}
+              showSelect={showSelect}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export default function App() {
+  const [segmentsByMarket, setSegmentsByMarket] = useState<Record<string, SegmentData[]>>({});
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeStockId, setActiveStockId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabType | null>(null);
+  const [analysisCache, setAnalysisCache] = useState<Record<string, Analysis>>({});
+  const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
+  const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, Record<string, string>>>({});
+  const [loadingFundamentalsId, setLoadingFundamentalsId] = useState<string | null>(null);
+  const [chartCache, setChartCache] = useState<Record<string, Partial<Record<ChartPeriod, { date: string; close: number }[]>>>>({});
+  const [chartPeriod, setChartPeriod] = useState<Record<string, ChartPeriod>>({});
+  const [loadingChartId, setLoadingChartId] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [market, setMarket] = useState<string>('in');
+  const [displayLimit, setDisplayLimit] = useState<50 | 100 | 150>(150);
+  const [segmentFilter, setSegmentFilter] = useState<string>('all');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [autoTradeLoading, setAutoTradeLoading] = useState(false);
+  const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
+  const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio'>('orders');
+  const [kiteHoldings, setKiteHoldings] = useState<Array<{
+    tradingsymbol: string;
+    exchange: string;
+    quantity: number;
+    average_price: number;
+    last_price: number;
+    pnl?: number;
+    day_change_percentage?: number;
+  }>>([]);
+  const [kiteHoldingsLoading, setKiteHoldingsLoading] = useState(false);
+  const [kiteHoldingsError, setKiteHoldingsError] = useState<string | null>(null);
+  const [kiteOrders, setKiteOrders] = useState<Array<{
+    order_id: string;
+    tradingsymbol: string;
+    name?: string;
+    exchange: string;
+    status: string;
+    transaction_type: string;
+    quantity: number;
+    average_price?: number;
+    order_timestamp?: string;
+    status_message?: string | null;
+  }>>([]);
+  const [kiteOrdersLoading, setKiteOrdersLoading] = useState(false);
+  const [kiteOrdersError, setKiteOrdersError] = useState<string | null>(null);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [kiteSettings, setKiteSettings] = useState<{
+    hasApiKey: boolean;
+    hasSecret: boolean;
+    apiKeyMasked?: string | null;
+    secretMasked?: string | null;
+    hasAccessToken: boolean;
+    loginUrl?: string | null;
+  } | null>(null);
+  const [editingField, setEditingField] = useState<'apiKey' | 'secret' | 'requestToken' | null>(null);
+  const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', requestToken: '' });
+  const [kiteSaveLoading, setKiteSaveLoading] = useState(false);
+  const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
+  const [kiteError, setKiteError] = useState<string | null>(null);
+  const [kiteGenerateResult, setKiteGenerateResult] = useState<{ success: boolean; accessToken?: string; error?: string } | null>(null);
+  const [tradeConfirmModal, setTradeConfirmModal] = useState<{
+    stocksToBuy: { symbol: string; name?: string; price?: number; changePercent?: number }[];
+  } | null>(null);
+  const [confirmCheckedSymbols, setConfirmCheckedSymbols] = useState<Set<string>>(new Set());
+  const [buyQuantityBySymbol, setBuyQuantityBySymbol] = useState<Record<string, number>>({});
+  const [tradeResult, setTradeResult] = useState<{
+    success: boolean;
+    error?: string;
+    orders?: { symbol: string; name?: string; status: string; orderId?: string; error?: string }[];
+  } | null>(null);
+
+  const fetchForMarket = useCallback((m: string, forceRefresh = false, silent = false) => {
+    const isBackground = silent || forceRefresh;
+
+    if (!isBackground) {
+      setLoading(true);
+      setError(null);
+    }
+    if (forceRefresh && !silent) setRefreshing(true);
+
+    const params = new URLSearchParams({ limit: '150', market: m });
+    if (forceRefresh) params.set('refresh', '1');
+    const url = `${API}/stocks?${params}`;
+    return fetch(url)
+      .then(async (r) => {
+        const text = await r.text();
+        if (!text) throw new Error('Empty response. Make sure the server is running.');
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error('Invalid response. Make sure the server is running.');
+        }
+      })
+      .then((data) => {
+        setSegmentsByMarket((prev) => ({ ...prev, [m]: data.segments || [] }));
+        setLastUpdated(data.date || new Date().toISOString());
+        setError(null);
+      })
+      .catch((err) => {
+        if (!isBackground) setError(err.message);
+      })
+      .finally(() => {
+        if (!isBackground) setLoading(false);
+        if (forceRefresh && !silent) setRefreshing(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    fetchForMarket('in', false, false).then(() => {
+      fetchForMarket('us', false, true);
+    });
+  }, [fetchForMarket]);
+
+  useEffect(() => {
+    if (market === 'us' && (!segmentsByMarket.us || segmentsByMarket.us.length === 0)) {
+      fetchForMarket('us', false, false);
+    }
+  }, [market, segmentsByMarket.us, fetchForMarket]);
+
+  useEffect(() => {
+    setActiveStockId(null);
+    setActiveTab(null);
+  }, [segmentFilter, displayLimit, market]);
+
+  useEffect(() => {
+    if (settingsModalOpen) {
+      setKiteError(null);
+      setKiteGenerateResult(null);
+      fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`)
+        .then(setKiteSettings)
+        .catch(() => setKiteSettings(null));
+    }
+  }, [settingsModalOpen]);
+
+  useEffect(() => {
+    if (historyModalOpen) {
+      setKiteOrdersError(null);
+      setKiteOrdersLoading(true);
+      fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`)
+        .then((data) => {
+          if (data.error) {
+            setKiteOrdersError(data.error);
+            setKiteOrders([]);
+          } else {
+            setKiteOrders(data.orders || []);
+          }
+        })
+        .catch((e) => {
+          setKiteOrdersError((e as Error).message);
+          setKiteOrders([]);
+        })
+        .finally(() => setKiteOrdersLoading(false));
+    }
+  }, [historyModalOpen]);
+
+  useEffect(() => {
+    if (historyModalOpen && ordersModalTab === 'portfolio') {
+      setKiteHoldingsError(null);
+      setKiteHoldingsLoading(true);
+      fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`)
+        .then((data) => {
+          if (data.error) {
+            setKiteHoldingsError(data.error);
+            setKiteHoldings([]);
+          } else {
+            setKiteHoldings(data.holdings || []);
+          }
+        })
+        .catch((e) => {
+          setKiteHoldingsError((e as Error).message);
+          setKiteHoldings([]);
+        })
+        .finally(() => setKiteHoldingsLoading(false));
+    }
+  }, [historyModalOpen, ordersModalTab]);
+
+  const handleSelectStock = useCallback((id: string, checked: boolean) => {
+    setSelectedStockIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const segments = segmentsByMarket[market] || [];
+
+  const stocks = useMemo(() => {
+    if (!segmentFilter) return [];
+    let merged: Stock[] = [];
+    if (segmentFilter === 'all') {
+      const all = segments.flatMap((s) => [...s.topGainers, ...s.topLosers]);
+      const seen = new Set<string>();
+      merged = all.filter((s) => {
+        if (seen.has(s.symbol)) return false;
+        seen.add(s.symbol);
+        return true;
+      });
+    } else {
+      const seg = segments.find((s) => s.segment === segmentFilter);
+      if (!seg) return [];
+      const combined = [...seg.topGainers, ...seg.topLosers];
+      const seen = new Set<string>();
+      merged = combined.filter((s) => {
+        if (seen.has(s.symbol)) return false;
+        seen.add(s.symbol);
+        return true;
+      });
+    }
+    const byAbsoluteChange = [...merged].sort((a, b) => {
+      const aAbs = Math.abs(a.changePercent ?? 0);
+      const bAbs = Math.abs(b.changePercent ?? 0);
+      return bAbs - aAbs;
+    });
+    const topListing = byAbsoluteChange.slice(0, displayLimit);
+    const sorted = [...topListing].sort((a, b) => {
+      if (sortOrder === 'best') {
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        return aBest - bBest;
+      }
+      if (sortOrder === 'bestprice') {
+        const aPrice = a.price ?? Infinity;
+        const bPrice = b.price ?? Infinity;
+        if (aPrice !== bPrice) return aPrice - bPrice;
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        return aBest - bBest;
+      }
+      const aVal = a.changePercent ?? 0;
+      const bVal = b.changePercent ?? 0;
+      return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
+    });
+    return sorted.map((s, i) => ({ ...s, rank: i + 1 }));
+  }, [segments, segmentFilter, sortOrder, displayLimit, market]);
+
+  const handleStockTap = (stock: Stock) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    if (activeStockId === id) {
+      setActiveStockId(null);
+      setActiveTab(null);
+      return;
+    }
+    setActiveStockId(id);
+    setActiveTab('fundamentals');
+    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1m' }));
+    const market = stock.market || 'in';
+
+    // Load fundamentals if not cached
+    if (!fundamentalsCache[id]) {
+      setLoadingFundamentalsId(id);
+      fetch(`${API}/fundamentals/${stock.symbol}?market=${market}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setFundamentalsCache((c) => ({ ...c, [id]: data }));
+        })
+        .catch(() => {
+          setFundamentalsCache((c) => ({
+            ...c,
+            [id]: { marketCap: '—', volume: '—', pe: '—', eps: '—', dividendYield: '—' },
+          }));
+        })
+        .finally(() => setLoadingFundamentalsId(null));
+    }
+
+    // Preload chart (1m) if not cached
+    if (!chartCache[id]?.['1m']) {
+      setLoadingChartId(id);
+      fetch(`${API}/chart/${stock.symbol}?period=1m&market=${market}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), '1m': data.history ?? [] } }));
+        })
+        .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), '1m': [] } })))
+        .finally(() => setLoadingChartId(null));
+    }
+
+    // Preload pros-cons if not cached
+    if (!analysisCache[id]) {
+      setLoadingAnalysisId(id);
+      fetch(`${API}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock }),
+      })
+        .then((r) => r.json())
+        .then((analysis) => setAnalysisCache((c) => ({ ...c, [id]: analysis })))
+        .catch(() => setAnalysisCache((c) => ({ ...c, [id]: { pros: ['Analysis failed'], cons: ['Try again'] } })))
+        .finally(() => setLoadingAnalysisId(null));
+    }
+  };
+
+  const handleTabClick = async (stock: Stock, tab: TabType) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    const isSameStock = activeStockId === id;
+    const isSameTab = activeTab === tab;
+    if (isSameStock && isSameTab) {
+      setActiveStockId(null);
+      setActiveTab(null);
+      return;
+    }
+    setActiveStockId(id);
+    setActiveTab(tab);
+
+    if (tab === 'proscons' && !analysisCache[id]) {
+      setLoadingAnalysisId(id);
+      try {
+        const res = await fetch(`${API}/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stock }),
+        });
+        const analysis = await res.json();
+        setAnalysisCache((c) => ({ ...c, [id]: analysis }));
+      } catch {
+        setAnalysisCache((c) => ({ ...c, [id]: { pros: ['Analysis failed'], cons: ['Try again'] } }));
+      } finally {
+        setLoadingAnalysisId(null);
+      }
+    }
+
+    if (tab === 'fundamentals' && !fundamentalsCache[id]) {
+      setLoadingFundamentalsId(id);
+      try {
+        const res = await fetch(`${API}/fundamentals/${stock.symbol}?market=${stock.market || 'in'}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        setFundamentalsCache((c) => ({ ...c, [id]: data }));
+      } catch {
+        setFundamentalsCache((c) => ({
+          ...c,
+          [id]: { marketCap: '—', volume: '—', pe: '—', eps: '—', dividendYield: '—' },
+        }));
+      } finally {
+        setLoadingFundamentalsId(null);
+      }
+    }
+
+    if (tab === 'chart') {
+      setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1m' }));
+      const period = chartPeriod[id] ?? '1m';
+      if (!chartCache[id]?.[period]) {
+        setLoadingChartId(id);
+        fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${stock.market || 'in'}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.error) throw new Error(data.error);
+            setChartCache((c) => ({
+              ...c,
+              [id]: { ...(c[id] ?? {}), [period]: data.history ?? [] },
+            }));
+          })
+          .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), [period]: [] } })))
+          .finally(() => setLoadingChartId(null));
+      }
+    }
+  };
+
+  const handleProceed = () => {
+    setProceedErrorPopup(null);
+    const inSegments = segmentsByMarket['in'] || [];
+
+    // Resolve selected stock ids to full stock objects (only user-selected items)
+    const selectedStocks: Stock[] = [];
+    for (const id of selectedStockIds) {
+      for (const seg of inSegments) {
+        const found = [...(seg.topGainers || []), ...(seg.topLosers || [])].find(
+          (s) => `${s.symbol}-${seg.segment}` === id
+        );
+        if (found) {
+          selectedStocks.push(found);
+          break;
+        }
+      }
+    }
+
+    const stocksToBuy = selectedStocks.map((s) => ({
+      symbol: s.symbol,
+      name: s.name,
+      price: s.price,
+      changePercent: s.changePercent,
+    }));
+
+    setTradeConfirmModal({ stocksToBuy });
+    setConfirmCheckedSymbols(new Set(stocksToBuy.map((s) => s.symbol)));
+    setBuyQuantityBySymbol(Object.fromEntries(stocksToBuy.map((s) => [s.symbol, 1])));
+  };
+
+  const handleCancelTrade = () => {
+    setTradeConfirmModal(null);
+  };
+
+  const handleConfirmTrade = async () => {
+    if (!tradeConfirmModal?.stocksToBuy?.length) return;
+    const toSend = tradeConfirmModal.stocksToBuy
+      .filter((s) => confirmCheckedSymbols.has(s.symbol))
+      .map((s) => ({ ...s, quantity: Math.max(1, buyQuantityBySymbol[s.symbol] ?? 1) }));
+    if (toSend.length === 0) return;
+    setAutoTradeLoading(true);
+    setTradeResult(null);
+    const ts = new Date().toISOString();
+    try {
+      const res = await fetch(`${API}/auto-trade/run?dryRun=false`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stocks: toSend }),
+      });
+      const data = await res.json();
+      const entry = {
+        timestamp: ts,
+        success: data.success ?? false,
+        error: data.error,
+        orders: data.orders,
+      };
+      setTradeResult({
+        success: entry.success,
+        error: entry.error,
+        orders: entry.orders,
+      });
+      if (entry.success === false && entry.error) {
+        setProceedErrorPopup(entry.error);
+      }
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      setTradeResult({ success: false, error: errMsg });
+      setProceedErrorPopup(errMsg);
+    } finally {
+      setAutoTradeLoading(false);
+    }
+  };
+
+  const handleCloseTradeResult = () => {
+    setTradeConfirmModal(null);
+    setTradeResult(null);
+  };
+
+  const handleChartPeriodChange = (stock: Stock, period: ChartPeriod) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    setChartPeriod((p) => ({ ...p, [id]: period }));
+    if (!chartCache[id]?.[period]) {
+      setLoadingChartId(id);
+      fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${stock.market || 'in'}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setChartCache((c) => ({
+            ...c,
+            [id]: { ...(c[id] ?? {}), [period]: data.history ?? [] },
+          }));
+        })
+        .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), [period]: [] } })))
+        .finally(() => setLoadingChartId(null));
+    }
+  };
+
+  if (error) {
+    return (
+      <div className="app">
+        <header className="header" />
+        <div className="error-banner">Error: {error}. Make sure the server is running.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app">
+      <header className="header">
+        <button
+          type="button"
+          className="settings-btn settings-btn-top-right"
+          onClick={() => setSettingsModalOpen(true)}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+        <div className="header-title-row">
+          <div className="proceed-area">
+            <button
+                className="proceed-btn"
+                onClick={handleProceed}
+                disabled={autoTradeLoading || tradeConfirmModal !== null || selectedStockIds.size === 0}
+                title="Buy selected stocks via Kite"
+              >
+                {autoTradeLoading ? (
+                  <span className="refresh-spinner" aria-hidden />
+                ) : (
+                  <>
+                    Buy
+                    {selectedStockIds.size > 0 && (
+                      <span className="proceed-badge"> ({selectedStockIds.size})</span>
+                    )}
+                  </>
+                )}
+              </button>
+            <button
+              type="button"
+              className="history-btn"
+              onClick={() => { setHistoryModalOpen(true); setOrdersModalTab('orders'); }}
+              title="View my orders"
+            >
+              My Orders
+            </button>
+          </div>
+        </div>
+        <div className="header-actions">
+            <select
+              className="market-picker"
+              value={market}
+              onChange={(e) => setMarket(e.target.value)}
+              title="Stock market"
+            >
+              {MARKET_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="segment-picker"
+              value={segmentFilter}
+              onChange={(e) => setSegmentFilter(e.target.value)}
+              title="Cap category"
+            >
+              {SEGMENT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="limit-picker"
+              value={displayLimit}
+              onChange={(e) => setDisplayLimit(Number(e.target.value) as 50 | 100 | 150)}
+              title="Show top N from fetched list"
+            >
+              <option value={50}>Top 50</option>
+              <option value={100}>Top 100</option>
+              <option value={150}>Top 150</option>
+            </select>
+            <div className="header-right">
+              <button className="refresh-btn" onClick={() => fetchForMarket('in', true, true).then(() => fetchForMarket('us', true, true))} title="Refresh">
+                {refreshing ? (
+                  <span className="refresh-spinner" aria-hidden />
+                ) : (
+                  <span className="refresh-icon">↻</span>
+                )}
+                <span className="last-fetched">
+                  {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                </span>
+              </button>
+              <select
+                className={`sort-picker ${sortOrder === 'desc' ? 'sort-profit' : sortOrder === 'asc' ? 'sort-loss' : sortOrder === 'bestprice' ? 'sort-bestprice' : 'sort-best'}`}
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                title="Sort by profit, loss, best rank, or best price"
+              >
+                <option value="desc">Profit</option>
+                <option value="asc">Loss</option>
+                <option value="best">Best</option>
+                <option value="bestprice">Best Price</option>
+              </select>
+            </div>
+        </div>
+      </header>
+
+      {proceedErrorPopup && (
+        <div className="auto-trade-result" role="dialog" aria-label="Buy error">
+          <div className="auto-trade-result-inner">
+            <div className="auto-trade-result-header">
+              <h3>Error</h3>
+              <button className="auto-trade-close" onClick={() => setProceedErrorPopup(null)} aria-label="Close">×</button>
+            </div>
+            <p className="auto-trade-error">{proceedErrorPopup}</p>
+          </div>
+        </div>
+      )}
+
+      {tradeConfirmModal && (
+        <div className="auto-trade-result" role="dialog" aria-label="Confirm trade">
+          <div className="auto-trade-result-inner trade-confirm-modal">
+            <div className="auto-trade-result-header">
+              <h3>{tradeResult ? (tradeResult.success ? 'Order placed' : 'Order failed') : 'Confirm trade'}</h3>
+              <button className="auto-trade-close" onClick={tradeResult ? handleCloseTradeResult : handleCancelTrade} aria-label="Close">×</button>
+            </div>
+            {tradeResult ? (
+              <div className="trade-result-content">
+                {tradeResult.success ? (
+                  <>
+                    <p className="trade-result-msg success">Order placed successfully.</p>
+                    {tradeResult.orders && tradeResult.orders.length > 0 && (
+                      <ul className="trade-result-orders">
+                        {tradeResult.orders.map((o, j) => (
+                          <li key={j} className={o.status === 'PLACED' ? 'placed' : o.status === 'FAILED' ? 'failed' : ''}>
+                            <span className="symbol">{o.symbol}</span>
+                            {o.name && <span className="name">{o.name}</span>}
+                            <span className="status">{o.status}</span>
+                            {o.orderId && <span className="order-id">#{o.orderId}</span>}
+                            {o.error && <span className="error">{o.error}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="trade-result-msg error">{tradeResult.error}</p>
+                    {tradeResult.orders && tradeResult.orders.length > 0 && (
+                      <ul className="trade-result-orders">
+                        {tradeResult.orders.map((o, j) => (
+                          <li key={j} className="failed">
+                            <span className="symbol">{o.symbol}</span>
+                            {o.name && <span className="name">{o.name}</span>}
+                            <span className="status">{o.status}</span>
+                            {o.error && <span className="error">{o.error}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+                <button className="proceed-btn" onClick={handleCloseTradeResult} style={{ marginTop: '1rem', width: '100%' }}>
+                  Done
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="trade-confirm-desc">Stocks to buy (uncheck to exclude from order):</p>
+                {tradeConfirmModal.stocksToBuy.length === 0 ? (
+                  <p className="trade-confirm-empty">No stocks to trade. Select stocks or refresh the list.</p>
+                ) : (
+                  <>
+                    <ul className="trade-confirm-list">
+                      {tradeConfirmModal.stocksToBuy.map((s, i) => (
+                        <li key={i} className="trade-confirm-item">
+                          <input
+                            type="checkbox"
+                            className="trade-confirm-cb"
+                            checked={confirmCheckedSymbols.has(s.symbol)}
+                            onChange={() => {
+                              setConfirmCheckedSymbols((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(s.symbol)) next.delete(s.symbol);
+                                else next.add(s.symbol);
+                                return next;
+                              });
+                            }}
+                            aria-label={`Include ${s.symbol} in order`}
+                          />
+                          <span className="symbol">{s.symbol}</span>
+                          {s.name && <span className="name">{s.name}</span>}
+                          <span className="trade-confirm-qty-wrap">
+                            <input
+                              type="number"
+                              min={1}
+                              max={9999}
+                              value={buyQuantityBySymbol[s.symbol] ?? 1}
+                              onChange={(e) =>
+                                setBuyQuantityBySymbol((prev) => ({
+                                  ...prev,
+                                  [s.symbol]: Math.max(1, Math.min(9999, parseInt(e.target.value, 10) || 1)),
+                                }))
+                              }
+                              className="trade-confirm-qty-input"
+                              aria-label={`Quantity for ${s.symbol}`}
+                            />
+                          </span>
+                          <span className="price">₹{s.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                          {s.changePercent != null && (
+                            <span className="change down">{s.changePercent.toFixed(2)}%</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="trade-confirm-actions">
+                      <button className="trade-cancel-btn" onClick={handleCancelTrade} disabled={autoTradeLoading}>
+                        Cancel
+                      </button>
+                      <button
+                        className="proceed-btn"
+                        onClick={handleConfirmTrade}
+                        disabled={autoTradeLoading || confirmCheckedSymbols.size === 0}
+                      >
+                        {autoTradeLoading ? <span className="refresh-spinner" aria-hidden /> : 'Buy'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {settingsModalOpen && (
+        <div className="auto-trade-result" role="dialog" aria-label="Settings">
+          <div className="auto-trade-result-inner trade-confirm-modal settings-modal">
+            <div className="auto-trade-result-header">
+              <h3>Kite Settings</h3>
+              <button className="auto-trade-close" onClick={() => { setSettingsModalOpen(false); setEditingField(null); }} aria-label="Close">×</button>
+            </div>
+            <div className="settings-content">
+              {kiteError && <p className="settings-error">{kiteError}</p>}
+              <div className="settings-field">
+                <label>API Key</label>
+                <div className="settings-input-wrap">
+                  <input
+                    type="text"
+                    className="settings-input settings-input-with-icon"
+                    placeholder={!kiteSettings?.hasApiKey ? 'Enter API key' : ''}
+                    value={
+                      editingField === 'apiKey' || !kiteSettings?.hasApiKey
+                        ? kiteForm.apiKey
+                        : (kiteSettings?.apiKeyMasked ?? '••••••••')
+                    }
+                    onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
+                    disabled={!!kiteSettings?.hasApiKey && editingField !== 'apiKey'}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                  />
+                  <button
+                    type="button"
+                    className="settings-input-icon-btn"
+                    onClick={async () => {
+                        const isSaveMode = editingField === 'apiKey' || !kiteSettings?.hasApiKey;
+                        if (isSaveMode) {
+                          setKiteError(null);
+                          setKiteSaveLoading(true);
+                          try {
+                            const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ apiKey: kiteForm.apiKey || undefined }),
+                            });
+                            if (data.error) throw new Error(data.error);
+                            setEditingField(null);
+                            setKiteForm((f) => ({ ...f, apiKey: '' }));
+                            const s = await fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`);
+                            setKiteSettings(s);
+                          } catch (e) {
+                            setKiteError((e as Error).message);
+                          } finally {
+                            setKiteSaveLoading(false);
+                          }
+                        } else {
+                          setEditingField('apiKey');
+                        }
+                      }}
+                      disabled={(editingField === 'apiKey' || !kiteSettings?.hasApiKey) && kiteSaveLoading}
+                      title={editingField === 'apiKey' || !kiteSettings?.hasApiKey ? 'Save' : 'Edit'}
+                      aria-label={editingField === 'apiKey' || !kiteSettings?.hasApiKey ? 'Save API key' : 'Edit API key'}
+                    >
+                      {(editingField === 'apiKey' || !kiteSettings?.hasApiKey) && kiteSaveLoading ? (
+                        <span className="settings-icon-spinner" aria-hidden />
+                      ) : editingField === 'apiKey' || !kiteSettings?.hasApiKey ? (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      ) : (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      )}
+                    </button>
+                </div>
+              </div>
+              <div className="settings-field">
+                <label>Secret Key</label>
+                <div className="settings-input-wrap">
+                  <input
+                    type="text"
+                    className="settings-input settings-input-with-icon"
+                    placeholder={!kiteSettings?.hasSecret ? 'Enter secret key' : ''}
+                    value={
+                      editingField === 'secret' || !kiteSettings?.hasSecret
+                        ? kiteForm.secret
+                        : (kiteSettings?.secretMasked ?? '••••••••')
+                    }
+                    onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
+                    disabled={!!kiteSettings?.hasSecret && editingField !== 'secret'}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                  />
+                  <button
+                    type="button"
+                    className="settings-input-icon-btn"
+                    onClick={async () => {
+                        const isSaveMode = editingField === 'secret' || !kiteSettings?.hasSecret;
+                        if (isSaveMode) {
+                          setKiteError(null);
+                          setKiteSaveLoading(true);
+                          try {
+                            const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ secret: kiteForm.secret || undefined }),
+                            });
+                            if (data.error) throw new Error(data.error);
+                            setEditingField(null);
+                            setKiteForm((f) => ({ ...f, secret: '' }));
+                            const s = await fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`);
+                            setKiteSettings(s);
+                          } catch (e) {
+                            setKiteError((e as Error).message);
+                          } finally {
+                            setKiteSaveLoading(false);
+                          }
+                        } else {
+                          setEditingField('secret');
+                        }
+                      }}
+                      disabled={(editingField === 'secret' || !kiteSettings?.hasSecret) && kiteSaveLoading}
+                      title={editingField === 'secret' || !kiteSettings?.hasSecret ? 'Save' : 'Edit'}
+                      aria-label={editingField === 'secret' || !kiteSettings?.hasSecret ? 'Save secret key' : 'Edit secret key'}
+                    >
+                      {(editingField === 'secret' || !kiteSettings?.hasSecret) && kiteSaveLoading ? (
+                        <span className="settings-icon-spinner" aria-hidden />
+                      ) : editingField === 'secret' || !kiteSettings?.hasSecret ? (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      ) : (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      )}
+                    </button>
+                </div>
+              </div>
+              <div className="settings-field">
+                <label>Request Token (generate access token)</label>
+                {kiteSettings?.loginUrl && (
+                  <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
+                    <a href={kiteSettings.loginUrl} target="_blank" rel="noopener noreferrer">Get request token from Kite login</a>
+                  </p>
+                )}
+                <div className="settings-input-wrap">
+                  <input
+                    type="text"
+                    className="settings-input settings-input-with-icon"
+                    placeholder="Enter request token"
+                    value={
+                      editingField === 'requestToken'
+                        ? kiteForm.requestToken
+                        : kiteForm.requestToken
+                          ? '••••••••'
+                          : ''
+                    }
+                    onChange={(e) => setKiteForm((f) => ({ ...f, requestToken: e.target.value }))}
+                    disabled={editingField !== 'requestToken'}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    className="settings-input-icon-btn"
+                    onClick={async () => {
+                      if (editingField === 'requestToken') {
+                        if (!kiteForm.requestToken.trim() || !kiteSettings?.hasApiKey || !kiteSettings?.hasSecret) return;
+                        setKiteError(null);
+                        setKiteGenerateResult(null);
+                        setKiteGenerateLoading(true);
+                        try {
+                          const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ requestToken: kiteForm.requestToken.trim() }),
+                          });
+                          if (data.error) throw new Error(data.error);
+                          setEditingField(null);
+                          setKiteGenerateResult({ success: true, accessToken: data.accessToken });
+                          const s = await fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`);
+                          setKiteSettings(s);
+                        } catch (e) {
+                          setKiteGenerateResult({ success: false, error: (e as Error).message });
+                        } finally {
+                          setKiteGenerateLoading(false);
+                        }
+                      } else {
+                        setEditingField('requestToken');
+                        setKiteGenerateResult(null);
+                      }
+                    }}
+                    disabled={editingField === 'requestToken' && (kiteGenerateLoading || !kiteForm.requestToken.trim() || !kiteSettings?.hasApiKey || !kiteSettings?.hasSecret)}
+                    title={editingField === 'requestToken' ? 'Generate & save' : 'Edit'}
+                    aria-label={editingField === 'requestToken' ? 'Generate access token' : 'Edit request token'}
+                  >
+                    {editingField === 'requestToken' && kiteGenerateLoading ? (
+                      <span className="settings-icon-spinner" aria-hidden />
+                    ) : editingField === 'requestToken' ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+              {kiteGenerateResult && (
+                <div className="settings-generate-result">
+                  <h4 className="settings-generate-result-title">
+                    {kiteGenerateResult.success ? 'Access Token' : 'Error'}
+                  </h4>
+                  {kiteGenerateResult.success ? (
+                    <p className="settings-generate-success">
+                      {kiteGenerateResult.accessToken
+                        ? `${kiteGenerateResult.accessToken.slice(0, 8)}••••••••`
+                        : 'Token saved. Valid until market close. Regenerate daily.'}
+                    </p>
+                  ) : (
+                    <p className="settings-generate-error">{kiteGenerateResult.error}</p>
+                  )}
+                </div>
+              )}
+              {kiteSettings?.hasAccessToken && !kiteGenerateResult && (
+                <p className="settings-hint">Access token is configured. Valid until market close. Regenerate daily.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {historyModalOpen && (
+        <div className="auto-trade-result" role="dialog" aria-label="My Orders">
+          <div className="auto-trade-result-inner trade-confirm-modal">
+            <div className="auto-trade-result-header orders-header-with-tabs">
+              <div className="orders-modal-tabs">
+                <button
+                  type="button"
+                  className={`orders-tab-btn ${ordersModalTab === 'orders' ? 'active' : ''}`}
+                  onClick={() => setOrdersModalTab('orders')}
+                >
+                  My Orders
+                </button>
+                <button
+                  type="button"
+                  className={`orders-tab-btn ${ordersModalTab === 'portfolio' ? 'active' : ''}`}
+                  onClick={() => setOrdersModalTab('portfolio')}
+                >
+                  Portfolio
+                </button>
+              </div>
+              <button className="auto-trade-close" onClick={() => setHistoryModalOpen(false)} aria-label="Close">×</button>
+            </div>
+            <div className="history-modal-content">
+              {ordersModalTab === 'portfolio' ? (
+                <>
+                  {kiteHoldingsLoading ? (
+                    <p className="orders-empty-msg">Loading portfolio...</p>
+                  ) : kiteHoldingsError ? (
+                    <div className="orders-error-msg">
+                      <p>{kiteHoldingsError}</p>
+                      <button
+                        type="button"
+                        className="history-btn"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={() => {
+                          setKiteHoldingsError(null);
+                          setKiteHoldingsLoading(true);
+                          fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`)
+                            .then((data) => {
+                              if (data.error) {
+                                setKiteHoldingsError(data.error);
+                                setKiteHoldings([]);
+                              } else {
+                                setKiteHoldings(data.holdings || []);
+                              }
+                            })
+                            .catch((e) => {
+                              setKiteHoldingsError((e as Error).message);
+                              setKiteHoldings([]);
+                            })
+                            .finally(() => setKiteHoldingsLoading(false));
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : kiteHoldings.length === 0 ? (
+                    <p className="orders-empty-msg">No holdings in your Kite portfolio.</p>
+                  ) : (
+                    <ul className="proceed-history-list kite-holdings-list">
+                      {kiteHoldings.map((h, i) => (
+                        <li key={`${h.tradingsymbol}-${i}`} className="holding-item">
+                          <div className="holding-line1">
+                            <span className="symbol">{h.tradingsymbol}</span>
+                            <span className="exchange">{h.exchange}</span>
+                            <span className="qty">Qty {h.quantity}</span>
+                          </div>
+                          <div className="holding-line2">
+                            <span className="price">Avg ₹{h.average_price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            <span className="price">LTP ₹{h.last_price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            {h.pnl != null && (
+                              <span className={h.pnl >= 0 ? 'pnl-up' : 'pnl-down'}>
+                                P&L ₹{h.pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                              </span>
+                            )}
+                            {h.day_change_percentage != null && (
+                              <span className={h.day_change_percentage >= 0 ? 'pnl-up' : 'pnl-down'}>
+                                {h.day_change_percentage >= 0 ? '+' : ''}{h.day_change_percentage.toFixed(2)}%
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              ) : (
+                <>
+                  {kiteOrdersLoading ? (
+                    <p className="orders-empty-msg">Loading orders...</p>
+                  ) : kiteOrdersError ? (
+                    <div className="orders-error-msg">
+                      <p>{kiteOrdersError}</p>
+                      <button
+                        type="button"
+                        className="history-btn"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={() => {
+                          setKiteOrdersError(null);
+                          setKiteOrdersLoading(true);
+                          fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`)
+                            .then((data) => {
+                              if (data.error) {
+                                setKiteOrdersError(data.error);
+                                setKiteOrders([]);
+                              } else {
+                                setKiteOrders(data.orders || []);
+                              }
+                            })
+                            .catch((e) => {
+                              setKiteOrdersError((e as Error).message);
+                              setKiteOrders([]);
+                            })
+                            .finally(() => setKiteOrdersLoading(false));
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : kiteOrders.length === 0 ? (
+                    <p className="orders-empty-msg">No orders from Kite. Orders shown are for today only.</p>
+                  ) : (
+                    <ul className="proceed-history-list kite-orders-list">
+                      {[...kiteOrders]
+                        .sort((a, b) => (b.order_timestamp || '').localeCompare(a.order_timestamp || ''))
+                        .map((o) => (
+                        <li key={o.order_id} className={o.status === 'COMPLETE' ? 'success' : o.status === 'REJECTED' || o.status === 'CANCELLED' ? 'error' : ''}>
+                          <div className="order-line1">
+                            <span className="symbol">{o.tradingsymbol}</span>
+                          </div>
+                          <div className={`order-line2 ${o.status === 'COMPLETE' ? 'placed' : o.status === 'REJECTED' || o.status === 'CANCELLED' ? 'failed' : ''}`}>
+                            {o.name && <span className="name">{o.name}</span>}
+                            <span className="exchange">({o.exchange})</span>
+                            <span className="status">{o.status}</span>
+                            <span className="txn-type">{o.transaction_type}</span>
+                            <span className="qty">Qty: {o.quantity}</span>
+                            {o.average_price != null && o.average_price > 0 && (
+                              <span className="price">₹{o.average_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            )}
+                            {o.status_message && <span className="error">{o.status_message}</span>}
+                          </div>
+                          <span className="history-time">{o.order_timestamp ? new Date(o.order_timestamp).toLocaleString('en-IN') : ''}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="main">
+        {loading && segments.length === 0 ? (
+          <div className="select-category-placeholder">
+            <span className="refresh-spinner" aria-hidden style={{ display: 'inline-block', marginRight: '0.5rem' }} />
+            Loading stocks…
+          </div>
+        ) : !segmentFilter ? (
+          <div className="select-category-placeholder">
+            Select a cap category from the dropdown to view stocks
+          </div>
+        ) : (
+          <StockListSection
+            stocks={stocks}
+            activeStockId={activeStockId}
+            activeTab={activeTab}
+            onStockTap={handleStockTap}
+            onTabClick={handleTabClick}
+            analysisCache={analysisCache}
+            loadingAnalysisId={loadingAnalysisId}
+            fundamentalsCache={fundamentalsCache}
+            loadingFundamentalsId={loadingFundamentalsId}
+            chartCache={chartCache}
+            chartPeriod={chartPeriod}
+            onChartPeriodChange={handleChartPeriodChange}
+            loadingChartId={loadingChartId}
+            selectedStockIds={selectedStockIds}
+            onSelectStock={handleSelectStock}
+            showSelect
+          />
+        )}
+      </main>
+    </div>
+  );
+}

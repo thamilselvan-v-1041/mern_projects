@@ -1,0 +1,21 @@
+# Local dev scripts (not needed for Vercel)
+start-server.sh
+stop-server.sh
+
+# One-time auth script (run locally)
+server/kite-login.js
+
+# Env files (use Vercel env vars instead)
+.env
+.env.*
+!.env.example
+
+# Logs and OS files
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
