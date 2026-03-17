@@ -1141,7 +1141,7 @@ export default function App() {
               <button className="auto-trade-close" onClick={() => setSettingsModalOpen(false)} aria-label="Close">×</button>
             </div>
             <div className="settings-content">
-              <p className="settings-hint">Enter credentials each session. They stay in memory until you close the tab.</p>
+              <p className="settings-hint">We keep these credentials in memory until you close the tab — no storage.</p>
               {kiteError && <p className="settings-error">{kiteError}</p>}
               <div className="settings-field">
                 <label>API Key</label>
@@ -1277,6 +1277,18 @@ export default function App() {
             <div className="history-modal-content">
               {ordersModalTab === 'portfolio' ? (
                 <div className="portfolio-tab-wrapper">
+                  {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (() => {
+                    const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
+                    const profit = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
+                    return (
+                      <div className="portfolio-overlay">
+                        <span className="portfolio-overlay-invested">Invested ₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        <span className={`portfolio-overlay-profit ${profit >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                          Profit ₹{profit >= 0 ? '+' : ''}{profit.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    );
+                  })()}
                   <div className="portfolio-scroll">
                   {kiteHoldingsLoading ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
@@ -1339,21 +1351,9 @@ export default function App() {
                     </ul>
                   )}
                   </div>
-                  {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (() => {
-                    const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
-                    const profit = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
-                    return (
-                      <div className="portfolio-overlay">
-                        <span className="portfolio-overlay-invested">Invested ₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                        <span className={`portfolio-overlay-profit ${profit >= 0 ? 'pnl-up' : 'pnl-down'}`}>
-                          Profit ₹{profit >= 0 ? '+' : ''}{profit.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                        </span>
-                      </div>
-                    );
-                  })()}
                 </div>
               ) : (
-                <>
+                <div className="orders-tab-wrapper">
                   {kiteOrdersLoading ? (
                     <p className="orders-empty-msg">Loading orders...</p>
                   ) : kiteOrdersError ? (
@@ -1412,7 +1412,7 @@ export default function App() {
                       ))}
                     </ul>
                   )}
-                </>
+                </div>
               )}
             </div>
           </div>
