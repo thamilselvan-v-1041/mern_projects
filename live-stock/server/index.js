@@ -1000,7 +1000,7 @@ app.get('/api/kite/orders', async (req, res) => {
     const kite = new KiteConnect({ api_key: apiKey });
     kite.setAccessToken(accessToken);
     const raw = await kite.getOrders();
-    const orders = Array.isArray(raw) ? raw : [];
+    const orders = Array.isArray(raw) ? raw : (raw?.data && Array.isArray(raw.data) ? raw.data : []);
     res.setHeader('Content-Type', 'application/json');
     res.json({ orders });
   } catch (err) {

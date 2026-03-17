@@ -11,6 +11,7 @@ type HoldingRow = {
   last_price: number;
   pnl?: number;
   day_change_percentage?: number;
+  purchase_date?: string;
 };
 
 function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
@@ -51,6 +52,7 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
         const ltpCol = col(headers, 'ltp', ['previous closing price', 'ltp', 'last price', 'close', 'current price', 'last_price', 'market price']);
         const pnlCol = col(headers, 'pnl', ['unrealized p&l', 'pnl', 'p&l', 'profit', 'profit/loss', 'unrealized pnl']);
         const exCol = col(headers, 'exchange', ['exchange', 'ex']);
+        const dateCol = col(headers, 'date', ['purchase date', 'buy date', 'date of purchase', 'date', 'purchase_date', 'order date', 'trade date']);
         if (symCol < 0 || qtyCol < 0) throw new Error('Need Symbol and Quantity columns. Use Zerodha Kite Console holdings export.');
         const holdings: HoldingRow[] = [];
         for (let i = headerRow + 1; i < rows.length; i++) {
@@ -63,6 +65,19 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
           const ltp = Number(r[ltpCol]) || avg;
           const pnl = pnlCol >= 0 ? Number(r[pnlCol]) : undefined;
           const ex = exCol >= 0 ? String(r[exCol] || 'NSE').trim().toUpperCase() : 'NSE';
+          let purchaseDate: string | undefined;
+          if (dateCol >= 0) {
+            const raw = r[dateCol];
+            if (raw != null) {
+              let d: Date;
+              if (typeof raw === 'number' && raw > 1000) {
+                d = new Date((raw - 25569) * 86400 * 1000);
+              } else {
+                d = new Date(String(raw).trim());
+              }
+              if (!isNaN(d.getTime())) purchaseDate = d.toISOString().slice(0, 10);
+            }
+          }
           holdings.push({
             tradingsymbol: sym.replace(/\.(NS|BO|NSE|BSE)$/i, ''),
             exchange: ex || 'NSE',
@@ -71,6 +86,7 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
             last_price: ltp,
             pnl,
             day_change_percentage: avg > 0 ? ((ltp - avg) / avg) * 100 : undefined,
+            purchase_date: purchaseDate,
           });
         }
         resolve(holdings);
@@ -703,6 +719,7 @@ export default function App() {
 
   const kiteConfigured = !!(kiteForm.apiKey && kiteForm.accessToken);
   const holdingsForAnalysis = analyseSource === 'xlsx' && xlsxHoldings.length > 0 ? xlsxHoldings : kiteHoldings;
+
   const canRunKiteAnalysis = !kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0;
   const canRunXlsxAnalysis = xlsxHoldings.length > 0;
 
@@ -1441,7 +1458,7 @@ export default function App() {
                                 <span className="analyse-summary-value">₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                               </span>
                               <span className="analyse-summary-item">
-                                <span className="analyse-summary-label">Value</span>
+                                <span className="analyse-summary-label">Current</span>
                                 <span className="analyse-summary-value">₹{value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                               </span>
                               <span className={`analyse-summary-item analyse-summary-pnl ${pnl >= 0 ? 'pnl-up' : 'pnl-down'}`}>
@@ -1485,12 +1502,21 @@ export default function App() {
                 <div className="portfolio-tab-wrapper">
                   {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (() => {
                     const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
-                    const profit = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
+                    const value = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.last_price ?? 0)), 0);
+                    const pnl = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
                     return (
-                      <div className="portfolio-overlay">
-                        <span className="portfolio-overlay-invested">Invested ₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                        <span className={`portfolio-overlay-profit ${profit >= 0 ? 'pnl-up' : 'pnl-down'}`}>
-                          Profit ₹{profit >= 0 ? '+' : ''}{profit.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                      <div className="analyse-summary-bar">
+                        <span className="analyse-summary-item">
+                          <span className="analyse-summary-label">Invested</span>
+                          <span className="analyse-summary-value">₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </span>
+                        <span className="analyse-summary-item">
+                          <span className="analyse-summary-label">Current</span>
+                          <span className="analyse-summary-value">₹{value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        </span>
+                        <span className={`analyse-summary-item analyse-summary-pnl ${pnl >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                          <span className="analyse-summary-label">P&L</span>
+                          <span className="analyse-summary-value">{pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                         </span>
                       </div>
                     );
