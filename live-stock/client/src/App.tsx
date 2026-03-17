@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
 import './App.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -57,6 +58,8 @@ type Stock = {
   volume?: number;
   marketCap?: number;
   bestRank?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
 };
 
 type SegmentData = {
@@ -441,7 +444,7 @@ export default function App() {
   const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
-  const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio'>('orders');
+  const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio' | 'analyse'>('orders');
   const [ordersRefreshTrigger, setOrdersRefreshTrigger] = useState(0);
   const [kiteHoldings, setKiteHoldings] = useState<Array<{
     tradingsymbol: string;
@@ -468,6 +471,9 @@ export default function App() {
   }>>([]);
   const [kiteOrdersLoading, setKiteOrdersLoading] = useState(false);
   const [kiteOrdersError, setKiteOrdersError] = useState<string | null>(null);
+  const [portfolioAnalysis, setPortfolioAnalysis] = useState<string | null>(null);
+  const [portfolioAnalysisLoading, setPortfolioAnalysisLoading] = useState(false);
+  const [portfolioAnalysisError, setPortfolioAnalysisError] = useState<string | null>(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
@@ -576,7 +582,7 @@ export default function App() {
   }, [historyModalOpen, ordersRefreshTrigger, kiteForm.apiKey, kiteForm.accessToken]);
 
   useEffect(() => {
-    if (historyModalOpen && ordersModalTab === 'portfolio') {
+    if (historyModalOpen && (ordersModalTab === 'portfolio' || ordersModalTab === 'analyse')) {
       setKiteHoldingsError(null);
       setKiteHoldingsLoading(true);
       fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
@@ -597,6 +603,33 @@ export default function App() {
         .finally(() => setKiteHoldingsLoading(false));
     }
   }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.accessToken]);
+
+  useEffect(() => {
+    if (historyModalOpen && ordersModalTab === 'analyse' && !kiteHoldingsLoading && !kiteHoldingsError) {
+      if (kiteHoldings.length === 0) {
+        setPortfolioAnalysis(null);
+        setPortfolioAnalysisError(null);
+        return;
+      }
+      setPortfolioAnalysisError(null);
+      setPortfolioAnalysisLoading(true);
+      fetch(`${API}/analyze-portfolio`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ holdings: kiteHoldings }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) throw new Error(data.analysis || data.error);
+          setPortfolioAnalysis(data.analysis || '');
+        })
+        .catch((e) => {
+          setPortfolioAnalysisError((e as Error).message);
+          setPortfolioAnalysis(null);
+        })
+        .finally(() => setPortfolioAnalysisLoading(false));
+    }
+  }, [historyModalOpen, ordersModalTab, kiteHoldings, kiteHoldingsLoading, kiteHoldingsError]);
 
   const handleSelectStock = useCallback((id: string, checked: boolean) => {
     setSelectedStockIds((prev) => {
@@ -646,7 +679,18 @@ export default function App() {
       const week = (s.weekChange ?? 0) < 0 ? 0.5 : 0;
       const month = (s.monthChange ?? 0) < 0 ? 0.3 : 0;
       const cap = capLog(s.marketCap) * 0.2;
-      const bestScore = dip * 2 + vol + week + month + cap;
+      let fiftyTwoWScore = 0;
+      const price = s.price ?? 0;
+      const high = s.fiftyTwoWeekHigh;
+      const low = s.fiftyTwoWeekLow;
+      if (high != null && low != null && high > low && price > 0) {
+        const upsideInRange = (high - price) / (high - low);
+        fiftyTwoWScore = Math.max(0, Math.min(1, upsideInRange)) * 2;
+      }
+      const mcap = s.marketCap ?? 1;
+      const turnover = (s.volume ?? 0) / mcap;
+      const turnoverScore = Math.min(1, Math.log10(Math.max(turnover * 1e6, 1)) / 8) * 0.3;
+      const bestScore = dip * 2 + vol + week + month + cap + fiftyTwoWScore + turnoverScore;
       return { ...s, _bestScore: bestScore };
     });
     scored.sort((a, b) => (b._bestScore ?? 0) - (a._bestScore ?? 0));
@@ -1275,11 +1319,133 @@ export default function App() {
                 >
                   Portfolio
                 </button>
+                <button
+                  type="button"
+                  className={`orders-tab-btn ${ordersModalTab === 'analyse' ? 'active' : ''}`}
+                  onClick={() => setOrdersModalTab('analyse')}
+                >
+                  Analyse
+                </button>
               </div>
               <button className="auto-trade-close" onClick={() => setHistoryModalOpen(false)} aria-label="Close">×</button>
             </div>
             <div className="history-modal-content">
-              {ordersModalTab === 'portfolio' ? (
+              {ordersModalTab === 'analyse' ? (
+                <div className="analyse-tab-wrapper portfolio-tab-wrapper">
+                  {kiteHoldingsLoading ? (
+                    <p className="orders-empty-msg">Loading portfolio...</p>
+                  ) : kiteHoldingsError ? (
+                    <div className="orders-error-msg">
+                      <p>{kiteHoldingsError}</p>
+                      <button
+                        type="button"
+                        className="history-btn"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={() => {
+                          setKiteHoldingsError(null);
+                          setKiteHoldingsLoading(true);
+                          fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, { headers: kiteHeaders(kiteForm) })
+                            .then((data) => {
+                              if (data.error) {
+                                setKiteHoldingsError(data.error);
+                                setKiteHoldings([]);
+                              } else {
+                                setKiteHoldings(data.holdings || []);
+                              }
+                            })
+                            .catch((e) => {
+                              setKiteHoldingsError((e as Error).message);
+                              setKiteHoldings([]);
+                            })
+                            .finally(() => setKiteHoldingsLoading(false));
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : kiteHoldings.length === 0 ? (
+                    <p className="orders-empty-msg">No holdings in your Kite portfolio. Add holdings in Portfolio tab first.</p>
+                  ) : portfolioAnalysisLoading ? (
+                    <div className="analyse-loading">
+                      <span className="analyse-loading-spinner" aria-hidden />
+                      <p>Analyzing portfolio with AI...</p>
+                      <span className="analyse-loading-hint">This may take 15–30 seconds</span>
+                    </div>
+                  ) : portfolioAnalysisError ? (
+                    <div className="orders-error-msg">
+                      <p>{portfolioAnalysisError}</p>
+                      <button
+                        type="button"
+                        className="history-btn"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={() => {
+                          setPortfolioAnalysisError(null);
+                          setPortfolioAnalysisLoading(true);
+                          fetch(`${API}/analyze-portfolio`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ holdings: kiteHoldings }),
+                          })
+                            .then((r) => r.json())
+                            .then((data) => {
+                              if (data.error) throw new Error(data.analysis || data.error);
+                              setPortfolioAnalysis(data.analysis || '');
+                              setPortfolioAnalysisError(null);
+                            })
+                            .catch((e) => {
+                              setPortfolioAnalysisError((e as Error).message);
+                              setPortfolioAnalysis(null);
+                            })
+                            .finally(() => setPortfolioAnalysisLoading(false));
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : portfolioAnalysis ? (
+                    <>
+                      <div className="analyse-summary-bar">
+                        {(() => {
+                          const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
+                          const value = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.last_price ?? 0)), 0);
+                          const pnl = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
+                          return (
+                            <>
+                              <span className="analyse-summary-item">
+                                <span className="analyse-summary-label">Invested</span>
+                                <span className="analyse-summary-value">₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                              </span>
+                              <span className="analyse-summary-item">
+                                <span className="analyse-summary-label">Value</span>
+                                <span className="analyse-summary-value">₹{value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                              </span>
+                              <span className={`analyse-summary-item analyse-summary-pnl ${pnl >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                                <span className="analyse-summary-label">P&L</span>
+                                <span className="analyse-summary-value">{pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                              </span>
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div className="portfolio-scroll portfolio-analysis-content">
+                        <div className="portfolio-analysis-card">
+                          <div className="portfolio-analysis-body">
+                            <div className="portfolio-analysis-markdown">
+                              <ReactMarkdown>{portfolioAnalysis}</ReactMarkdown>
+                            </div>
+                          </div>
+                        </div>
+                        <details className="portfolio-analysis-prompt-details">
+                          <summary>View analysis prompt</summary>
+                          <p className="portfolio-analysis-prompt-text">
+                            You are an experienced equity analyst and portfolio strategist at Morgan Stanley. Get my Zerodha portfolio from portfolio tab in myOrders. Please perform a detailed analysis of my holdings, including sector allocation, stock concentration, risk exposure, and historical performance trends. Compare my portfolio composition with standard benchmarks such as Nifty 50 and Sensex. Identify strengths, weaknesses, and diversification gaps. Then, provide actionable insights on how much additional capital should be invested for long‑term wealth creation (10–15 years horizon), considering risk tolerance, compounding potential, and market cycles. Present your analysis in a structured format with clear recommendations, including suggested allocation percentages across equity, debt, and other asset classes.
+                          </p>
+                        </details>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : ordersModalTab === 'portfolio' ? (
                 <div className="portfolio-tab-wrapper">
                   {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (() => {
                     const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);

@@ -25,19 +25,12 @@ import Groq from 'groq-sdk';
 import { runAutoTrade, getTop3FromTop50Losers } from './autoTrade.js';
 import { KiteConnect } from 'kiteconnect';
 
-/** Get Kite credentials from request (headers or body). Used for session-only, no persistence. */
+/** Get Kite credentials from request only (headers or body). Never uses process.env — ensures portfolio/orders are only visible to the tab that sent credentials. No server-side persistence. */
 function getKiteFromRequest(req) {
-  const apiKey = req.headers['x-kite-api-key'] || req.body?.apiKey || process.env.KITE_API_KEY || '';
-  const apiSecret = req.headers['x-kite-api-secret'] || req.body?.apiSecret || process.env.KITE_API_SECRET || '';
-  const accessToken = req.headers['x-kite-access-token'] || req.body?.accessToken || process.env.KITE_ACCESS_TOKEN || '';
+  const apiKey = req.headers['x-kite-api-key'] || req.body?.apiKey || '';
+  const apiSecret = req.headers['x-kite-api-secret'] || req.body?.apiSecret || '';
+  const accessToken = req.headers['x-kite-access-token'] || req.body?.accessToken || '';
   return { apiKey: String(apiKey || '').trim(), apiSecret: String(apiSecret || '').trim(), accessToken: String(accessToken || '').trim() };
-}
-
-function setKiteEnvFromRequest(req) {
-  const { apiKey, apiSecret, accessToken } = getKiteFromRequest(req);
-  if (apiKey) process.env.KITE_API_KEY = apiKey;
-  if (apiSecret) process.env.KITE_API_SECRET = apiSecret;
-  if (accessToken) process.env.KITE_ACCESS_TOKEN = accessToken;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -209,6 +202,30 @@ async function fetchQuoteViaChart(symbol) {
       const prev = meta.previousClose ?? meta.chartPreviousClose ?? price;
       const change = (price - prev) || 0;
       const changePercent = prev ? (change / prev) * 100 : 0;
+      let fiftyTwoWeekHigh = meta.fiftyTwoWeekHigh;
+      let fiftyTwoWeekLow = meta.fiftyTwoWeekLow;
+      if (fiftyTwoWeekHigh == null || fiftyTwoWeekLow == null) {
+        try {
+          const url1y = `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`;
+          const res1y = await fetch(url1y, { headers: YAHOO_HEADERS });
+          if (res1y.ok) {
+            const data1y = await res1y.json();
+            const r1y = data1y?.chart?.result?.[0];
+            const m1y = r1y?.meta || {};
+            if (fiftyTwoWeekHigh == null && m1y.fiftyTwoWeekHigh != null) fiftyTwoWeekHigh = m1y.fiftyTwoWeekHigh;
+            if (fiftyTwoWeekLow == null && m1y.fiftyTwoWeekLow != null) fiftyTwoWeekLow = m1y.fiftyTwoWeekLow;
+            if ((fiftyTwoWeekHigh == null || fiftyTwoWeekLow == null) && r1y?.indicators?.quote?.[0]) {
+              const q = r1y.indicators.quote[0];
+              const highs = (q.high || []).filter((v) => v != null && !isNaN(v));
+              const lows = (q.low || []).filter((v) => v != null && !isNaN(v));
+              if (fiftyTwoWeekHigh == null && highs.length) fiftyTwoWeekHigh = Math.max(...highs);
+              if (fiftyTwoWeekLow == null && lows.length) fiftyTwoWeekLow = Math.min(...lows);
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       return {
         symbol: meta.symbol || symbol,
         shortName: meta.shortName || meta.longName || symbol,
@@ -219,6 +236,8 @@ async function fetchQuoteViaChart(symbol) {
         regularMarketChangePercent: changePercent,
         regularMarketVolume: meta.regularMarketVolume,
         marketCap: meta.marketCap,
+        fiftyTwoWeekHigh,
+        fiftyTwoWeekLow,
       };
     } catch {
       continue;
@@ -252,6 +271,8 @@ async function fetchQuote(symbol) {
       regularMarketChangePercent: price.regularMarketChangePercent ?? 0,
       regularMarketVolume: price.regularMarketVolume ?? sd.volume,
       marketCap: sd.marketCap ?? price.marketCap,
+      fiftyTwoWeekHigh: sd.fiftyTwoWeekHigh ?? price.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: sd.fiftyTwoWeekLow ?? price.fiftyTwoWeekLow,
     };
   } catch (err) {
     console.warn(`QuoteSummary fallback failed for ${symbol}:`, err.message);
@@ -341,17 +362,20 @@ async function fetchSymbolData(symbol, market) {
     ? ((history[history.length - 1]?.close - history[0]?.close) / (history[0]?.close || 1)) * 100
     : null;
   const displaySymbol = market === 'us' ? (quote.symbol || symbol) : (quote.symbol?.replace(/\.(NS|BO)$/, '') || symbol.replace(/\.(NS|BO)$/, ''));
+  const price = quote.regularMarketPrice ?? quote.preMarketPrice;
   return {
     symbol: displaySymbol,
     market,
     name: quote.shortName || quote.longName || symbol,
-    price: quote.regularMarketPrice ?? quote.preMarketPrice,
+    price,
     change: quote.regularMarketChange ?? 0,
     changePercent: quote.regularMarketChangePercent ?? quote.regularMarketChange ?? 0,
     volume: quote.regularMarketVolume,
     marketCap: quote.marketCap,
     weekChange: weeklyChange,
     monthChange,
+    fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh,
+    fiftyTwoWeekLow: quote.fiftyTwoWeekLow,
     history: history.slice(-14).map((q) => ({ date: q.date, close: q.close })),
   };
 }
@@ -486,7 +510,8 @@ Format your response as JSON only:
   return { pros: ['Analysis unavailable'], cons: ['Check server logs'] };
 }
 
-/** Best-stock algorithm: rank top 150 losers by composite score (dip + liquidity + momentum + size) */
+/** Best-stock algorithm: rank top 150 losers by composite score.
+ *  Uses: dip, 52W proximity (near low = more upside), liquidity, momentum, size, and related params. */
 function computeBestRanks(segmentData) {
   const allLosers = [];
   for (const [segment, data] of Object.entries(segmentData || {})) {
@@ -504,7 +529,23 @@ function computeBestRanks(segmentData) {
     const week = (s.weekChange ?? 0) < 0 ? 0.5 : 0;
     const month = (s.monthChange ?? 0) < 0 ? 0.3 : 0;
     const cap = capLog(s.marketCap) * 0.2;
-    const bestScore = dip * 2 + vol + week + month + cap;
+
+    // 52W proximity: (high - price) / (high - low) = upside potential in range. Higher = nearer to 52W low = better.
+    let fiftyTwoWScore = 0;
+    const price = s.price ?? 0;
+    const high = s.fiftyTwoWeekHigh;
+    const low = s.fiftyTwoWeekLow;
+    if (high != null && low != null && high > low && price > 0) {
+      const upsideInRange = (high - price) / (high - low);
+      fiftyTwoWScore = Math.max(0, Math.min(1, upsideInRange)) * 2;
+    }
+
+    // Additional: volume-to-cap turnover (liquidity)
+    const mcap = s.marketCap ?? 1;
+    const turnover = (s.volume ?? 0) / mcap;
+    const turnoverScore = Math.min(1, Math.log10(Math.max(turnover * 1e6, 1)) / 8) * 0.3;
+
+    const bestScore = dip * 2 + vol + week + month + cap + fiftyTwoWScore + turnoverScore;
     return { ...s, _bestScore: bestScore };
   });
   scored.sort((a, b) => (b._bestScore ?? 0) - (a._bestScore ?? 0));
@@ -823,6 +864,61 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+const PORTFOLIO_ANALYSIS_PROMPT = `You are an experienced equity analyst and portfolio strategist at Morgan Stanley. I am sharing my Zerodha portfolio holdings. Please perform a detailed analysis of my holdings, including sector allocation, stock concentration, risk exposure, and historical performance trends. Compare my portfolio composition with standard benchmarks such as Nifty 50 and Sensex. Identify strengths, weaknesses, and diversification gaps. Then, provide actionable insights on how much additional capital should be invested for long‑term wealth creation (10–15 years horizon), considering risk tolerance, compounding potential, and market cycles. Present your analysis in a structured format with clear recommendations, including suggested allocation percentages across equity, debt, and other asset classes.`;
+
+async function getPortfolioAnalysis(holdings) {
+  if (!groq) {
+    return { analysis: 'AI analysis requires GROQ_API_KEY in .env', error: true };
+  }
+  const portfolioStr = holdings.length === 0
+    ? 'Portfolio is empty.'
+    : holdings.map((h) => {
+        const qty = h.quantity ?? 0;
+        const avg = h.average_price ?? 0;
+        const last = h.last_price ?? 0;
+        const value = qty * last;
+        const pnl = h.pnl ?? (qty * (last - avg));
+        const pnlPct = avg > 0 ? ((last - avg) / avg) * 100 : null;
+        return `- ${h.tradingsymbol} (${h.exchange}): Qty ${qty}, Avg ₹${avg?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}, LTP ₹${last?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}, Value ₹${value?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${pnlPct != null ? `, P&L ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% (₹${pnl?.toLocaleString('en-IN', { maximumFractionDigits: 2 })})` : ''}`;
+      }).join('\n');
+  const invested = holdings.reduce((s, h) => s + (h.quantity ?? 0) * (h.average_price ?? 0), 0);
+  const currentValue = holdings.reduce((s, h) => s + (h.quantity ?? 0) * (h.last_price ?? 0), 0);
+  const totalPnl = holdings.reduce((s, h) => s + (h.pnl ?? (h.quantity ?? 0) * ((h.last_price ?? 0) - (h.average_price ?? 0))), 0);
+  const prompt = `${PORTFOLIO_ANALYSIS_PROMPT}
+
+My portfolio holdings:
+${portfolioStr}
+
+Summary: Invested ₹${invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}, Current Value ₹${currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}, P&L ₹${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
+
+Formatting rules: Use ## for main sections, ### for sub-sections. Keep headings concise. Use bullet points for lists. Keep paragraphs short (2–3 sentences max). Use tables for allocation percentages. Be concise and scannable.`;
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4,
+    });
+    const analysis = completion.choices[0]?.message?.content || 'Analysis unavailable.';
+    return { analysis };
+  } catch (err) {
+    console.error('[Portfolio analysis]', err.message);
+    return { analysis: `Analysis failed: ${err.message}`, error: true };
+  }
+}
+
+app.post('/api/analyze-portfolio', async (req, res) => {
+  try {
+    const { holdings } = req.body;
+    if (!Array.isArray(holdings)) return res.status(400).json({ error: 'holdings array required' });
+    const result = await getPortfolioAnalysis(holdings);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Auto-trade: daily buy top 3 from top 50 loss stocks (Zerodha Kite) ---
 async function getSegmentDataForAutoTrade() {
   const cacheKey = 'in:50:all';
@@ -872,9 +968,7 @@ app.post('/api/settings/kite/generate-token', async (req, res) => {
 });
 
 app.get('/api/kite/orders', async (req, res) => {
-  setKiteEnvFromRequest(req);
-  const apiKey = process.env.KITE_API_KEY;
-  const accessToken = process.env.KITE_ACCESS_TOKEN;
+  const { apiKey, accessToken } = getKiteFromRequest(req);
   if (!apiKey || !accessToken) {
     return res.status(400).json({ error: 'Kite not configured. Set API key and generate access token in Settings.' });
   }
@@ -883,30 +977,6 @@ app.get('/api/kite/orders', async (req, res) => {
     kite.setAccessToken(accessToken);
     const raw = await kite.getOrders();
     const orders = Array.isArray(raw) ? raw : [];
-    const nameCache = {};
-    const toYahoo = (sym, ex) => {
-      if (!sym) return null;
-      const s = String(sym).trim();
-      if (ex === 'BSE') return s.includes('.') ? s : `${s}.BO`;
-      return s.includes('.') ? s : `${s}.NS`;
-    };
-    for (const o of orders) {
-      const yfSym = toYahoo(o.tradingsymbol, o.exchange);
-      if (!yfSym || o.exchange === 'NFO' || o.exchange === 'MCX' || o.exchange === 'CDS') continue;
-      if (nameCache[o.tradingsymbol]) {
-        o.name = nameCache[o.tradingsymbol];
-        continue;
-      }
-      try {
-        const quote = await yahooFinance.quote(yfSym);
-        const name = quote?.shortName || quote?.longName || o.tradingsymbol;
-        nameCache[o.tradingsymbol] = name;
-        o.name = name;
-      } catch {
-        o.name = o.tradingsymbol;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
     res.setHeader('Content-Type', 'application/json');
     res.json({ orders });
   } catch (err) {
@@ -917,9 +987,7 @@ app.get('/api/kite/orders', async (req, res) => {
 });
 
 app.get('/api/kite/holdings', async (req, res) => {
-  setKiteEnvFromRequest(req);
-  const apiKey = process.env.KITE_API_KEY;
-  const accessToken = process.env.KITE_ACCESS_TOKEN;
+  const { apiKey, accessToken } = getKiteFromRequest(req);
   if (!apiKey || !accessToken) {
     return res.status(400).json({ error: 'Kite not configured. Set API key and generate access token in Settings.' });
   }
@@ -958,11 +1026,14 @@ app.get('/api/kite/holdings', async (req, res) => {
 
 app.post('/api/auto-trade/run', async (req, res) => {
   try {
-    setKiteEnvFromRequest(req);
+    const creds = getKiteFromRequest(req);
+    if (!creds.apiKey || !creds.accessToken) {
+      return res.status(400).json({ success: false, error: 'Kite not configured. Set API key and generate access token in Settings.' });
+    }
     const dryRun = req.query.dryRun !== 'false';
     const customStocks = req.body?.stocks;
     const quantityPerStock = req.body?.quantityPerStock != null ? Math.max(1, Math.floor(Number(req.body.quantityPerStock))) : undefined;
-    const result = await runAutoTrade(getSegmentDataForAutoTrade, { dryRun, customStocks, quantityPerStock });
+    const result = await runAutoTrade(getSegmentDataForAutoTrade, { dryRun, customStocks, quantityPerStock, credentials: creds });
     res.json(result);
   } catch (err) {
     console.error(err);

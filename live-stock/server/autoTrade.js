@@ -37,21 +37,21 @@ export function getTop3FromTop50Losers(segmentData) {
 /**
  * Place buy orders via Zerodha Kite Connect
  * @param {Array} stocks - [{ symbol, name, price, segment, ... }]
- * @param {Object} options - { dryRun, quantityPerStock }
+ * @param {Object} options - { dryRun, quantityPerStock, credentials: { apiKey, apiSecret, accessToken } }
  * @returns {Object} { success, orders, error }
  */
 export async function placeKiteOrders(stocks, options = {}) {
-  const { dryRun = true, quantityPerStock = 1 } = options;
-  const apiKey = process.env.KITE_API_KEY;
-  const apiSecret = process.env.KITE_API_SECRET;
-  const accessToken = process.env.KITE_ACCESS_TOKEN;
+  const { dryRun = true, quantityPerStock = 1, credentials } = options;
+  const apiKey = credentials?.apiKey || process.env.KITE_API_KEY;
+  const apiSecret = credentials?.apiSecret || process.env.KITE_API_SECRET;
+  const accessToken = credentials?.accessToken || process.env.KITE_ACCESS_TOKEN;
 
   if (!apiKey || !apiSecret) {
-    return { success: false, error: 'KITE_API_KEY and KITE_API_SECRET required in .env' };
+    return { success: false, error: 'KITE_API_KEY and KITE_API_SECRET required' };
   }
 
   if (!dryRun && !accessToken) {
-    return { success: false, error: 'KITE_ACCESS_TOKEN required for live orders. Add to .env (regenerate daily via login)' };
+    return { success: false, error: 'KITE_ACCESS_TOKEN required for live orders (regenerate daily via login)' };
   }
 
   const orders = [];
@@ -113,14 +113,16 @@ export async function placeKiteOrders(stocks, options = {}) {
 /**
  * Run full auto-trade: fetch top 50 losers, pick top 3, place orders
  * @param {Function} getSegmentData - async () => segmentData from getTopStocksBySegment
- * @param {Object} options - { dryRun, quantityPerStock, customStocks }
+ * @param {Object} options - { dryRun, quantityPerStock, customStocks, credentials }
  * @param {Array} options.customStocks - optional [{ symbol, name, price, changePercent, ... }] to use instead of top 3 losers
+ * @param {Object} options.credentials - optional { apiKey, apiSecret, accessToken } for request-scoped auth (no process.env)
  */
 export async function runAutoTrade(getSegmentData, options = {}) {
   const dryRun = options.dryRun ?? (process.env.AUTO_TRADE_DRY_RUN !== 'false');
   const envQty = parseInt(process.env.AUTO_TRADE_QUANTITY || '1', 10) || 1;
   const quantityPerStock = options.quantityPerStock ?? envQty;
   const customStocks = options.customStocks;
+  const credentials = options.credentials;
 
   const startTime = new Date().toISOString();
   console.log(`[AutoTrade] Starting at ${startTime} (dryRun=${dryRun})`);
@@ -151,7 +153,7 @@ export async function runAutoTrade(getSegmentData, options = {}) {
 
     console.log('[AutoTrade] Stocks to buy:', stocksToBuy.map((s) => `${s.symbol} (${s.changePercent?.toFixed(2)}%)`).join(', '));
 
-    const result = await placeKiteOrders(stocksToBuy, { dryRun, quantityPerStock });
+    const result = await placeKiteOrders(stocksToBuy, { dryRun, quantityPerStock, credentials });
 
     if (result.orders?.length) {
       result.orders.forEach((o) => console.log(`[AutoTrade] ${o.status}: ${o.symbol} - ${o.message || o.error || o.orderId}`));
