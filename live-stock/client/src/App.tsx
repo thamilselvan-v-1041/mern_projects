@@ -442,6 +442,7 @@ export default function App() {
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio'>('orders');
+  const [ordersRefreshTrigger, setOrdersRefreshTrigger] = useState(0);
   const [kiteHoldings, setKiteHoldings] = useState<Array<{
     tradingsymbol: string;
     exchange: string;
@@ -572,7 +573,7 @@ export default function App() {
         })
         .finally(() => setKiteOrdersLoading(false));
     }
-  }, [historyModalOpen, kiteForm.apiKey, kiteForm.accessToken]);
+  }, [historyModalOpen, ordersRefreshTrigger, kiteForm.apiKey, kiteForm.accessToken]);
 
   useEffect(() => {
     if (historyModalOpen && ordersModalTab === 'portfolio') {
@@ -870,6 +871,9 @@ export default function App() {
   const handleCloseTradeResult = () => {
     setTradeConfirmModal(null);
     setTradeResult(null);
+    setOrdersModalTab('orders');
+    setHistoryModalOpen(true);
+    setOrdersRefreshTrigger((t) => t + 1);
   };
 
   const handleChartPeriodChange = (stock: Stock, period: ChartPeriod) => {

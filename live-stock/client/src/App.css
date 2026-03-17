@@ -318,6 +318,10 @@
   font-size: 0.85rem;
 }
 
+.orders-tab-wrapper .proceed-history-list {
+  padding: 0 1.25rem;
+}
+
 .proceed-history-list > li:last-child {
   border-bottom: none;
 }
