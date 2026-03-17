@@ -1,6 +1,87 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import * as XLSX from 'xlsx';
 import './App.css';
+
+type HoldingRow = {
+  tradingsymbol: string;
+  exchange: string;
+  quantity: number;
+  average_price: number;
+  last_price: number;
+  pnl?: number;
+  day_change_percentage?: number;
+};
+
+function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        if (!data) throw new Error('Failed to read file');
+        const wb = XLSX.read(data, { type: 'binary' });
+        const sheetName = wb.SheetNames.includes('Equity') ? 'Equity' : wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { header: 1, defval: '' }) as (string | number)[][];
+        if (!rows.length) throw new Error('File is empty');
+        const col = (headers: string[], name: string, aliases: string[]) => {
+          const n = name.toLowerCase();
+          for (const a of aliases) {
+            const i = headers.findIndex((h) => h === a);
+            if (i >= 0) return i;
+          }
+          return headers.findIndex((h) => h.includes(n) || n.includes(h));
+        };
+        let headerRow = -1;
+        let headers: string[] = [];
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i].map((c) => String(c || '').trim());
+          const h = row.map((c) => c.toLowerCase());
+          if (h.some((hh) => hh.includes('symbol')) && (h.some((hh) => hh.includes('quantity')) || h.some((hh) => hh.includes('average price')))) {
+            headerRow = i;
+            headers = h;
+            break;
+          }
+        }
+        if (headerRow < 0) throw new Error('Could not find header row with Symbol and Quantity. Use Zerodha Kite Console holdings export.');
+        const symCol = col(headers, 'symbol', ['tradingsymbol', 'symbol', 'instrument', 'stock', 'scrip']);
+        const qtyCol = col(headers, 'quantity', ['quantity available', 'quantity', 'qty', 'qty.', 'shares']);
+        const avgCol = col(headers, 'avg', ['average price', 'avg price', 'avg. price', 'cost', 'buy price', 'avg', 'purchase price']);
+        const ltpCol = col(headers, 'ltp', ['previous closing price', 'ltp', 'last price', 'close', 'current price', 'last_price', 'market price']);
+        const pnlCol = col(headers, 'pnl', ['unrealized p&l', 'pnl', 'p&l', 'profit', 'profit/loss', 'unrealized pnl']);
+        const exCol = col(headers, 'exchange', ['exchange', 'ex']);
+        if (symCol < 0 || qtyCol < 0) throw new Error('Need Symbol and Quantity columns. Use Zerodha Kite Console holdings export.');
+        const holdings: HoldingRow[] = [];
+        for (let i = headerRow + 1; i < rows.length; i++) {
+          const r = rows[i];
+          const sym = String(r[symCol] ?? '').trim();
+          if (!sym || /^\d+$/.test(sym)) continue;
+          const qty = Math.max(0, Number(r[qtyCol]) || 0);
+          if (qty <= 0) continue;
+          const avg = Number(r[avgCol]) || 0;
+          const ltp = Number(r[ltpCol]) || avg;
+          const pnl = pnlCol >= 0 ? Number(r[pnlCol]) : undefined;
+          const ex = exCol >= 0 ? String(r[exCol] || 'NSE').trim().toUpperCase() : 'NSE';
+          holdings.push({
+            tradingsymbol: sym.replace(/\.(NS|BO|NSE|BSE)$/i, ''),
+            exchange: ex || 'NSE',
+            quantity: qty,
+            average_price: avg || ltp,
+            last_price: ltp,
+            pnl,
+            day_change_percentage: avg > 0 ? ((ltp - avg) / avg) * 100 : undefined,
+          });
+        }
+        resolve(holdings);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsBinaryString(file);
+  });
+}
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const FUNDAMENTALS_CACHE_KEY = 'live-stock-fundamentals-cache';
@@ -474,6 +555,11 @@ export default function App() {
   const [portfolioAnalysis, setPortfolioAnalysis] = useState<string | null>(null);
   const [portfolioAnalysisLoading, setPortfolioAnalysisLoading] = useState(false);
   const [portfolioAnalysisError, setPortfolioAnalysisError] = useState<string | null>(null);
+  const [analyseSource, setAnalyseSource] = useState<'kite' | 'xlsx'>('kite');
+  const [xlsxHoldings, setXlsxHoldings] = useState<HoldingRow[]>([]);
+  const [xlsxFileName, setXlsxFileName] = useState<string | null>(null);
+  const [xlsxUploadError, setXlsxUploadError] = useState<string | null>(null);
+  const xlsxInputRef = useRef<HTMLInputElement>(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
@@ -604,32 +690,37 @@ export default function App() {
     }
   }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.accessToken]);
 
+  const holdingsForAnalysis = analyseSource === 'xlsx' && xlsxHoldings.length > 0 ? xlsxHoldings : kiteHoldings;
+  const canRunKiteAnalysis = !kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0;
+  const canRunXlsxAnalysis = xlsxHoldings.length > 0;
+
   useEffect(() => {
-    if (historyModalOpen && ordersModalTab === 'analyse' && !kiteHoldingsLoading && !kiteHoldingsError) {
-      if (kiteHoldings.length === 0) {
-        setPortfolioAnalysis(null);
-        setPortfolioAnalysisError(null);
-        return;
-      }
-      setPortfolioAnalysisError(null);
-      setPortfolioAnalysisLoading(true);
-      fetch(`${API}/analyze-portfolio`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ holdings: kiteHoldings }),
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.error) throw new Error(data.analysis || data.error);
-          setPortfolioAnalysis(data.analysis || '');
-        })
-        .catch((e) => {
-          setPortfolioAnalysisError((e as Error).message);
-          setPortfolioAnalysis(null);
-        })
-        .finally(() => setPortfolioAnalysisLoading(false));
+    if (!historyModalOpen || ordersModalTab !== 'analyse') return;
+    const fromKite = analyseSource === 'kite' && canRunKiteAnalysis;
+    const fromXlsx = analyseSource === 'xlsx' && canRunXlsxAnalysis;
+    if (!fromKite && !fromXlsx) {
+      setPortfolioAnalysis(null);
+      return;
     }
-  }, [historyModalOpen, ordersModalTab, kiteHoldings, kiteHoldingsLoading, kiteHoldingsError]);
+    const holdings = analyseSource === 'xlsx' ? xlsxHoldings : kiteHoldings;
+    setPortfolioAnalysisError(null);
+    setPortfolioAnalysisLoading(true);
+    fetch(`${API}/analyze-portfolio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ holdings }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.analysis || data.error);
+        setPortfolioAnalysis(data.analysis || '');
+      })
+      .catch((e) => {
+        setPortfolioAnalysisError((e as Error).message);
+        setPortfolioAnalysis(null);
+      })
+      .finally(() => setPortfolioAnalysisLoading(false));
+  }, [historyModalOpen, ordersModalTab, analyseSource, canRunKiteAnalysis, canRunXlsxAnalysis, kiteHoldings, xlsxHoldings]);
 
   const handleSelectStock = useCallback((id: string, checked: boolean) => {
     setSelectedStockIds((prev) => {
@@ -1189,7 +1280,16 @@ export default function App() {
               <button className="auto-trade-close" onClick={() => setSettingsModalOpen(false)} aria-label="Close">×</button>
             </div>
             <div className="settings-content">
-              <p className="settings-hint">We keep these credentials in memory until you close the tab — no storage.</p>
+              <div className="settings-hint-row">
+                <p className="settings-hint">We keep these credentials in memory until you close the tab — no storage.</p>
+                <button
+                  type="button"
+                  className="settings-clear-creds"
+                  onClick={() => setKiteForm({ apiKey: '', secret: '', accessToken: '', requestToken: '' })}
+                >
+                  Clear credentials
+                </button>
+              </div>
               {kiteError && <p className="settings-error">{kiteError}</p>}
               <div className="settings-field">
                 <label>API Key</label>
@@ -1332,9 +1432,76 @@ export default function App() {
             <div className="history-modal-content">
               {ordersModalTab === 'analyse' ? (
                 <div className="analyse-tab-wrapper portfolio-tab-wrapper">
-                  {kiteHoldingsLoading ? (
+                  <div className="analyse-source-bar">
+                    <div className="analyse-source-tabs">
+                      <button
+                        type="button"
+                        className={`analyse-source-tab ${analyseSource === 'kite' ? 'active' : ''}`}
+                        onClick={() => { setAnalyseSource('kite'); setXlsxUploadError(null); }}
+                      >
+                        Kite Portfolio
+                      </button>
+                      <button
+                        type="button"
+                        className={`analyse-source-tab ${analyseSource === 'xlsx' ? 'active' : ''}`}
+                        onClick={() => { setAnalyseSource('xlsx'); setPortfolioAnalysisError(null); }}
+                      >
+                        Upload XLSX
+                      </button>
+                    </div>
+                    {analyseSource === 'xlsx' && (
+                      <div className="analyse-xlsx-upload-wrap">
+                        <p className="analyse-xlsx-privacy">Zerodha Kite Console holdings XLSX. Stays in this tab only — no storage.</p>
+                        <div className="analyse-xlsx-upload">
+                          <input
+                            ref={xlsxInputRef}
+                            type="file"
+                            accept=".xlsx,.xls"
+                            className="analyse-xlsx-input"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!file) return;
+                              setXlsxUploadError(null);
+                              setXlsxFileName(file.name);
+                              try {
+                                const parsed = await parsePortfolioXlsx(file);
+                                setXlsxHoldings(parsed);
+                                if (parsed.length === 0) setXlsxUploadError('No valid rows found. Need Symbol and Quantity columns.');
+                              } catch (err) {
+                                setXlsxUploadError((err as Error).message);
+                                setXlsxHoldings([]);
+                              }
+                            }}
+                            aria-label="Upload portfolio XLSX"
+                          />
+                          <button
+                            type="button"
+                            className="analyse-xlsx-btn"
+                            onClick={() => xlsxInputRef.current?.click()}
+                          >
+                            {xlsxFileName ? `📄 ${xlsxFileName}` : 'Choose portfolio XLSX'}
+                          </button>
+                          {xlsxHoldings.length > 0 && (
+                            <>
+                              <span className="analyse-xlsx-count">{xlsxHoldings.length} holdings</span>
+                              <button
+                                type="button"
+                                className="analyse-xlsx-clear"
+                                onClick={() => { setXlsxHoldings([]); setXlsxFileName(null); setPortfolioAnalysis(null); setPortfolioAnalysisError(null); }}
+                                title="Clear uploaded data"
+                              >
+                                Clear
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {analyseSource === 'kite' && kiteHoldingsLoading ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
-                  ) : kiteHoldingsError ? (
+                  ) : analyseSource === 'kite' && kiteHoldingsError ? (
                     <div className="orders-error-msg">
                       <p>{kiteHoldingsError}</p>
                       <button
@@ -1363,8 +1530,14 @@ export default function App() {
                         Retry
                       </button>
                     </div>
-                  ) : kiteHoldings.length === 0 ? (
-                    <p className="orders-empty-msg">No holdings in your Kite portfolio. Add holdings in Portfolio tab first.</p>
+                  ) : analyseSource === 'kite' && kiteHoldings.length === 0 ? (
+                    <p className="orders-empty-msg">No data</p>
+                  ) : analyseSource === 'xlsx' && xlsxUploadError ? (
+                    <div className="orders-error-msg">
+                      <p>{xlsxUploadError}</p>
+                    </div>
+                  ) : analyseSource === 'xlsx' && xlsxHoldings.length === 0 ? (
+                    <p className="orders-empty-msg">No data</p>
                   ) : portfolioAnalysisLoading ? (
                     <div className="analyse-loading">
                       <span className="analyse-loading-spinner" aria-hidden />
@@ -1381,10 +1554,11 @@ export default function App() {
                         onClick={() => {
                           setPortfolioAnalysisError(null);
                           setPortfolioAnalysisLoading(true);
+                          const h = analyseSource === 'xlsx' ? xlsxHoldings : kiteHoldings;
                           fetch(`${API}/analyze-portfolio`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ holdings: kiteHoldings }),
+                            body: JSON.stringify({ holdings: h }),
                           })
                             .then((r) => r.json())
                             .then((data) => {
@@ -1406,9 +1580,10 @@ export default function App() {
                     <>
                       <div className="analyse-summary-bar">
                         {(() => {
-                          const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
-                          const value = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.last_price ?? 0)), 0);
-                          const pnl = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
+                          const h = holdingsForAnalysis;
+                          const invested = h.reduce((s, x) => s + (x.quantity * (x.average_price ?? 0)), 0);
+                          const value = h.reduce((s, x) => s + (x.quantity * (x.last_price ?? 0)), 0);
+                          const pnl = h.reduce((s, x) => s + (x.pnl ?? (x.quantity * ((x.last_price ?? 0) - (x.average_price ?? 0)))), 0);
                           return (
                             <>
                               <span className="analyse-summary-item">
