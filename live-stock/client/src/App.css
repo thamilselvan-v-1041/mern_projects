@@ -1491,27 +1491,20 @@
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  display: block;
 }
 
-.portfolio-overview-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
+.portfolio-overview-scroll {
+  position: relative;
+  padding-top: 2.75rem;
+  padding-right: 3.5rem;
 }
 
-.portfolio-overview-title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.portfolio-overview-fullscreen {
-  margin-left: auto;
+.portfolio-overview-scroll .portfolio-overview-fullscreen {
+  position: absolute;
+  top: 1rem;
+  right: 1.75rem;
+  z-index: 1;
 }
 
 .analyse-action-btn {

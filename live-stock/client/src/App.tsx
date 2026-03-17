@@ -1453,8 +1453,7 @@ export default function App() {
                         })()}
                       </div>
                       <div className="analyse-report-scroll-wrap">
-                        <div className="portfolio-overview-header">
-                          <h3 className="portfolio-overview-title">Portfolio Overview</h3>
+                        <div className="portfolio-scroll portfolio-analysis-content portfolio-overview-scroll">
                           <button
                             type="button"
                             className="analyse-action-btn portfolio-overview-fullscreen"
@@ -1464,8 +1463,6 @@ export default function App() {
                           >
                             ⛶
                           </button>
-                        </div>
-                        <div className="portfolio-scroll portfolio-analysis-content">
                         <div className="portfolio-analysis-card">
                           <div className="portfolio-analysis-body">
                             <div className="portfolio-analysis-markdown">
