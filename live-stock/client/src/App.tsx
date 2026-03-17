@@ -525,7 +525,7 @@ export default function App() {
   const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
-  const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio' | 'analyse'>('orders');
+  const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio' | 'analyse' | 'settings'>('orders');
   const [ordersRefreshTrigger, setOrdersRefreshTrigger] = useState(0);
   const [kiteHoldings, setKiteHoldings] = useState<Array<{
     tradingsymbol: string;
@@ -555,12 +555,12 @@ export default function App() {
   const [portfolioAnalysis, setPortfolioAnalysis] = useState<string | null>(null);
   const [portfolioAnalysisLoading, setPortfolioAnalysisLoading] = useState(false);
   const [portfolioAnalysisError, setPortfolioAnalysisError] = useState<string | null>(null);
+  const [reportFullscreen, setReportFullscreen] = useState(false);
   const [analyseSource, setAnalyseSource] = useState<'kite' | 'xlsx'>('kite');
   const [xlsxHoldings, setXlsxHoldings] = useState<HoldingRow[]>([]);
   const [xlsxFileName, setXlsxFileName] = useState<string | null>(null);
   const [xlsxUploadError, setXlsxUploadError] = useState<string | null>(null);
   const xlsxInputRef = useRef<HTMLInputElement>(null);
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
   const [kiteError, setKiteError] = useState<string | null>(null);
@@ -638,11 +638,19 @@ export default function App() {
   }, [fundamentalsCache]);
 
   useEffect(() => {
-    if (settingsModalOpen) {
+    if (historyModalOpen || reportFullscreen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [historyModalOpen, reportFullscreen]);
+
+  useEffect(() => {
+    if (ordersModalTab === 'settings') {
       setKiteError(null);
       setKiteGenerateResult(null);
     }
-  }, [settingsModalOpen]);
+  }, [ordersModalTab]);
 
   useEffect(() => {
     if (historyModalOpen) {
@@ -690,9 +698,14 @@ export default function App() {
     }
   }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.accessToken]);
 
+  const kiteConfigured = !!(kiteForm.apiKey && kiteForm.accessToken);
   const holdingsForAnalysis = analyseSource === 'xlsx' && xlsxHoldings.length > 0 ? xlsxHoldings : kiteHoldings;
   const canRunKiteAnalysis = !kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0;
   const canRunXlsxAnalysis = xlsxHoldings.length > 0;
+
+  useEffect(() => {
+    if (ordersModalTab === 'analyse' && !kiteConfigured) setAnalyseSource('xlsx');
+  }, [ordersModalTab, kiteConfigured]);
 
   useEffect(() => {
     if (!historyModalOpen || ordersModalTab !== 'analyse') return;
@@ -1042,18 +1055,6 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
-        <button
-          type="button"
-          className="settings-btn settings-btn-top-right"
-          onClick={() => setSettingsModalOpen(true)}
-          title="Settings"
-          aria-label="Settings"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
         <div className="header-title-row">
           <div className="proceed-area">
             <button
@@ -1079,7 +1080,7 @@ export default function App() {
               onClick={() => { setHistoryModalOpen(true); setOrdersModalTab('orders'); }}
               title="View my orders"
             >
-              My Orders
+              My Zerodha
             </button>
           </div>
         </div>
@@ -1272,136 +1273,8 @@ export default function App() {
         </div>
       )}
 
-      {settingsModalOpen && (
-        <div className="auto-trade-result" role="dialog" aria-label="Settings">
-          <div className="auto-trade-result-inner trade-confirm-modal settings-modal">
-            <div className="auto-trade-result-header">
-              <h3>Kite Settings</h3>
-              <button className="auto-trade-close" onClick={() => setSettingsModalOpen(false)} aria-label="Close">×</button>
-            </div>
-            <div className="settings-content">
-              <div className="settings-hint-row">
-                <p className="settings-hint">We keep these credentials in memory until you close the tab — no storage.</p>
-                <button
-                  type="button"
-                  className="settings-clear-creds"
-                  onClick={() => setKiteForm({ apiKey: '', secret: '', accessToken: '', requestToken: '' })}
-                >
-                  Clear credentials
-                </button>
-              </div>
-              {kiteError && <p className="settings-error">{kiteError}</p>}
-              <div className="settings-field">
-                <label>API Key</label>
-                <input
-                  type="text"
-                  className="settings-input"
-                  placeholder="Enter API key"
-                  value={kiteForm.apiKey}
-                  onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
-                  autoComplete="off"
-                />
-              </div>
-              <div className="settings-field">
-                <label>Secret Key</label>
-                <input
-                  type="text"
-                  className="settings-input"
-                  placeholder="Enter secret key"
-                  value={kiteForm.secret}
-                  onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
-                  autoComplete="off"
-                />
-              </div>
-              <div className="settings-field">
-                <label>Access Token</label>
-                <input
-                  type="text"
-                  className="settings-input"
-                  placeholder="Paste access token or generate below"
-                  value={kiteForm.accessToken}
-                  onChange={(e) => setKiteForm((f) => ({ ...f, accessToken: e.target.value }))}
-                  autoComplete="off"
-                />
-              </div>
-              <div className="settings-field">
-                <label>Request Token (generate access token)</label>
-                {kiteForm.apiKey && (
-                  <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
-                    <a href={`https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`} target="_blank" rel="noopener noreferrer">Get request token from Kite login</a>
-                  </p>
-                )}
-                <div className="settings-input-wrap">
-                  <input
-                    type="text"
-                    className="settings-input settings-input-with-icon"
-                    placeholder="Enter request token"
-                    value={kiteForm.requestToken}
-                    onChange={(e) => setKiteForm((f) => ({ ...f, requestToken: e.target.value }))}
-                    autoComplete="off"
-                  />
-                  <button
-                    type="button"
-                    className="settings-input-icon-btn"
-                    onClick={async () => {
-                      if (!kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret) return;
-                      setKiteError(null);
-                      setKiteGenerateResult(null);
-                      setKiteGenerateLoading(true);
-                      try {
-                        const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
-                          body: JSON.stringify({
-                            requestToken: kiteForm.requestToken.trim(),
-                            apiKey: kiteForm.apiKey,
-                            apiSecret: kiteForm.secret,
-                          }),
-                        });
-                        if (data.error) throw new Error(data.error);
-                        setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
-                        setKiteGenerateResult({ success: true, accessToken: data.accessToken });
-                      } catch (e) {
-                        setKiteGenerateResult({ success: false, error: (e as Error).message });
-                      } finally {
-                        setKiteGenerateLoading(false);
-                      }
-                    }}
-                    disabled={kiteGenerateLoading || !kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret}
-                    title="Generate access token"
-                    aria-label="Generate access token"
-                  >
-                    {kiteGenerateLoading ? (
-                      <span className="settings-icon-spinner" aria-hidden />
-                    ) : (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              </div>
-              {kiteGenerateResult && (
-                <div className="settings-generate-result">
-                  <h4 className="settings-generate-result-title">
-                    {kiteGenerateResult.success ? 'Access Token' : 'Error'}
-                  </h4>
-                  {kiteGenerateResult.success ? (
-                    <p className="settings-generate-success">
-                      Token generated. Valid until market close. Regenerate daily.
-                    </p>
-                  ) : (
-                    <p className="settings-generate-error">{kiteGenerateResult.error}</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {historyModalOpen && (
-        <div className="auto-trade-result" role="dialog" aria-label="My Orders">
+        <div className="auto-trade-result" role="dialog" aria-label="My Zerodha">
           <div className="auto-trade-result-inner trade-confirm-modal">
             <div className="auto-trade-result-header orders-header-with-tabs">
               <div className="orders-modal-tabs">
@@ -1410,7 +1283,7 @@ export default function App() {
                   className={`orders-tab-btn ${ordersModalTab === 'orders' ? 'active' : ''}`}
                   onClick={() => setOrdersModalTab('orders')}
                 >
-                  My Orders
+                  My Zerodha
                 </button>
                 <button
                   type="button"
@@ -1426,30 +1299,39 @@ export default function App() {
                 >
                   Analyse
                 </button>
+                <button
+                  type="button"
+                  className={`orders-tab-btn ${ordersModalTab === 'settings' ? 'active' : ''}`}
+                  onClick={() => setOrdersModalTab('settings')}
+                >
+                  Settings
+                </button>
               </div>
               <button className="auto-trade-close" onClick={() => setHistoryModalOpen(false)} aria-label="Close">×</button>
             </div>
-            <div className="history-modal-content">
+            <div className={`history-modal-content ${ordersModalTab === 'analyse' && portfolioAnalysis ? 'history-modal-content-no-scroll' : ''}`}>
               {ordersModalTab === 'analyse' ? (
                 <div className="analyse-tab-wrapper portfolio-tab-wrapper">
                   <div className="analyse-source-bar">
-                    <div className="analyse-source-tabs">
-                      <button
-                        type="button"
-                        className={`analyse-source-tab ${analyseSource === 'kite' ? 'active' : ''}`}
-                        onClick={() => { setAnalyseSource('kite'); setXlsxUploadError(null); }}
-                      >
-                        Kite Portfolio
-                      </button>
-                      <button
-                        type="button"
-                        className={`analyse-source-tab ${analyseSource === 'xlsx' ? 'active' : ''}`}
-                        onClick={() => { setAnalyseSource('xlsx'); setPortfolioAnalysisError(null); }}
-                      >
-                        Upload XLSX
-                      </button>
-                    </div>
-                    {analyseSource === 'xlsx' && (
+                    {kiteConfigured && (
+                      <div className="analyse-source-tabs">
+                        <button
+                          type="button"
+                          className={`analyse-source-tab ${analyseSource === 'kite' ? 'active' : ''}`}
+                          onClick={() => { setAnalyseSource('kite'); setXlsxUploadError(null); }}
+                        >
+                          Kite Portfolio
+                        </button>
+                        <button
+                          type="button"
+                          className={`analyse-source-tab ${analyseSource === 'xlsx' ? 'active' : ''}`}
+                          onClick={() => { setAnalyseSource('xlsx'); setPortfolioAnalysisError(null); }}
+                        >
+                          Upload XLSX
+                        </button>
+                      </div>
+                    )}
+                    {(analyseSource === 'xlsx' || !kiteConfigured) && (
                       <div className="analyse-xlsx-upload-wrap">
                         <p className="analyse-xlsx-privacy">Zerodha Kite Console holdings XLSX. Stays in this tab only — no storage.</p>
                         <div className="analyse-xlsx-upload">
@@ -1499,44 +1381,27 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  {analyseSource === 'kite' && kiteHoldingsLoading ? (
+                  {kiteConfigured && analyseSource === 'kite' && kiteHoldingsLoading ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
-                  ) : analyseSource === 'kite' && kiteHoldingsError ? (
+                  ) : kiteConfigured && analyseSource === 'kite' && kiteHoldingsError ? (
                     <div className="orders-error-msg">
                       <p>{kiteHoldingsError}</p>
                       <button
                         type="button"
                         className="history-btn"
                         style={{ marginTop: '0.5rem' }}
-                        onClick={() => {
-                          setKiteHoldingsError(null);
-                          setKiteHoldingsLoading(true);
-                          fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, { headers: kiteHeaders(kiteForm) })
-                            .then((data) => {
-                              if (data.error) {
-                                setKiteHoldingsError(data.error);
-                                setKiteHoldings([]);
-                              } else {
-                                setKiteHoldings(data.holdings || []);
-                              }
-                            })
-                            .catch((e) => {
-                              setKiteHoldingsError((e as Error).message);
-                              setKiteHoldings([]);
-                            })
-                            .finally(() => setKiteHoldingsLoading(false));
-                        }}
+                        onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
                       >
-                        Retry
+                        Configure
                       </button>
                     </div>
-                  ) : analyseSource === 'kite' && kiteHoldings.length === 0 ? (
+                  ) : kiteConfigured && analyseSource === 'kite' && kiteHoldings.length === 0 ? (
                     <p className="orders-empty-msg">No data</p>
-                  ) : analyseSource === 'xlsx' && xlsxUploadError ? (
+                  ) : (analyseSource === 'xlsx' || !kiteConfigured) && xlsxUploadError ? (
                     <div className="orders-error-msg">
                       <p>{xlsxUploadError}</p>
                     </div>
-                  ) : analyseSource === 'xlsx' && xlsxHoldings.length === 0 ? (
+                  ) : (analyseSource === 'xlsx' || !kiteConfigured) && xlsxHoldings.length === 0 ? (
                     <p className="orders-empty-msg">No data</p>
                   ) : portfolioAnalysisLoading ? (
                     <div className="analyse-loading">
@@ -1547,34 +1412,16 @@ export default function App() {
                   ) : portfolioAnalysisError ? (
                     <div className="orders-error-msg">
                       <p>{portfolioAnalysisError}</p>
-                      <button
-                        type="button"
-                        className="history-btn"
-                        style={{ marginTop: '0.5rem' }}
-                        onClick={() => {
-                          setPortfolioAnalysisError(null);
-                          setPortfolioAnalysisLoading(true);
-                          const h = analyseSource === 'xlsx' ? xlsxHoldings : kiteHoldings;
-                          fetch(`${API}/analyze-portfolio`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ holdings: h }),
-                          })
-                            .then((r) => r.json())
-                            .then((data) => {
-                              if (data.error) throw new Error(data.analysis || data.error);
-                              setPortfolioAnalysis(data.analysis || '');
-                              setPortfolioAnalysisError(null);
-                            })
-                            .catch((e) => {
-                              setPortfolioAnalysisError((e as Error).message);
-                              setPortfolioAnalysis(null);
-                            })
-                            .finally(() => setPortfolioAnalysisLoading(false));
-                        }}
-                      >
-                        Retry
-                      </button>
+                      {kiteConfigured && (
+                        <button
+                          type="button"
+                          className="history-btn"
+                          style={{ marginTop: '0.5rem' }}
+                          onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
+                        >
+                          Configure
+                        </button>
+                      )}
                     </div>
                   ) : portfolioAnalysis ? (
                     <>
@@ -1602,7 +1449,20 @@ export default function App() {
                           );
                         })()}
                       </div>
-                      <div className="portfolio-scroll portfolio-analysis-content">
+                      <div className="analyse-report-scroll-wrap">
+                        <div className="portfolio-overview-header">
+                          <h3 className="portfolio-overview-title">Portfolio Overview</h3>
+                          <button
+                            type="button"
+                            className="analyse-action-btn portfolio-overview-fullscreen"
+                            onClick={() => setReportFullscreen(true)}
+                            title="Full screen"
+                            aria-label="Full screen"
+                          >
+                            ⛶
+                          </button>
+                        </div>
+                        <div className="portfolio-scroll portfolio-analysis-content">
                         <div className="portfolio-analysis-card">
                           <div className="portfolio-analysis-body">
                             <div className="portfolio-analysis-markdown">
@@ -1616,6 +1476,7 @@ export default function App() {
                             You are an experienced equity analyst and portfolio strategist at Morgan Stanley. Get my Zerodha portfolio from portfolio tab in myOrders. Please perform a detailed analysis of my holdings, including sector allocation, stock concentration, risk exposure, and historical performance trends. Compare my portfolio composition with standard benchmarks such as Nifty 50 and Sensex. Identify strengths, weaknesses, and diversification gaps. Then, provide actionable insights on how much additional capital should be invested for long‑term wealth creation (10–15 years horizon), considering risk tolerance, compounding potential, and market cycles. Present your analysis in a structured format with clear recommendations, including suggested allocation percentages across equity, debt, and other asset classes.
                           </p>
                         </details>
+                        </div>
                       </div>
                     </>
                   ) : null}
@@ -1644,26 +1505,9 @@ export default function App() {
                         type="button"
                         className="history-btn"
                         style={{ marginTop: '0.5rem' }}
-                        onClick={() => {
-                          setKiteHoldingsError(null);
-                          setKiteHoldingsLoading(true);
-                          fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, { headers: kiteHeaders(kiteForm) })
-                            .then((data) => {
-                              if (data.error) {
-                                setKiteHoldingsError(data.error);
-                                setKiteHoldings([]);
-                              } else {
-                                setKiteHoldings(data.holdings || []);
-                              }
-                            })
-                            .catch((e) => {
-                              setKiteHoldingsError((e as Error).message);
-                              setKiteHoldings([]);
-                            })
-                            .finally(() => setKiteHoldingsLoading(false));
-                        }}
+                        onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
                       >
-                        Retry
+                        Configure
                       </button>
                     </div>
                   ) : kiteHoldings.length === 0 ? (
@@ -1697,6 +1541,126 @@ export default function App() {
                   )}
                   </div>
                 </div>
+              ) : ordersModalTab === 'settings' ? (
+                <div className="orders-tab-wrapper settings-tab-content">
+                  <div className="settings-content">
+                    <div className="settings-hint-row">
+                      <p className="settings-hint">We keep these credentials in memory until you close the tab — no storage.</p>
+                      <button
+                        type="button"
+                        className="settings-clear-creds"
+                        onClick={() => setKiteForm({ apiKey: '', secret: '', accessToken: '', requestToken: '' })}
+                      >
+                        Clear credentials
+                      </button>
+                    </div>
+                    {kiteError && <p className="settings-error">{kiteError}</p>}
+                    <div className="settings-field">
+                      <label>API Key</label>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder="Enter API key"
+                        value={kiteForm.apiKey}
+                        onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="settings-field">
+                      <label>Secret Key</label>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder="Enter secret key"
+                        value={kiteForm.secret}
+                        onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="settings-field">
+                      <label>Access Token</label>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        placeholder="Paste access token or generate below"
+                        value={kiteForm.accessToken}
+                        onChange={(e) => setKiteForm((f) => ({ ...f, accessToken: e.target.value }))}
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="settings-field">
+                      <label>Request Token (generate access token)</label>
+                      {kiteForm.apiKey && (
+                        <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
+                          <a href={`https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`} target="_blank" rel="noopener noreferrer">Get request token from Kite login</a>
+                        </p>
+                      )}
+                      <div className="settings-input-wrap">
+                        <input
+                          type="text"
+                          className="settings-input settings-input-with-icon"
+                          placeholder="Enter request token"
+                          value={kiteForm.requestToken}
+                          onChange={(e) => setKiteForm((f) => ({ ...f, requestToken: e.target.value }))}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="settings-input-icon-btn"
+                          onClick={async () => {
+                            if (!kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret) return;
+                            setKiteError(null);
+                            setKiteGenerateResult(null);
+                            setKiteGenerateLoading(true);
+                            try {
+                              const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
+                                body: JSON.stringify({
+                                  requestToken: kiteForm.requestToken.trim(),
+                                  apiKey: kiteForm.apiKey,
+                                  apiSecret: kiteForm.secret,
+                                }),
+                              });
+                              if (data.error) throw new Error(data.error);
+                              setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
+                              setKiteGenerateResult({ success: true, accessToken: data.accessToken });
+                            } catch (e) {
+                              setKiteGenerateResult({ success: false, error: (e as Error).message });
+                            } finally {
+                              setKiteGenerateLoading(false);
+                            }
+                          }}
+                          disabled={kiteGenerateLoading || !kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret}
+                          title="Generate access token"
+                          aria-label="Generate access token"
+                        >
+                          {kiteGenerateLoading ? (
+                            <span className="settings-icon-spinner" aria-hidden />
+                          ) : (
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    {kiteGenerateResult && (
+                      <div className="settings-generate-result">
+                        <h4 className="settings-generate-result-title">
+                          {kiteGenerateResult.success ? 'Access Token' : 'Error'}
+                        </h4>
+                        {kiteGenerateResult.success ? (
+                          <p className="settings-generate-success">
+                            Token generated. Valid until market close. Regenerate daily.
+                          </p>
+                        ) : (
+                          <p className="settings-generate-error">{kiteGenerateResult.error}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : (
                 <div className="orders-tab-wrapper">
                   {kiteOrdersLoading ? (
@@ -1708,26 +1672,9 @@ export default function App() {
                         type="button"
                         className="history-btn"
                         style={{ marginTop: '0.5rem' }}
-                        onClick={() => {
-                          setKiteOrdersError(null);
-                          setKiteOrdersLoading(true);
-                          fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`, { headers: kiteHeaders(kiteForm) })
-                            .then((data) => {
-                              if (data.error) {
-                                setKiteOrdersError(data.error);
-                                setKiteOrders([]);
-                              } else {
-                                setKiteOrders(data.orders || []);
-                              }
-                            })
-                            .catch((e) => {
-                              setKiteOrdersError((e as Error).message);
-                              setKiteOrders([]);
-                            })
-                            .finally(() => setKiteOrdersLoading(false));
-                        }}
+                        onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
                       >
-                        Retry
+                        Configure
                       </button>
                     </div>
                   ) : kiteOrders.length === 0 ? (
@@ -1759,6 +1706,24 @@ export default function App() {
                   )}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportFullscreen && portfolioAnalysis && (
+        <div className="report-fullscreen-overlay" role="dialog" aria-label="Portfolio Overview full screen">
+          <div className="report-fullscreen-header">
+            <span className="report-fullscreen-title">Portfolio Overview</span>
+            <button type="button" className="analyse-action-btn" onClick={() => setReportFullscreen(false)} title="Exit full screen" aria-label="Exit full screen">✕</button>
+          </div>
+          <div className="report-fullscreen-content">
+            <div className="portfolio-analysis-card">
+              <div className="portfolio-analysis-body">
+                <div className="portfolio-analysis-markdown">
+                  <ReactMarkdown>{portfolioAnalysis}</ReactMarkdown>
+                </div>
+              </div>
             </div>
           </div>
         </div>
