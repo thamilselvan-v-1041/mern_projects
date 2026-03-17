@@ -67,7 +67,7 @@ const ALLOWED_MARKETS = ['in', 'us'];
 const US_STOCKS = {
   large: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'BRK-B', 'JPM', 'V', 'JNJ', 'WMT', 'PG', 'MA', 'HD', 'CVX', 'MRK', 'ABBV', 'PEP', 'KO', 'COST', 'AVGO', 'LLY', 'MCD', 'CSCO', 'ACN', 'ABT', 'TMO', 'DHR', 'NEE', 'NKE', 'BMY', 'PM', 'UNP', 'RTX', 'HON', 'UPS', 'LOW', 'AMGN', 'INTC', 'IBM', 'QCOM', 'CAT', 'GE', 'AMD', 'INTU', 'AMAT', 'SBUX', 'GILD', 'ADP', 'MDLZ', 'VZ', 'LMT', 'REGN', 'BKNG', 'TXN', 'C', 'DE', 'PLD', 'ADI', 'ISRG', 'SYK', 'CMCSA', 'BLK', 'GS', 'AXP', 'MMC', 'CB', 'SO', 'DUK', 'MO', 'BDX', 'BSX', 'CL', 'EOG', 'EQIX', 'ITW', 'SLB', 'APD', 'SHW', 'APTV', 'PGR', 'KLAC', 'USB', 'CI', 'MDT', 'ZTS', 'FCX', 'CME', 'PANW', 'WM', 'ETN', 'ORLY', 'AON', 'NOC', 'SNPS', 'PSA', 'MAR', 'COF', 'NXPI', 'AIG', 'ADSK', 'EMR', 'PCAR', 'CMG', 'MNST', 'CCI', 'AJG', 'IQV', 'HCA', 'PSX', 'TRP', 'O', 'A', 'APH', 'SPG', 'HLT', 'ROST', 'VRSK', 'FAST', 'YUM', 'PAYX', 'EXC', 'AFL', 'DXCM', 'IDXX', 'MET', 'HUM', 'MCO', 'CTAS', 'WELL', 'GIS', 'KMB', 'ED', 'AZO', 'ALL', 'MSI', 'ROK', 'STZ', 'TDG', 'DLTR', 'CTVA', 'PRU', 'APD', 'OTIS', 'ECL', 'AEP', 'AMP', 'WBA', 'AWK', 'BIIB', 'TT', 'EBAY', 'ANSS', 'DOV', 'ROST', 'EXR', 'CHD', 'KEYS', 'TDY', 'FTV', 'CTLT', 'HIG', 'ZBH', 'EXPE', 'PAYC', 'TSCO', 'WY', 'DAL', 'CNC', 'VMC', 'IR', 'EIX', 'HPE', 'MTB', 'NDAQ', 'PCG', 'ARE', 'WST', 'AVB', 'LYB', 'DPZ', 'EFX', 'ETR', 'FE', 'HBAN', 'PKI', 'RF', 'STE', 'TECH', 'VTR', 'AEE', 'ATO', 'BXP', 'CAG', 'CPT', 'D', 'DRI', 'ESS', 'FITB', 'HAS', 'HOLX', 'IP', 'IPGP', 'JKHY', 'KEY', 'LDOS', 'MKTX', 'NI', 'PBCT', 'PEAK', 'PNR', 'REG', 'RJF', 'SWK', 'UDR', 'WRK', 'ZBRA'],
   mid: ['F', 'GM', 'SOFI', 'PLTR', 'RIVN', 'LCID', 'NIO', 'XPEV', 'LI', 'COIN', 'MARA', 'RIOT', 'HOOD', 'AFRM', 'UPST', 'OPEN', 'Z', 'RDFN', 'SNOW', 'DDOG', 'NET', 'CRWD', 'ZS', 'MDB', 'OKTA', 'TWLO', 'DOCU', 'SQ', 'PYPL', 'SHOP', 'UBER', 'LYFT', 'ABNB', 'EXPE', 'BKNG', 'DASH', 'W', 'ETSY', 'ROKU', 'SPOT', 'PINS', 'SNAP', 'MELI', 'SE', 'GRAB', 'CPNG', 'BABA', 'JD', 'PDD', 'BIDU', 'NFLX', 'DIS', 'CMCSA', 'T', 'VZ', 'TMUS', 'CHTR', 'LUMN', 'DISH', 'SIRI', 'LBRDK', 'LSXMK', 'FWONA', 'LYV', 'MTN', 'FIVE', 'ULTA', 'LULU', 'RH', 'WSM', 'BBY', 'DG', 'DLTR', 'ROST', 'TJX', 'BURL', 'ANF', 'AEO', 'GPS', 'M', 'KSS', 'JWN', 'DDS', 'FL', 'BOOT', 'SCVL', 'BKE', 'PLCE', 'ZUMZ', 'EXPR', 'CONN', 'BBBY', 'GME', 'AMC', 'CWH', 'HIBB', 'BGFV', 'ASO', 'DKS', 'ACAD', 'ALKS', 'BIIB', 'EXEL', 'INCY', 'JAZZ', 'MRNA', 'NBIX', 'SGEN', 'SRPT', 'TECH', 'VRTX', 'XBI', 'IBB', 'ARKK', 'QQQ', 'SPY', 'IWM', 'DIA', 'VTI', 'VOO', 'VEA', 'VWO', 'EFA', 'EEM', 'GLD', 'SLV', 'USO', 'UNG', 'TLT', 'HYG', 'LQD', 'BND', 'AGG', 'TIP', 'SHY', 'IEF'],
-  small: ['GME', 'AMC', 'BB', 'NOK', 'PLUG', 'FCEL', 'BLDP', 'BE', 'QS', 'MVST', 'RIDE', 'GOEV', 'FSR', 'NKLA', 'WKHS', 'EVGO', 'CHPT', 'BLNK', 'VLDR', 'LAZR', 'AEYE', 'OUST', 'INVZ', 'AEVA', 'MVIS', 'LIDR', 'CLSK', 'BTBT', 'MSTR', 'HUT', 'HIVE', 'BITF', 'RIOT', 'MARA', 'CIFR', 'ARBK', 'CORZ', 'IREN', 'SDIG', 'WULF', 'BTCM', 'SOS', 'EBON', 'CAN', 'COIN', 'HOOD', 'SOFI', 'AFRM', 'UPST', 'RBL', 'OPEN', 'RDFN', 'Z'],
+  small: ['BB', 'NOK', 'PLUG', 'FCEL', 'BLDP', 'BE', 'QS', 'MVST', 'RIDE', 'GOEV', 'FSR', 'NKLA', 'WKHS', 'EVGO', 'CHPT', 'BLNK', 'CLSK', 'BTBT', 'HUT', 'HIVE', 'BITF', 'CIFR', 'ARBK', 'CORZ', 'IREN', 'SDIG', 'WULF', 'BTCM', 'SOS', 'EBON', 'CAN', 'RBL', 'CVNA', 'RKT', 'UWMC', 'LC', 'COMP', 'SKLZ', 'ELF', 'PR', 'FIX', 'SMCI', 'DOC', 'AMED', 'ENSG', 'CHE', 'PINC', 'SGRY', 'CNO', 'FNF', 'CNA', 'AIZ', 'WRB', 'RLI', 'CINF', 'AFG', 'KMPR', 'THG', 'PRA', 'EIG', 'RGA', 'BRO', 'CHWY', 'CARG', 'LAD', 'AN', 'PAG', 'SAH', 'KMX', 'ABG', 'BOOT', 'PATH', 'ESTC', 'SPLK', 'CFLT', 'BILL', 'AVLR', 'FIVN', 'RNG', 'BAND', 'EGHT', 'RPD', 'NEWR', 'APPN', 'PCTY', 'SMAR', 'VEEV', 'HLNE', 'FICO', 'FLT', 'GPN', 'WEX', 'S', 'U', 'GDDY', 'WIX', 'HUBS', 'ZM', 'TRUE', 'VLDR', 'LAZR', 'AEYE', 'OUST', 'INVZ', 'AEVA', 'MVIS', 'LIDR', 'ACHC', 'AMN', 'CYH', 'HQY', 'OMCL', 'PDCO', 'PODD', 'TNDM', 'INMD', 'SRDX', 'ATRC', 'ITGR', 'ALNY', 'BMRN', 'RARE', 'RGNX', 'BLUE', 'CRSP', 'EDIT', 'NTLA', 'BEAM', 'VERV', 'PRME', 'RXRX', 'SDGR', 'REPL', 'CDNA', 'NTRA', 'TWST', 'GH', 'DOCS', 'MSTR', 'RBC', 'SNV', 'PB', 'CFG', 'FHN', 'BOH', 'BKU', 'UCBI', 'WSFS', 'IBOC', 'FFIN', 'HOMB', 'ONB', 'TCBI', 'CATY', 'BANF', 'SBCF', 'EWBC', 'FRME', 'FULT', 'FNB', 'PNFP', 'ASB', 'HWC', 'WAL', 'COLB', 'RMBS', 'CRUS', 'SYNA', 'SMTC', 'SLAB', 'POWI', 'DIOD', 'ALGM', 'ON', 'WOLF', 'AXTI', 'SIMO', 'MKSI', 'COHU', 'AMKR', 'FORM', 'UCTT', 'IMOS', 'SWKS', 'QRVO', 'MRVL', 'TER', 'MCHP', 'MPWR', 'OLED', 'LPL', 'AUO', 'VECO', 'ENTG', 'CMP', 'CEG', 'GFI', 'KGC', 'AEM', 'CDE', 'HL', 'MUX', 'BTG', 'OR', 'PAAS', 'SSRM', 'SAND', 'GOLD', 'FNV', 'WPM', 'RGLD', 'AG', 'IAG', 'EGO', 'EXK', 'MAG', 'TAHO', 'SVM', 'AGI', 'AUY', 'HMY', 'NGD', 'SCCO', 'TECK', 'ATI', 'CMC', 'RS', 'STLD', 'NUE', 'CLF', 'X', 'AA', 'KALU', 'CENX', 'REX', 'GGB', 'SID', 'TX', 'MT'],
   flexi: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK-B', 'JPM', 'V', 'JNJ', 'WMT', 'PG', 'MA', 'HD', 'CVX', 'MRK', 'ABBV', 'PEP', 'KO', 'COST', 'AVGO', 'LLY', 'MCD', 'CSCO', 'ACN', 'ABT', 'TMO', 'DHR', 'NEE', 'NKE', 'BMY', 'PM', 'UNP', 'RTX', 'HON', 'UPS', 'LOW', 'AMGN', 'INTC', 'IBM', 'QCOM', 'CAT', 'GE', 'AMD', 'INTU', 'AMAT', 'SBUX', 'GILD', 'ADP', 'MDLZ', 'VZ', 'LMT', 'REGN', 'BKNG', 'TXN', 'C', 'DE', 'PLD', 'ADI', 'ISRG', 'SYK', 'CMCSA', 'BLK', 'GS', 'AXP', 'MMC', 'CB', 'SO', 'DUK', 'MO', 'BDX', 'BSX', 'CL', 'EOG', 'EQIX', 'ITW', 'SLB', 'APD', 'SHW', 'APTV', 'PGR', 'KLAC', 'USB', 'CI', 'MDT', 'ZTS', 'FCX', 'CME', 'PANW', 'WM', 'ETN', 'ORLY', 'AON', 'NOC', 'SNPS', 'PSA', 'MAR', 'COF', 'NXPI', 'AIG', 'ADSK', 'EMR', 'PCAR', 'CMG', 'MNST', 'CCI', 'AJG', 'IQV', 'HCA', 'PSX', 'TRP', 'O', 'A', 'APH', 'SPG', 'HLT', 'ROST', 'VRSK', 'FAST', 'YUM', 'PAYX', 'EXC', 'AFL', 'DXCM', 'IDXX', 'MET', 'HUM', 'MCO', 'CTAS', 'WELL', 'GIS', 'KMB', 'ED', 'AZO', 'ALL', 'MSI', 'ROK', 'STZ', 'TDG', 'DLTR', 'CTVA', 'PRU', 'OTIS', 'ECL', 'AEP', 'AMP', 'WBA', 'AWK', 'BIIB', 'TT', 'EBAY', 'ANSS', 'DOV', 'EXR', 'CHD', 'KEYS', 'TDY', 'FTV', 'CTLT', 'HIG', 'ZBH', 'EXPE', 'PAYC', 'TSCO', 'WY', 'DAL', 'CNC', 'VMC', 'IR', 'EIX', 'HPE', 'MTB', 'NDAQ', 'PCG', 'ARE', 'WST', 'AVB', 'LYB', 'DPZ', 'EFX', 'ETR', 'FE', 'HBAN', 'PKI', 'RF', 'STE', 'VTR', 'AEE', 'ATO', 'BXP', 'CAG', 'CPT', 'D', 'DRI', 'ESS', 'FITB', 'HAS', 'HOLX', 'IP', 'IPGP', 'JKHY', 'KEY', 'LDOS', 'MKTX', 'NI', 'PBCT', 'PEAK', 'PNR', 'REG', 'RJF', 'SWK', 'UDR', 'WRK', 'ZBRA'],
 };
 
@@ -964,6 +964,30 @@ app.post('/api/settings/kite/generate-token', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(400).json({ error: err.message || 'Failed to generate token' });
+  }
+});
+
+/** Invalidate access token via Kite API (logout session) - for security */
+app.delete('/api/settings/kite/invalidate-token', async (req, res) => {
+  const { apiKey, accessToken } = getKiteFromRequest(req);
+  if (!apiKey || !accessToken) {
+    return res.status(400).json({ error: 'API Key and Access Token required' });
+  }
+  try {
+    const url = `https://api.kite.trade/session/token?api_key=${encodeURIComponent(apiKey)}&access_token=${encodeURIComponent(accessToken)}`;
+    const r = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'X-Kite-Version': '3' },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (data.status === 'success') {
+      res.json({ success: true, message: 'Access token invalidated' });
+    } else {
+      res.status(400).json({ error: data.message || 'Failed to invalidate token' });
+    }
+  } catch (err) {
+    console.error('[invalidate-token]', err);
+    res.status(500).json({ error: err.message || 'Failed to invalidate token' });
   }
 });
 

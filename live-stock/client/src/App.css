@@ -167,6 +167,59 @@
   margin-bottom: 0.35rem;
 }
 
+.settings-input-with-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-input-with-btn-row .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-invalidate-btn {
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #64748b;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.settings-invalidate-btn:hover:not(:disabled) {
+  color: #dc2626;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.settings-invalidate-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.settings-invalidate-btn .settings-icon-spinner {
+  display: inline-block;
+  vertical-align: middle;
+  width: 14px;
+  height: 14px;
+}
+
+.settings-invalidate-btn:disabled .settings-icon-spinner {
+  margin: 0 auto;
+}
+
+.settings-field-error {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: #dc2626;
+}
+
 .settings-input-wrap {
   position: relative;
   display: flex;

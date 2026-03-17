@@ -563,6 +563,8 @@ export default function App() {
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
+  const [kiteInvalidateLoading, setKiteInvalidateLoading] = useState(false);
+  const [kiteInvalidateError, setKiteInvalidateError] = useState<string | null>(null);
   const [kiteError, setKiteError] = useState<string | null>(null);
   const [kiteGenerateResult, setKiteGenerateResult] = useState<{ success: boolean; accessToken?: string; error?: string } | null>(null);
   const [tradeConfirmModal, setTradeConfirmModal] = useState<{
@@ -648,6 +650,7 @@ export default function App() {
   useEffect(() => {
     if (ordersModalTab === 'settings') {
       setKiteError(null);
+      setKiteInvalidateError(null);
       setKiteGenerateResult(null);
     }
   }, [ordersModalTab]);
@@ -1579,14 +1582,57 @@ export default function App() {
                     </div>
                     <div className="settings-field">
                       <label>Access Token</label>
-                      <input
-                        type="text"
-                        className="settings-input"
-                        placeholder="Paste access token or generate below"
-                        value={kiteForm.accessToken}
-                        onChange={(e) => setKiteForm((f) => ({ ...f, accessToken: e.target.value }))}
-                        autoComplete="off"
-                      />
+                      <div className="settings-input-with-btn-row">
+                        <input
+                          type="text"
+                          className="settings-input"
+                          placeholder="Paste access token or generate below"
+                          value={kiteForm.accessToken}
+                          onChange={(e) => {
+                            setKiteForm((f) => ({ ...f, accessToken: e.target.value }));
+                            setKiteInvalidateError(null);
+                          }}
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="settings-invalidate-btn"
+                          onClick={async () => {
+                            const accessToken = kiteForm.accessToken.trim();
+                            if (!accessToken) return;
+                            if (!kiteForm.apiKey) {
+                              setKiteInvalidateError('API Key required to invalidate token.');
+                              return;
+                            }
+                            setKiteInvalidateError(null);
+                            setKiteInvalidateLoading(true);
+                            try {
+                              const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite/invalidate-token`, {
+                                method: 'DELETE',
+                                headers: kiteHeaders({ ...kiteForm, accessToken }),
+                              });
+                              if (data.error) throw new Error(data.error);
+                              setKiteForm((f) => ({ ...f, accessToken: '' }));
+                              setKiteGenerateResult(null);
+                            } catch (e) {
+                              setKiteInvalidateError((e as Error).message);
+                            } finally {
+                              setKiteInvalidateLoading(false);
+                            }
+                          }}
+                          disabled={!kiteForm.accessToken.trim() || kiteInvalidateLoading}
+                          title="Invalidate access token via Kite API (security)"
+                        >
+                          {kiteInvalidateLoading ? (
+                            <span className="settings-icon-spinner" aria-hidden />
+                          ) : (
+                            'Invalidate'
+                          )}
+                        </button>
+                      </div>
+                      {kiteInvalidateError && (
+                        <p className="settings-field-error">{kiteInvalidateError}</p>
+                      )}
                     </div>
                     <div className="settings-field">
                       <label>Request Token (generate access token)</label>
@@ -1608,7 +1654,11 @@ export default function App() {
                           type="button"
                           className="settings-input-icon-btn"
                           onClick={async () => {
-                            if (!kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret) return;
+                            if (!kiteForm.requestToken.trim()) return;
+                            if (!kiteForm.apiKey || !kiteForm.secret) {
+                              setKiteError('Enter API Key and Secret Key first.');
+                              return;
+                            }
                             setKiteError(null);
                             setKiteGenerateResult(null);
                             setKiteGenerateLoading(true);
@@ -1631,7 +1681,7 @@ export default function App() {
                               setKiteGenerateLoading(false);
                             }
                           }}
-                          disabled={kiteGenerateLoading || !kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret}
+                          disabled={kiteGenerateLoading || !kiteForm.requestToken.trim()}
                           title="Generate access token"
                           aria-label="Generate access token"
                         >
