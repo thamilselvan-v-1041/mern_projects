@@ -25,8 +25,36 @@ import Groq from 'groq-sdk';
 import { runAutoTrade, getTop3FromTop50Losers } from './autoTrade.js';
 import { KiteConnect } from 'kiteconnect';
 
+/** Get Kite credentials from request (headers or body). Used for session-only, no persistence. */
+function getKiteFromRequest(req) {
+  const apiKey = req.headers['x-kite-api-key'] || req.body?.apiKey || process.env.KITE_API_KEY || '';
+  const apiSecret = req.headers['x-kite-api-secret'] || req.body?.apiSecret || process.env.KITE_API_SECRET || '';
+  const accessToken = req.headers['x-kite-access-token'] || req.body?.accessToken || process.env.KITE_ACCESS_TOKEN || '';
+  return { apiKey: String(apiKey || '').trim(), apiSecret: String(apiSecret || '').trim(), accessToken: String(accessToken || '').trim() };
+}
+
+function setKiteEnvFromRequest(req) {
+  const { apiKey, apiSecret, accessToken } = getKiteFromRequest(req);
+  if (apiKey) process.env.KITE_API_KEY = apiKey;
+  if (apiSecret) process.env.KITE_API_SECRET = apiSecret;
+  if (accessToken) process.env.KITE_ACCESS_TOKEN = accessToken;
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey', 'ripHistorical'] });
+
+// Browser-like headers so Yahoo accepts requests (blocks bot User-Agents when opened in browser works)
+const YAHOO_FETCH_OPTIONS = {
+  fetchOptions: {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  },
+  YF_QUERY_HOST: 'query1.finance.yahoo.com',
+  suppressNotices: ['yahooSurvey', 'ripHistorical'],
+};
+const yahooFinance = new YahooFinance(YAHOO_FETCH_OPTIONS);
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -126,16 +154,6 @@ async function getStockListsBySegment() {
   return lists;
 }
 
-async function fetchQuote(symbol) {
-  try {
-    const quote = await yahooFinance.quote(symbol);
-    return quote;
-  } catch (err) {
-    console.warn(`Quote failed for ${symbol}:`, err.message);
-    return null;
-  }
-}
-
 async function fetchHistorical(symbol, days = 21) {
   try {
     const end = new Date();
@@ -163,8 +181,86 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function toYahooSymbol(symbol, market) {
+  if (market === 'us') return symbol;
+  return symbol.endsWith('.NS') || symbol.endsWith('.BO') ? symbol : `${symbol}.NS`;
+}
+
+const YAHOO_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'application/json',
+};
+
+const YAHOO_CHART_HOSTS = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com'];
+
+/** Direct fetch to v8 chart endpoint - no cookies/crumb needed, works when yahoo-finance2 fails. */
+async function fetchQuoteViaChart(symbol) {
+  for (const host of YAHOO_CHART_HOSTS) {
+    const url = `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+    try {
+      const res = await fetch(url, { headers: YAHOO_HEADERS });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if (!result) continue;
+      const meta = result.meta || {};
+      const price = meta.regularMarketPrice ?? meta.previousClose;
+      if (price == null) continue;
+      const prev = meta.previousClose ?? meta.chartPreviousClose ?? price;
+      const change = (price - prev) || 0;
+      const changePercent = prev ? (change / prev) * 100 : 0;
+      return {
+        symbol: meta.symbol || symbol,
+        shortName: meta.shortName || meta.longName || symbol,
+        longName: meta.longName || meta.shortName || symbol,
+        regularMarketPrice: price,
+        preMarketPrice: meta.preMarketPrice,
+        regularMarketChange: change,
+        regularMarketChangePercent: changePercent,
+        regularMarketVolume: meta.regularMarketVolume,
+        marketCap: meta.marketCap,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** Fetch quote; try v8 chart first (no cookies), then yahoo-finance2. */
+async function fetchQuote(symbol) {
+  const fromChart = await fetchQuoteViaChart(symbol);
+  if (fromChart && (fromChart.regularMarketPrice != null || fromChart.preMarketPrice != null)) return fromChart;
+  try {
+    const quote = await yahooFinance.quote(symbol);
+    if (quote && (quote.regularMarketPrice != null || quote.preMarketPrice != null)) return quote;
+  } catch (err) {
+    console.warn(`Quote failed for ${symbol}:`, err.message);
+  }
+  try {
+    const summary = await yahooFinance.quoteSummary(symbol, { modules: ['price', 'summaryDetail'] });
+    const price = summary?.price || {};
+    const sd = summary?.summaryDetail || {};
+    if (price.regularMarketPrice == null && price.preMarketPrice == null) return null;
+    return {
+      symbol: price.symbol || symbol,
+      shortName: price.shortName,
+      longName: price.longName,
+      regularMarketPrice: price.regularMarketPrice,
+      preMarketPrice: price.preMarketPrice,
+      regularMarketChange: price.regularMarketChange ?? 0,
+      regularMarketChangePercent: price.regularMarketChangePercent ?? 0,
+      regularMarketVolume: price.regularMarketVolume ?? sd.volume,
+      marketCap: sd.marketCap ?? price.marketCap,
+    };
+  } catch (err) {
+    console.warn(`QuoteSummary fallback failed for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
 /** Fetch symbols in batches with delay to avoid rate limits. Returns Map<symbol, stockData>. */
-async function fetchSymbolsBatched(symbols, market, batchSize = 15, delayMs = 150) {
+async function fetchSymbolsBatched(symbols, market, batchSize = 8, delayMs = 250) {
   const results = new Map();
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
@@ -196,13 +292,13 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
   if (!uniqueSymbols.length) {
     return Object.fromEntries(SEGMENTS.map((s) => [s, { topGainers: [], topLosers: [] }]));
   }
-  // Cap to 60 symbols for faster initial load (avoids 60+ second fetches)
-  if (uniqueSymbols.length > 60) {
-    uniqueSymbols = uniqueSymbols.slice(0, 60);
+  // Cap to maxSymbols (50/100/150) - respects user's Top N selection
+  if (uniqueSymbols.length > maxSymbols) {
+    uniqueSymbols = uniqueSymbols.slice(0, maxSymbols);
   }
 
-  const BATCH_SIZE = 15;
-  const DELAY_MS = 100;
+  const BATCH_SIZE = market === 'in' ? 15 : 8;
+  const DELAY_MS = market === 'in' ? 100 : 250;
   const fetched = await fetchSymbolsBatched(uniqueSymbols, market, BATCH_SIZE, DELAY_MS);
 
   const segmentData = {};
@@ -224,12 +320,16 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
 }
 
 async function fetchSymbolData(symbol, market) {
+  const yfSymbol = toYahooSymbol(symbol, market);
   const [quote, history] = await Promise.all([
-    fetchQuote(symbol),
-    fetchHistorical(symbol),
+    fetchQuote(yfSymbol),
+    fetchHistorical(yfSymbol),
   ]);
   if (!quote) return null;
   const weeklyChange = history.length >= 5
+    ? ((history[history.length - 1]?.close - history[0]?.close) / (history[0]?.close || 1)) * 100
+    : null;
+  const monthChange = history.length >= 10
     ? ((history[history.length - 1]?.close - history[0]?.close) / (history[0]?.close || 1)) * 100
     : null;
   const displaySymbol = market === 'us' ? (quote.symbol || symbol) : (quote.symbol?.replace(/\.(NS|BO)$/, '') || symbol.replace(/\.(NS|BO)$/, ''));
@@ -243,25 +343,91 @@ async function fetchSymbolData(symbol, market) {
     volume: quote.regularMarketVolume,
     marketCap: quote.marketCap,
     weekChange: weeklyChange,
+    monthChange,
     history: history.slice(-14).map((q) => ({ date: q.date, close: q.close })),
   };
 }
 
 const SEGMENTS = ['large', 'mid', 'small', 'flexi'];
 
+/** Use Yahoo screener (2 API calls vs 60+) - more reliable when quote() fails. */
+async function getStocksViaScreener(market, count = 50) {
+  const region = market === 'us' ? 'US' : 'IN';
+  const lang = market === 'us' ? 'en-US' : 'en-IN';
+  try {
+    const [gainersRes, losersRes] = await Promise.all([
+      yahooFinance.screener({ scrIds: 'day_gainers', region, lang, count }),
+      yahooFinance.screener({ scrIds: 'day_losers', region, lang, count }),
+    ]);
+    const gainers = (gainersRes?.quotes || []).map((q, i) => ({
+      symbol: q.symbol || '',
+      market,
+      name: q.shortName || q.longName || q.symbol || '',
+      price: q.regularMarketPrice ?? q.preMarketPrice,
+      change: q.regularMarketChange ?? 0,
+      changePercent: q.regularMarketChangePercent ?? 0,
+      volume: q.regularMarketVolume,
+      marketCap: q.marketCap,
+      weekChange: null,
+      monthChange: null,
+      history: [],
+      segment: 'flexi',
+      segmentName: 'Flexi Cap',
+      rank: i + 1,
+    })).filter((s) => s.symbol && s.price != null);
+    const losers = (losersRes?.quotes || []).map((q, i) => ({
+      symbol: q.symbol || '',
+      market,
+      name: q.shortName || q.longName || q.symbol || '',
+      price: q.regularMarketPrice ?? q.preMarketPrice,
+      change: q.regularMarketChange ?? 0,
+      changePercent: q.regularMarketChangePercent ?? 0,
+      volume: q.regularMarketVolume,
+      marketCap: q.marketCap,
+      weekChange: null,
+      monthChange: null,
+      history: [],
+      segment: 'flexi',
+      segmentName: 'Flexi Cap',
+      rank: i + 1,
+    })).filter((s) => s.symbol && s.price != null);
+    const segmentData = {};
+    for (const seg of SEGMENTS) {
+      segmentData[seg] = {
+        topGainers: gainers.slice(0, count).map((s, i) => ({ ...s, segment: seg, segmentName: SEGMENT_NAMES[seg], rank: i + 1 })),
+        topLosers: losers.slice(0, count).map((s, i) => ({ ...s, segment: seg, segmentName: SEGMENT_NAMES[seg], rank: i + 1 })),
+      };
+    }
+    return segmentData;
+  } catch (err) {
+    console.warn('[Screener]', err.message);
+    return null;
+  }
+}
+
 async function getTopStocksBySegment(limit = DEFAULT_LIMIT, segmentFilter = null, market = 'in') {
   const cacheKey = `${market}:${limit}:${segmentFilter || 'all'}`;
-  if (stocksCacheByLimit[cacheKey] && Date.now() - (stocksCacheTimeByLimit[cacheKey] || 0) < CACHE_TTL_MS) {
-    return stocksCacheByLimit[cacheKey];
+  const cached = stocksCacheByLimit[cacheKey];
+  if (cached && Date.now() - (stocksCacheTimeByLimit[cacheKey] || 0) < CACHE_TTL_MS) {
+    return cached;
   }
-  const lists = market === 'us' ? getStockListsForUS() : await getStockListsBySegment();
 
-  // Filter to single segment if requested
+  // 1. Individual quotes via v8 chart (no cookies) + NSE/Yahoo fallback - most reliable
+  const lists = market === 'us' ? getStockListsForUS() : await getStockListsBySegment();
   const listsToUse = segmentFilter && SEGMENTS.includes(segmentFilter)
     ? { [segmentFilter]: lists[segmentFilter] || [] }
     : lists;
+  let segmentData = await processAllSegmentsDeduplicated(listsToUse, limit, market);
 
-  const segmentData = await processAllSegmentsDeduplicated(listsToUse, limit, market);
+  const hasData = SEGMENTS.some((seg) =>
+    (segmentData[seg]?.topGainers?.length || 0) + (segmentData[seg]?.topLosers?.length || 0) > 0
+  );
+
+  // 2. Try Yahoo screener only if individual fetches returned nothing
+  if (!hasData) {
+    const screenerData = await getStocksViaScreener(market, Math.min(limit, 50));
+    if (screenerData) segmentData = screenerData;
+  }
 
   SEGMENTS.forEach((seg) => {
     if (!segmentData[seg]) {
@@ -271,11 +437,6 @@ async function getTopStocksBySegment(limit = DEFAULT_LIMIT, segmentFilter = null
   stocksCacheByLimit[cacheKey] = segmentData;
   stocksCacheTimeByLimit[cacheKey] = Date.now();
   return segmentData;
-}
-
-function toYahooSymbol(symbol, market) {
-  if (market === 'us') return symbol;
-  return symbol.endsWith('.NS') || symbol.endsWith('.BO') ? symbol : `${symbol}.NS`;
 }
 
 async function getAIProsCons(stock) {
@@ -317,7 +478,7 @@ Format your response as JSON only:
   return { pros: ['Analysis unavailable'], cons: ['Check server logs'] };
 }
 
-/** Best-stock algorithm: rank top 150 losers by composite score (dip + liquidity + momentum) */
+/** Best-stock algorithm: rank top 150 losers by composite score (dip + liquidity + momentum + size) */
 function computeBestRanks(segmentData) {
   const allLosers = [];
   for (const [segment, data] of Object.entries(segmentData || {})) {
@@ -328,11 +489,14 @@ function computeBestRanks(segmentData) {
   const byChange = [...allLosers].sort((a, b) => (a.changePercent ?? 0) - (b.changePercent ?? 0));
   const top150 = byChange.slice(0, 150);
   const volumeLog = (v) => Math.log10(Math.max(v || 1, 1));
+  const capLog = (v) => Math.log10(Math.max(v || 1, 1));
   const scored = top150.map((s) => {
     const dip = -(s.changePercent ?? 0);
     const vol = volumeLog(s.volume) * 0.3;
     const week = (s.weekChange ?? 0) < 0 ? 0.5 : 0;
-    const bestScore = dip * 2 + vol + week;
+    const month = (s.monthChange ?? 0) < 0 ? 0.3 : 0;
+    const cap = capLog(s.marketCap) * 0.2;
+    const bestScore = dip * 2 + vol + week + month + cap;
     return { ...s, _bestScore: bestScore };
   });
   scored.sort((a, b) => (b._bestScore ?? 0) - (a._bestScore ?? 0));
@@ -416,15 +580,190 @@ app.get('/api/chart/:symbol', async (req, res) => {
   }
 });
 
+const SCREENER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+/** Parse number from Screener format (e.g. "18,87,915" or "47.5" or "0.39") */
+function parseScreenerNum(s) {
+  if (!s || typeof s !== 'string') return null;
+  const cleaned = s.replace(/,/g, '').replace(/₹\s*/g, '').trim();
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? null : n;
+}
+
+/** Get fundamentals from Screener.in (India only) - parses company page HTML. */
+async function getFundamentalsViaScreener(symbol, fmt, fmtPct, fmtIndian) {
+  const screenerSymbol = symbol.replace(/\.(NS|BO)$/, '');
+  if (!screenerSymbol) return null;
+  try {
+    const url = `https://www.screener.in/company/${encodeURIComponent(screenerSymbol)}/`;
+    const res = await fetch(url, { headers: SCREENER_HEADERS });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const ratios = {};
+    const liRegex = /<li[^>]*>[\s\S]*?<span class="name">\s*([^<]+)\s*<\/span>[\s\S]*?<span class="nowrap value"[^>]*>([\s\S]*?)<\/span>(?=\s*<\/li>)/g;
+    let m;
+    while ((m = liRegex.exec(html)) !== null) {
+      const name = m[1].trim();
+      const rawVal = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      ratios[name] = rawVal;
+    }
+    if (Object.keys(ratios).length === 0) return null;
+    const get = (k) => ratios[k] ?? null;
+    const peNum = parseScreenerNum(get('Stock P/E'));
+    const divYield = parseScreenerNum(get('Dividend Yield'));
+    const priceNum = parseScreenerNum(get('Current Price'));
+    let epsNum = null;
+    let epsQuarterlyNum = null;
+    const epsRows = html.match(/<tr[^>]*>\s*<td[^>]*class="text"[^>]*>\s*EPS in Rs\s*<\/td>([\s\S]*?)<\/tr>/g) || [];
+    if (epsRows.length >= 2) {
+      const annualCells = epsRows[1].match(/<td[^>]*>([\s\S]*?)<\/td>/g) || [];
+      const annualVals = annualCells.slice(1).map((c) => parseScreenerNum(c.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim())).filter((n) => n != null);
+      epsNum = annualVals.length > 0 ? annualVals[annualVals.length - 1] : null;
+    }
+    if (epsRows.length >= 1) {
+      const qCells = epsRows[0].match(/<td[^>]*>([\s\S]*?)<\/td>/g) || [];
+      const qVals = qCells.slice(1).map((c) => parseScreenerNum(c.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim())).filter((n) => n != null);
+      epsQuarterlyNum = qVals.length > 0 ? qVals[qVals.length - 1] : null;
+    }
+    const forwardPENum = priceNum != null && epsQuarterlyNum != null && epsQuarterlyNum > 0
+      ? priceNum / (epsQuarterlyNum * 4)
+      : null;
+    const highLow = get('High / Low') || '';
+    const parts = highLow.split(/\s*\/\s*/);
+    const highStr = parts[0] ? parts[0].replace(/,/g, '') : '';
+    const lowStr = parts[1] ? parts[1].replace(/,/g, '') : '';
+    const fiftyTwoWeekHigh = highStr ? parseFloat(highStr.replace(/[^\d.]/g, '')) : null;
+    const fiftyTwoWeekLow = lowStr ? parseFloat(lowStr.replace(/[^\d.]/g, '')) : null;
+    const marketCapStr = get('Market Cap') || '';
+    const marketCapNum = parseScreenerNum(marketCapStr.replace(/Cr\.?$/i, '').trim());
+    const marketCapFormatted = marketCapNum != null ? fmtIndian(marketCapNum * 1e7) : '—';
+    return {
+      symbol: screenerSymbol,
+      price: get('Current Price') ? get('Current Price').replace(/\s+/g, ' ').trim() : '—',
+      marketCap: marketCapFormatted,
+      volume: '—',
+      avgVolume: '—',
+      pe: peNum != null ? fmt(peNum) : '—',
+      forwardPE: forwardPENum != null ? fmt(forwardPENum) : '—',
+      peg: '—',
+      eps: epsNum != null ? fmt(epsNum) : '—',
+      dividendYield: divYield != null ? fmtPct(divYield / 100) : '—',
+      fiftyTwoWeekHigh: fiftyTwoWeekHigh != null ? fmt(fiftyTwoWeekHigh) : '—',
+      fiftyTwoWeekLow: fiftyTwoWeekLow != null ? fmt(fiftyTwoWeekLow) : '—',
+      open: '—',
+      dayHigh: '—',
+      dayLow: '—',
+    };
+  } catch (err) {
+    console.warn('[Fundamentals] Screener.in failed:', err.message);
+    return null;
+  }
+}
+
+/** Get fundamentals from Alpha Vantage OVERVIEW (full data) - requires ALPHA_VANTAGE_API_KEY. */
+async function getFundamentalsViaAlphaVantage(symbol, market) {
+  const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+  if (!apiKey || !apiKey.trim()) return null;
+  const avSymbol = symbol.replace(/\.(NS|BO)$/, '') + (market === 'in' ? '.NS' : '');
+  try {
+    const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${encodeURIComponent(avSymbol)}&apikey=${apiKey}`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || data.Note || data['Error Message']) return null;
+    const fmt = (v) => (v == null || v === undefined || v === 'None' || v === '' ? '—' : typeof v === 'number' ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : String(v));
+    const fmtPct = (v) => {
+      if (v == null || v === undefined || v === 'None' || v === '') return '—';
+      const n = parseFloat(v);
+      return isNaN(n) ? '—' : `${n.toFixed(2)}%`;
+    };
+    const fmtIndian = (v) => {
+      if (v == null || v === undefined || v === 'None' || v === '') return '—';
+      const n = parseFloat(v);
+      if (isNaN(n)) return String(v);
+      const abs = Math.abs(n);
+      if (abs >= 1e12) return `${(n / 1e12).toFixed(2)} Lakh Cr`;
+      if (abs >= 1e7) return `${(n / 1e7).toFixed(2)} Cr`;
+      if (abs >= 1e5) return `${(n / 1e5).toFixed(2)} L`;
+      return n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    };
+    return {
+      symbol: data.Symbol || symbol,
+      price: '—',
+      marketCap: fmtIndian(data.MarketCapitalization),
+      volume: '—',
+      avgVolume: '—',
+      pe: fmt(data.PERatio),
+      forwardPE: fmt(data.ForwardPE),
+      peg: fmt(data.PEGRatio),
+      eps: fmt(data.EPS),
+      dividendYield: fmtPct(data.DividendYield != null && data.DividendYield !== '' ? parseFloat(data.DividendYield) : null),
+      fiftyTwoWeekHigh: fmt(data['52WeekHigh']),
+      fiftyTwoWeekLow: fmt(data['52WeekLow']),
+      open: '—',
+      dayHigh: '—',
+      dayLow: '—',
+    };
+  } catch (err) {
+    console.warn('[Fundamentals] Alpha Vantage failed:', err.message);
+    return null;
+  }
+}
+
+/** Get fundamentals from v8 chart meta (no cookies) - works reliably. Yahoo quoteSummary requires cookies and often fails. */
+async function getFundamentalsViaChart(symbol) {
+  for (const host of YAHOO_CHART_HOSTS) {
+    try {
+      const url = `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+      const res = await fetch(url, { headers: YAHOO_HEADERS });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta) continue;
+      const fmt = (v) => (v == null || v === undefined ? '—' : typeof v === 'number' ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : String(v));
+      const fmtIndian = (v) => {
+        if (v == null || v === undefined) return '—';
+        if (typeof v !== 'number') return String(v);
+        const n = Math.abs(v);
+        if (n >= 1e12) return `${(v / 1e12).toFixed(2)} Lakh Cr`;
+        if (n >= 1e7) return `${(v / 1e7).toFixed(2)} Cr`;
+        if (n >= 1e5) return `${(v / 1e5).toFixed(2)} L`;
+        return v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+      };
+      return {
+        symbol: meta.symbol || symbol,
+        price: fmt(meta.regularMarketPrice),
+        marketCap: '—',
+        volume: fmtIndian(meta.regularMarketVolume),
+        avgVolume: '—',
+        pe: '—',
+        forwardPE: '—',
+        peg: '—',
+        eps: '—',
+        dividendYield: '—',
+        fiftyTwoWeekHigh: fmt(meta.fiftyTwoWeekHigh),
+        fiftyTwoWeekLow: fmt(meta.fiftyTwoWeekLow),
+        open: fmt(meta.chartPreviousClose),
+        dayHigh: fmt(meta.regularMarketDayHigh),
+        dayLow: fmt(meta.regularMarketDayLow),
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 app.get('/api/fundamentals/:symbol', async (req, res) => {
   try {
     const symbol = (req.params.symbol || '').toUpperCase();
     const market = req.query.market || 'in';
     if (!symbol) return res.status(400).json({ error: 'Symbol required' });
     const yfSymbol = toYahooSymbol(symbol, market);
-    const summary = await yahooFinance.quoteSummary(yfSymbol, { modules: ['summaryDetail', 'price'] });
-    const sd = summary?.summaryDetail || {};
-    const price = summary?.price || {};
     const fmt = (v) => (v == null || v === undefined ? '—' : typeof v === 'number' ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : String(v));
     const fmtPct = (v) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
     const fmtIndian = (v) => {
@@ -436,23 +775,28 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
       if (n >= 1e5) return `${(v / 1e5).toFixed(2)} L`;
       return v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
     };
-    res.json({
-      symbol,
-      marketCap: fmtIndian(sd.marketCap),
-      volume: fmtIndian(sd.volume),
-      avgVolume: fmtIndian(sd.averageVolume),
-      pe: fmt(sd.trailingPE),
-      forwardPE: fmt(sd.forwardPE),
-      peg: fmt(sd.pegRatio),
-      eps: fmt(sd.trailingEps),
-      dividendYield: fmtPct(sd.dividendYield),
-      fiftyTwoWeekHigh: fmt(sd.fiftyTwoWeekHigh),
-      fiftyTwoWeekLow: fmt(sd.fiftyTwoWeekLow),
-      beta: fmt(sd.beta),
-      open: fmt(sd.regularMarketOpen ?? price.regularMarketOpen),
-      dayHigh: fmt(sd.dayHigh),
-      dayLow: fmt(sd.dayLow),
-    });
+    // 1. For India: try Screener.in first (full fundamentals, no API key)
+    // 2. Try Alpha Vantage when API key is set (US stocks or fallback)
+    let result = market === 'in' ? await getFundamentalsViaScreener(yfSymbol, fmt, fmtPct, fmtIndian) : null;
+    if (!result) result = await getFundamentalsViaAlphaVantage(yfSymbol, market);
+    // 2. Get chart data (volume, day range, price) - merge or use as fallback
+    const chartData = await getFundamentalsViaChart(yfSymbol);
+    if (chartData) {
+      result = result || {};
+      const useChart = (v) => (v == null || v === '—' || v === '');
+      result.volume = useChart(result.volume) ? chartData.volume : result.volume;
+      result.avgVolume = useChart(result.avgVolume) ? chartData.volume : result.avgVolume;
+      result.dayHigh = useChart(result.dayHigh) ? chartData.dayHigh : result.dayHigh;
+      result.dayLow = useChart(result.dayLow) ? chartData.dayLow : result.dayLow;
+      result.open = useChart(result.open) ? chartData.open : result.open;
+      result.fiftyTwoWeekHigh = useChart(result.fiftyTwoWeekHigh) ? chartData.fiftyTwoWeekHigh : result.fiftyTwoWeekHigh;
+      result.fiftyTwoWeekLow = useChart(result.fiftyTwoWeekLow) ? chartData.fiftyTwoWeekLow : result.fiftyTwoWeekLow;
+      result.price = useChart(result.price) ? chartData.price : result.price;
+      result.symbol = result.symbol || chartData.symbol || symbol;
+    }
+    if (!result) result = chartData;
+    if (!result) return res.status(500).json({ error: 'Could not fetch fundamentals' });
+    res.json(result);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -490,75 +834,29 @@ app.get('/api/auto-trade/preview', async (req, res) => {
 });
 
 app.get('/api/settings/kite', (req, res) => {
-  const apiKey = process.env.KITE_API_KEY;
-  const secret = process.env.KITE_API_SECRET;
-  const mask = (s, visible = 4) => {
-    if (!s || s.length === 0) return '';
-    const v = s.slice(0, visible);
-    return v + '•'.repeat(Math.max(0, 8 - v.length));
-  };
+  const { apiKey, apiSecret, accessToken } = getKiteFromRequest(req);
   res.json({
     hasApiKey: !!apiKey,
-    hasSecret: !!secret,
-    apiKeyMasked: apiKey ? mask(apiKey) : null,
-    secretMasked: secret ? mask(secret, 2) : null,
-    hasAccessToken: !!process.env.KITE_ACCESS_TOKEN,
+    hasSecret: !!apiSecret,
+    hasAccessToken: !!accessToken,
     loginUrl: apiKey ? `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3` : null,
   });
 });
 
-app.post('/api/settings/kite', (req, res) => {
-  const { apiKey, secret } = req.body || {};
-  const envPath = path.resolve(__dirname, '..', '.env');
-  if (!fs.existsSync(envPath)) {
-    return res.status(400).json({ error: '.env file not found' });
-  }
-  try {
-    let content = fs.readFileSync(envPath, 'utf8');
-    if (apiKey != null && String(apiKey).trim()) {
-      const val = String(apiKey).trim();
-      content = content.replace(/KITE_API_KEY=.*/g, `KITE_API_KEY=${val}`);
-      if (!content.includes('KITE_API_KEY=')) content += (content.endsWith('\n') ? '' : '\n') + `KITE_API_KEY=${val}`;
-    }
-    if (secret != null && String(secret).trim()) {
-      const val = String(secret).trim();
-      content = content.replace(/KITE_API_SECRET=.*/g, `KITE_API_SECRET=${val}`);
-      if (!content.includes('KITE_API_SECRET=')) content += (content.endsWith('\n') ? '' : '\n') + `KITE_API_SECRET=${val}`;
-    }
-    fs.writeFileSync(envPath, content);
-    if (apiKey) process.env.KITE_API_KEY = String(apiKey).trim();
-    if (secret) process.env.KITE_API_SECRET = String(secret).trim();
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 app.post('/api/settings/kite/generate-token', async (req, res) => {
   const requestToken = req.body?.requestToken || req.body?.request_token;
   if (!requestToken || !String(requestToken).trim()) {
     return res.status(400).json({ error: 'requestToken required' });
   }
-  const apiKey = process.env.KITE_API_KEY;
-  const apiSecret = process.env.KITE_API_SECRET;
+  const { apiKey, apiSecret } = getKiteFromRequest(req);
   if (!apiKey || !apiSecret) {
-    return res.status(400).json({ error: 'KITE_API_KEY and KITE_API_SECRET must be set first' });
+    return res.status(400).json({ error: 'API Key and Secret Key required (send in body or X-Kite-Api-Key, X-Kite-Api-Secret headers)' });
   }
   try {
     const kite = new KiteConnect({ api_key: apiKey });
     const session = await kite.generateSession(requestToken, apiSecret);
-    const accessToken = session.access_token;
-    const envPath = path.resolve(__dirname, '..', '.env');
-    let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-    if (content.match(/KITE_ACCESS_TOKEN=/)) {
-      content = content.replace(/KITE_ACCESS_TOKEN=.*/g, `KITE_ACCESS_TOKEN=${accessToken}`);
-    } else {
-      content += (content.endsWith('\n') ? '' : '\n') + `KITE_ACCESS_TOKEN=${accessToken}`;
-    }
-    fs.writeFileSync(envPath, content);
-    process.env.KITE_ACCESS_TOKEN = accessToken;
-    res.json({ success: true, accessToken });
+    res.json({ success: true, accessToken: session.access_token });
   } catch (err) {
     console.error(err);
     res.status(400).json({ error: err.message || 'Failed to generate token' });
@@ -566,6 +864,7 @@ app.post('/api/settings/kite/generate-token', async (req, res) => {
 });
 
 app.get('/api/kite/orders', async (req, res) => {
+  setKiteEnvFromRequest(req);
   const apiKey = process.env.KITE_API_KEY;
   const accessToken = process.env.KITE_ACCESS_TOKEN;
   if (!apiKey || !accessToken) {
@@ -610,6 +909,7 @@ app.get('/api/kite/orders', async (req, res) => {
 });
 
 app.get('/api/kite/holdings', async (req, res) => {
+  setKiteEnvFromRequest(req);
   const apiKey = process.env.KITE_API_KEY;
   const accessToken = process.env.KITE_ACCESS_TOKEN;
   if (!apiKey || !accessToken) {
@@ -631,6 +931,7 @@ app.get('/api/kite/holdings', async (req, res) => {
 
 app.post('/api/auto-trade/run', async (req, res) => {
   try {
+    setKiteEnvFromRequest(req);
     const dryRun = req.query.dryRun !== 'false';
     const customStocks = req.body?.stocks;
     const quantityPerStock = req.body?.quantityPerStock != null ? Math.max(1, Math.floor(Number(req.body.quantityPerStock))) : undefined;
@@ -642,8 +943,8 @@ app.post('/api/auto-trade/run', async (req, res) => {
   }
 });
 
-// Daily cron: 9:20 AM IST (after market open). Set AUTO_TRADE_CRON=true to enable.
-if (process.env.AUTO_TRADE_CRON === 'true') {
+// Daily cron: 9:20 AM IST (local) or Vercel Cron (calls /api/cron/auto-trade)
+if (process.env.AUTO_TRADE_CRON === 'true' && !process.env.VERCEL) {
   cron.schedule('20 9 * * 1-5', async () => {
     console.log('[AutoTrade] Cron triggered at 9:20 AM IST');
     await runAutoTrade(getSegmentDataForAutoTrade, {
@@ -653,16 +954,39 @@ if (process.env.AUTO_TRADE_CRON === 'true') {
   console.log('[AutoTrade] Daily cron enabled (9:20 AM IST, Mon-Fri)');
 }
 
-// SPA fallback - serve index.html for frontend routes (when built)
-if (fs.existsSync(clientDist)) {
+// Vercel Cron endpoint: GET /api/cron/auto-trade (verify CRON_SECRET header)
+app.get('/api/cron/auto-trade', async (req, res) => {
+  const secret = req.headers['authorization']?.replace('Bearer ', '') || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    setKiteEnvFromRequest(req);
+    const result = await runAutoTrade(getSegmentDataForAutoTrade, {
+      dryRun: process.env.AUTO_TRADE_DRY_RUN !== 'false',
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[AutoTrade] Cron error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SPA fallback - serve index.html for frontend routes (when built, local only)
+if (fs.existsSync(clientDist) && !process.env.VERCEL) {
   app.get('*', (req, res) => {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
 
-const PORT = process.env.PORT || 3001;
-const HOST = process.env.HOST || '0.0.0.0';
-const networkIP = getNetworkIP();
-app.listen(PORT, HOST, () => {
-  console.log(`Live Stock running on http://${networkIP}:${PORT}`);
-});
+export { app };
+
+// Only listen when running locally (not on Vercel serverless)
+if (!process.env.VERCEL) {
+  const PORT = process.env.PORT || 3001;
+  const HOST = process.env.HOST || '0.0.0.0';
+  const networkIP = getNetworkIP();
+  app.listen(PORT, HOST, () => {
+    console.log(`Live Stock running on http://${networkIP}:${PORT}`);
+  });
+}

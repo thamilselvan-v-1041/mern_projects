@@ -2,6 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import './App.css';
 
 const API = import.meta.env.VITE_API_URL || '/api';
+const FUNDAMENTALS_CACHE_KEY = 'live-stock-fundamentals-cache';
+
+function kiteHeaders(creds: { apiKey: string; secret: string; accessToken: string }): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (creds.apiKey) h['X-Kite-Api-Key'] = creds.apiKey;
+  if (creds.secret) h['X-Kite-Api-Secret'] = creds.secret;
+  if (creds.accessToken) h['X-Kite-Access-Token'] = creds.accessToken;
+  return h;
+}
 
 async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
@@ -11,7 +20,7 @@ async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promi
   } catch {
     const isHtml = text.trimStart().startsWith('<');
     const hint = isHtml
-      ? 'Backend may not be running or API route not found.'
+      ? 'Backend may not be running. If deployed on Vercel, ensure both frontend and API are deployed (single deployment).'
       : `Server returned non-JSON (${res.status}).`;
     throw new Error(res.ok
       ? `Invalid server response. ${hint}`
@@ -43,6 +52,7 @@ type Stock = {
   rank: number;
   market?: string;
   weekChange?: number;
+  monthChange?: number;
   history?: { date: string; close: number }[];
   volume?: number;
   marketCap?: number;
@@ -148,7 +158,7 @@ function StockItem({
             <div className="stock-symbol-row">
               <span className="stock-symbol">{stock.symbol}</span>
               {stock.bestRank != null && (
-                <span className="stock-best-tag" title={`Best buy rank #${stock.bestRank} among top 150 losers`}>
+                <span className="stock-best-tag" title="Best buy rank among top stocks by volatility">
                   Best #{stock.bestRank}
                 </span>
               )}
@@ -206,6 +216,7 @@ function StockItem({
             fundamentals ? (
               <div className="fundamentals-grid">
                 {[
+                  ['Price', fundamentals.price ?? '—', null],
                   ['Market Cap', fundamentals.marketCap, stock.segmentName?.replace(/\s+Cap$/, '')],
                   ['Volume', fundamentals.volume, null],
                   ['Avg Volume', fundamentals.avgVolume, null],
@@ -215,9 +226,8 @@ function StockItem({
                   ['Dividend Yield', fundamentals.dividendYield, null],
                   ['52W High', fundamentals.fiftyTwoWeekHigh, null],
                   ['52W Low', fundamentals.fiftyTwoWeekLow, null],
-                  ['Beta', fundamentals.beta, null],
                   ['Open', fundamentals.open, null],
-                  ['Day Range', `${fundamentals.dayLow} - ${fundamentals.dayHigh}`, null],
+                  ['Day Range', fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—', null],
                 ].map(([label, val, cap]) => (
                   <div key={label} className="fund-row">
                     <span className="fund-label">{label}</span>
@@ -410,7 +420,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabType | null>(null);
   const [analysisCache, setAnalysisCache] = useState<Record<string, Analysis>>({});
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
-  const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, Record<string, string>>>({});
+  const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, Record<string, string>>>(() => {
+    try {
+      const s = sessionStorage.getItem(FUNDAMENTALS_CACHE_KEY);
+      return s ? JSON.parse(s) : {};
+    } catch {
+      return {};
+    }
+  });
   const [loadingFundamentalsId, setLoadingFundamentalsId] = useState<string | null>(null);
   const [chartCache, setChartCache] = useState<Record<string, Partial<Record<ChartPeriod, { date: string; close: number }[]>>>>({});
   const [chartPeriod, setChartPeriod] = useState<Record<string, ChartPeriod>>({});
@@ -451,17 +468,7 @@ export default function App() {
   const [kiteOrdersLoading, setKiteOrdersLoading] = useState(false);
   const [kiteOrdersError, setKiteOrdersError] = useState<string | null>(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [kiteSettings, setKiteSettings] = useState<{
-    hasApiKey: boolean;
-    hasSecret: boolean;
-    apiKeyMasked?: string | null;
-    secretMasked?: string | null;
-    hasAccessToken: boolean;
-    loginUrl?: string | null;
-  } | null>(null);
-  const [editingField, setEditingField] = useState<'apiKey' | 'secret' | 'requestToken' | null>(null);
-  const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', requestToken: '' });
-  const [kiteSaveLoading, setKiteSaveLoading] = useState(false);
+  const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
   const [kiteError, setKiteError] = useState<string | null>(null);
   const [kiteGenerateResult, setKiteGenerateResult] = useState<{ success: boolean; accessToken?: string; error?: string } | null>(null);
@@ -530,12 +537,17 @@ export default function App() {
   }, [segmentFilter, displayLimit, market]);
 
   useEffect(() => {
+    try {
+      sessionStorage.setItem(FUNDAMENTALS_CACHE_KEY, JSON.stringify(fundamentalsCache));
+    } catch {
+      /* ignore */
+    }
+  }, [fundamentalsCache]);
+
+  useEffect(() => {
     if (settingsModalOpen) {
       setKiteError(null);
       setKiteGenerateResult(null);
-      fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`)
-        .then(setKiteSettings)
-        .catch(() => setKiteSettings(null));
     }
   }, [settingsModalOpen]);
 
@@ -543,7 +555,9 @@ export default function App() {
     if (historyModalOpen) {
       setKiteOrdersError(null);
       setKiteOrdersLoading(true);
-      fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`)
+      fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`, {
+        headers: kiteHeaders(kiteForm),
+      })
         .then((data) => {
           if (data.error) {
             setKiteOrdersError(data.error);
@@ -558,13 +572,15 @@ export default function App() {
         })
         .finally(() => setKiteOrdersLoading(false));
     }
-  }, [historyModalOpen]);
+  }, [historyModalOpen, kiteForm.apiKey, kiteForm.accessToken]);
 
   useEffect(() => {
     if (historyModalOpen && ordersModalTab === 'portfolio') {
       setKiteHoldingsError(null);
       setKiteHoldingsLoading(true);
-      fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`)
+      fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
+        headers: kiteHeaders(kiteForm),
+      })
         .then((data) => {
           if (data.error) {
             setKiteHoldingsError(data.error);
@@ -579,7 +595,7 @@ export default function App() {
         })
         .finally(() => setKiteHoldingsLoading(false));
     }
-  }, [historyModalOpen, ordersModalTab]);
+  }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.accessToken]);
 
   const handleSelectStock = useCallback((id: string, checked: boolean) => {
     setSelectedStockIds((prev) => {
@@ -620,7 +636,28 @@ export default function App() {
       return bAbs - aAbs;
     });
     const topListing = byAbsoluteChange.slice(0, displayLimit);
-    const sorted = [...topListing].sort((a, b) => {
+    const losersInTopN = topListing.filter((s) => (s.changePercent ?? 0) < 0);
+    const volumeLog = (v: number | undefined) => Math.log10(Math.max(v ?? 1, 1));
+    const capLog = (v: number | undefined) => Math.log10(Math.max(v ?? 1, 1));
+    const scored = losersInTopN.map((s) => {
+      const dip = -(s.changePercent ?? 0);
+      const vol = volumeLog(s.volume) * 0.3;
+      const week = (s.weekChange ?? 0) < 0 ? 0.5 : 0;
+      const month = (s.monthChange ?? 0) < 0 ? 0.3 : 0;
+      const cap = capLog(s.marketCap) * 0.2;
+      const bestScore = dip * 2 + vol + week + month + cap;
+      return { ...s, _bestScore: bestScore };
+    });
+    scored.sort((a, b) => (b._bestScore ?? 0) - (a._bestScore ?? 0));
+    const symbolToBestRank: Record<string, number> = {};
+    scored.forEach((s, i) => {
+      symbolToBestRank[s.symbol] = i + 1;
+    });
+    const topWithBestRank = topListing.map((s) => ({
+      ...s,
+      bestRank: symbolToBestRank[s.symbol],
+    }));
+    const sorted = [...topWithBestRank].sort((a, b) => {
       if (sortOrder === 'best') {
         const aBest = a.bestRank ?? 9999;
         const bBest = b.bestRank ?? 9999;
@@ -662,12 +699,7 @@ export default function App() {
           if (data.error) throw new Error(data.error);
           setFundamentalsCache((c) => ({ ...c, [id]: data }));
         })
-        .catch(() => {
-          setFundamentalsCache((c) => ({
-            ...c,
-            [id]: { marketCap: '—', volume: '—', pe: '—', eps: '—', dividendYield: '—' },
-          }));
-        })
+        .catch(() => { /* no fallback - live data only */ })
         .finally(() => setLoadingFundamentalsId(null));
     }
 
@@ -736,10 +768,7 @@ export default function App() {
         if (data.error) throw new Error(data.error);
         setFundamentalsCache((c) => ({ ...c, [id]: data }));
       } catch {
-        setFundamentalsCache((c) => ({
-          ...c,
-          [id]: { marketCap: '—', volume: '—', pe: '—', eps: '—', dividendYield: '—' },
-        }));
+        /* no fallback - live data only */
       } finally {
         setLoadingFundamentalsId(null);
       }
@@ -811,7 +840,7 @@ export default function App() {
     try {
       const res = await fetch(`${API}/auto-trade/run?dryRun=false`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
         body: JSON.stringify({ stocks: toSend }),
       });
       const data = await res.json();
@@ -962,7 +991,7 @@ export default function App() {
                 </span>
               </button>
               <select
-                className={`sort-picker ${sortOrder === 'desc' ? 'sort-profit' : sortOrder === 'asc' ? 'sort-loss' : sortOrder === 'bestprice' ? 'sort-bestprice' : 'sort-best'}`}
+                className={`sort-picker sort-${sortOrder}`}
                 value={sortOrder}
                 onChange={(e) => setSortOrder(e.target.value as SortOrder)}
                 title="Sort by profit, loss, best rank, or best price"
@@ -1109,145 +1138,49 @@ export default function App() {
           <div className="auto-trade-result-inner trade-confirm-modal settings-modal">
             <div className="auto-trade-result-header">
               <h3>Kite Settings</h3>
-              <button className="auto-trade-close" onClick={() => { setSettingsModalOpen(false); setEditingField(null); }} aria-label="Close">×</button>
+              <button className="auto-trade-close" onClick={() => setSettingsModalOpen(false)} aria-label="Close">×</button>
             </div>
             <div className="settings-content">
+              <p className="settings-hint">Enter credentials each session. They stay in memory until you close the tab.</p>
               {kiteError && <p className="settings-error">{kiteError}</p>}
               <div className="settings-field">
                 <label>API Key</label>
-                <div className="settings-input-wrap">
-                  <input
-                    type="text"
-                    className="settings-input settings-input-with-icon"
-                    placeholder={!kiteSettings?.hasApiKey ? 'Enter API key' : ''}
-                    value={
-                      editingField === 'apiKey' || !kiteSettings?.hasApiKey
-                        ? kiteForm.apiKey
-                        : (kiteSettings?.apiKeyMasked ?? '••••••••')
-                    }
-                    onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
-                    disabled={!!kiteSettings?.hasApiKey && editingField !== 'apiKey'}
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                  />
-                  <button
-                    type="button"
-                    className="settings-input-icon-btn"
-                    onClick={async () => {
-                        const isSaveMode = editingField === 'apiKey' || !kiteSettings?.hasApiKey;
-                        if (isSaveMode) {
-                          setKiteError(null);
-                          setKiteSaveLoading(true);
-                          try {
-                            const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ apiKey: kiteForm.apiKey || undefined }),
-                            });
-                            if (data.error) throw new Error(data.error);
-                            setEditingField(null);
-                            setKiteForm((f) => ({ ...f, apiKey: '' }));
-                            const s = await fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`);
-                            setKiteSettings(s);
-                          } catch (e) {
-                            setKiteError((e as Error).message);
-                          } finally {
-                            setKiteSaveLoading(false);
-                          }
-                        } else {
-                          setEditingField('apiKey');
-                        }
-                      }}
-                      disabled={(editingField === 'apiKey' || !kiteSettings?.hasApiKey) && kiteSaveLoading}
-                      title={editingField === 'apiKey' || !kiteSettings?.hasApiKey ? 'Save' : 'Edit'}
-                      aria-label={editingField === 'apiKey' || !kiteSettings?.hasApiKey ? 'Save API key' : 'Edit API key'}
-                    >
-                      {(editingField === 'apiKey' || !kiteSettings?.hasApiKey) && kiteSaveLoading ? (
-                        <span className="settings-icon-spinner" aria-hidden />
-                      ) : editingField === 'apiKey' || !kiteSettings?.hasApiKey ? (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      ) : (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                        </svg>
-                      )}
-                    </button>
-                </div>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="Enter API key"
+                  value={kiteForm.apiKey}
+                  onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
+                  autoComplete="off"
+                />
               </div>
               <div className="settings-field">
                 <label>Secret Key</label>
-                <div className="settings-input-wrap">
-                  <input
-                    type="text"
-                    className="settings-input settings-input-with-icon"
-                    placeholder={!kiteSettings?.hasSecret ? 'Enter secret key' : ''}
-                    value={
-                      editingField === 'secret' || !kiteSettings?.hasSecret
-                        ? kiteForm.secret
-                        : (kiteSettings?.secretMasked ?? '••••••••')
-                    }
-                    onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
-                    disabled={!!kiteSettings?.hasSecret && editingField !== 'secret'}
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                  />
-                  <button
-                    type="button"
-                    className="settings-input-icon-btn"
-                    onClick={async () => {
-                        const isSaveMode = editingField === 'secret' || !kiteSettings?.hasSecret;
-                        if (isSaveMode) {
-                          setKiteError(null);
-                          setKiteSaveLoading(true);
-                          try {
-                            const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ secret: kiteForm.secret || undefined }),
-                            });
-                            if (data.error) throw new Error(data.error);
-                            setEditingField(null);
-                            setKiteForm((f) => ({ ...f, secret: '' }));
-                            const s = await fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`);
-                            setKiteSettings(s);
-                          } catch (e) {
-                            setKiteError((e as Error).message);
-                          } finally {
-                            setKiteSaveLoading(false);
-                          }
-                        } else {
-                          setEditingField('secret');
-                        }
-                      }}
-                      disabled={(editingField === 'secret' || !kiteSettings?.hasSecret) && kiteSaveLoading}
-                      title={editingField === 'secret' || !kiteSettings?.hasSecret ? 'Save' : 'Edit'}
-                      aria-label={editingField === 'secret' || !kiteSettings?.hasSecret ? 'Save secret key' : 'Edit secret key'}
-                    >
-                      {(editingField === 'secret' || !kiteSettings?.hasSecret) && kiteSaveLoading ? (
-                        <span className="settings-icon-spinner" aria-hidden />
-                      ) : editingField === 'secret' || !kiteSettings?.hasSecret ? (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      ) : (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                        </svg>
-                      )}
-                    </button>
-                </div>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="Enter secret key"
+                  value={kiteForm.secret}
+                  onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="settings-field">
+                <label>Access Token</label>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="Paste access token or generate below"
+                  value={kiteForm.accessToken}
+                  onChange={(e) => setKiteForm((f) => ({ ...f, accessToken: e.target.value }))}
+                  autoComplete="off"
+                />
               </div>
               <div className="settings-field">
                 <label>Request Token (generate access token)</label>
-                {kiteSettings?.loginUrl && (
+                {kiteForm.apiKey && (
                   <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
-                    <a href={kiteSettings.loginUrl} target="_blank" rel="noopener noreferrer">Get request token from Kite login</a>
+                    <a href={`https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`} target="_blank" rel="noopener noreferrer">Get request token from Kite login</a>
                   </p>
                 )}
                 <div className="settings-input-wrap">
@@ -1255,61 +1188,46 @@ export default function App() {
                     type="text"
                     className="settings-input settings-input-with-icon"
                     placeholder="Enter request token"
-                    value={
-                      editingField === 'requestToken'
-                        ? kiteForm.requestToken
-                        : kiteForm.requestToken
-                          ? '••••••••'
-                          : ''
-                    }
+                    value={kiteForm.requestToken}
                     onChange={(e) => setKiteForm((f) => ({ ...f, requestToken: e.target.value }))}
-                    disabled={editingField !== 'requestToken'}
                     autoComplete="off"
                   />
                   <button
                     type="button"
                     className="settings-input-icon-btn"
                     onClick={async () => {
-                      if (editingField === 'requestToken') {
-                        if (!kiteForm.requestToken.trim() || !kiteSettings?.hasApiKey || !kiteSettings?.hasSecret) return;
-                        setKiteError(null);
-                        setKiteGenerateResult(null);
-                        setKiteGenerateLoading(true);
-                        try {
-                          const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ requestToken: kiteForm.requestToken.trim() }),
-                          });
-                          if (data.error) throw new Error(data.error);
-                          setEditingField(null);
-                          setKiteGenerateResult({ success: true, accessToken: data.accessToken });
-                          const s = await fetchJson<{ hasApiKey: boolean; hasSecret: boolean; apiKeyMasked?: string; secretMasked?: string; hasAccessToken: boolean; loginUrl?: string | null }>(`${API}/settings/kite`);
-                          setKiteSettings(s);
-                        } catch (e) {
-                          setKiteGenerateResult({ success: false, error: (e as Error).message });
-                        } finally {
-                          setKiteGenerateLoading(false);
-                        }
-                      } else {
-                        setEditingField('requestToken');
-                        setKiteGenerateResult(null);
+                      if (!kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret) return;
+                      setKiteError(null);
+                      setKiteGenerateResult(null);
+                      setKiteGenerateLoading(true);
+                      try {
+                        const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
+                          body: JSON.stringify({
+                            requestToken: kiteForm.requestToken.trim(),
+                            apiKey: kiteForm.apiKey,
+                            apiSecret: kiteForm.secret,
+                          }),
+                        });
+                        if (data.error) throw new Error(data.error);
+                        setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
+                        setKiteGenerateResult({ success: true, accessToken: data.accessToken });
+                      } catch (e) {
+                        setKiteGenerateResult({ success: false, error: (e as Error).message });
+                      } finally {
+                        setKiteGenerateLoading(false);
                       }
                     }}
-                    disabled={editingField === 'requestToken' && (kiteGenerateLoading || !kiteForm.requestToken.trim() || !kiteSettings?.hasApiKey || !kiteSettings?.hasSecret)}
-                    title={editingField === 'requestToken' ? 'Generate & save' : 'Edit'}
-                    aria-label={editingField === 'requestToken' ? 'Generate access token' : 'Edit request token'}
+                    disabled={kiteGenerateLoading || !kiteForm.requestToken.trim() || !kiteForm.apiKey || !kiteForm.secret}
+                    title="Generate access token"
+                    aria-label="Generate access token"
                   >
-                    {editingField === 'requestToken' && kiteGenerateLoading ? (
+                    {kiteGenerateLoading ? (
                       <span className="settings-icon-spinner" aria-hidden />
-                    ) : editingField === 'requestToken' ? (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
                     ) : (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        <polyline points="20 6 9 17 4 12" />
                       </svg>
                     )}
                   </button>
@@ -1322,17 +1240,12 @@ export default function App() {
                   </h4>
                   {kiteGenerateResult.success ? (
                     <p className="settings-generate-success">
-                      {kiteGenerateResult.accessToken
-                        ? `${kiteGenerateResult.accessToken.slice(0, 8)}••••••••`
-                        : 'Token saved. Valid until market close. Regenerate daily.'}
+                      Token generated. Valid until market close. Regenerate daily.
                     </p>
                   ) : (
                     <p className="settings-generate-error">{kiteGenerateResult.error}</p>
                   )}
                 </div>
-              )}
-              {kiteSettings?.hasAccessToken && !kiteGenerateResult && (
-                <p className="settings-hint">Access token is configured. Valid until market close. Regenerate daily.</p>
               )}
             </div>
           </div>
@@ -1363,7 +1276,8 @@ export default function App() {
             </div>
             <div className="history-modal-content">
               {ordersModalTab === 'portfolio' ? (
-                <>
+                <div className="portfolio-tab-wrapper">
+                  <div className="portfolio-scroll">
                   {kiteHoldingsLoading ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
                   ) : kiteHoldingsError ? (
@@ -1376,7 +1290,7 @@ export default function App() {
                         onClick={() => {
                           setKiteHoldingsError(null);
                           setKiteHoldingsLoading(true);
-                          fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`)
+                          fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, { headers: kiteHeaders(kiteForm) })
                             .then((data) => {
                               if (data.error) {
                                 setKiteHoldingsError(data.error);
@@ -1424,7 +1338,20 @@ export default function App() {
                       ))}
                     </ul>
                   )}
-                </>
+                  </div>
+                  {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (() => {
+                    const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
+                    const profit = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
+                    return (
+                      <div className="portfolio-overlay">
+                        <span className="portfolio-overlay-invested">Invested ₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                        <span className={`portfolio-overlay-profit ${profit >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                          Profit ₹{profit >= 0 ? '+' : ''}{profit.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
               ) : (
                 <>
                   {kiteOrdersLoading ? (
@@ -1439,7 +1366,7 @@ export default function App() {
                         onClick={() => {
                           setKiteOrdersError(null);
                           setKiteOrdersLoading(true);
-                          fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`)
+                          fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`, { headers: kiteHeaders(kiteForm) })
                             .then((data) => {
                               if (data.error) {
                                 setKiteOrdersError(data.error);

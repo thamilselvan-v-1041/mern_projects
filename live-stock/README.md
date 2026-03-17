@@ -36,6 +36,7 @@ Edit `.env` with your values. Minimum required:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GROQ_API_KEY` | Yes | API key from [Groq Console](https://console.groq.com) for AI analysis |
+| `ALPHA_VANTAGE_API_KEY` | No | Free key from [Alpha Vantage](https://www.alphavantage.co/support/#api-key) for full fundamentals (Market Cap, P/E, EPS, etc.) |
 | `PORT` | No | Server port (default: 3001) |
 | `KITE_API_KEY` | For Kite | Zerodha app API key from [kite.trade](https://kite.trade/) |
 | `KITE_API_SECRET` | For Kite | Zerodha app secret |
@@ -68,6 +69,28 @@ npm run dev
 - **Frontend:** http://localhost:5177  
 
 Open the frontend URL in your browser.
+
+---
+
+## Deploying to Vercel (Single Deployment)
+
+Both frontend and backend run on Vercel in one deployment.
+
+### Setup
+
+1. Connect your repo at [vercel.com](https://vercel.com), set **Root Directory** to `live-stock`
+2. Add **Environment Variables** (Settings → Environment Variables):
+   - `GROQ_API_KEY` – required for AI analysis
+   - `CRON_SECRET` – for auto-trade cron (optional; set to a random string)
+   - `AUTO_TRADE_DRY_RUN`, `AUTO_TRADE_QUANTITY` – optional
+3. Deploy
+
+### Kite Setup (session-only, no persistence)
+
+1. Open **Settings** and enter **API Key** and **Secret Key** (from [kite.trade](https://kite.trade/))
+2. Open the login URL, sign in to Zerodha, copy the `request_token` from the redirect URL
+3. Paste the token and click **Generate Token** – access token is stored in memory
+4. Credentials are used until you close the tab; re-enter each session
 
 ---
 

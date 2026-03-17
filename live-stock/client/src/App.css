@@ -500,11 +500,13 @@
   min-width: 6ch;
 }
 
-.sort-picker.sort-profit {
+.sort-picker.sort-profit,
+.sort-picker.sort-desc {
   color: #22c55e;
 }
 
-.sort-picker.sort-loss {
+.sort-picker.sort-loss,
+.sort-picker.sort-asc {
   color: #ef4444;
 }
 
@@ -1106,6 +1108,45 @@
   padding: 0.5rem 1.25rem 1rem;
   max-height: 60vh;
   overflow-y: auto;
+}
+
+.portfolio-tab-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: -0.5rem -1.25rem -1rem;
+}
+
+.portfolio-tab-wrapper .portfolio-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem 1.25rem 1rem;
+}
+
+.portfolio-overlay {
+  height: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.25rem;
+  background: #f4f4f5;
+  border-top: 1px solid #e4e4e7;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.portfolio-overlay-invested {
+  color: #52525b;
+}
+
+.portfolio-overlay-profit.pnl-up {
+  color: #16a34a;
+}
+
+.portfolio-overlay-profit.pnl-down {
+  color: #dc2626;
 }
 
 .trade-quantity-row {
