@@ -273,28 +273,36 @@ async function fetchSymbolsBatched(symbols, market, batchSize = 8, delayMs = 250
   return results;
 }
 
-/** Build segment -> symbols mapping, deduplicate, and fetch each symbol once. */
+/** Build segment -> symbols mapping. Each cap shows up to maxSymbols.
+ *  Large, mid, small: exclude symbols already in earlier caps.
+ *  Flexi: full list (up to maxSymbols) - can overlap with others since it's a diversified mix. */
 async function processAllSegmentsDeduplicated(lists, limit, market) {
   const maxSymbols = ALLOWED_LIMITS.includes(limit) ? limit : DEFAULT_LIMIT;
   const segmentToSymbols = {};
-  const symbolToSegments = new Map();
+  const seenAcrossCaps = new Set();
+  const SEGMENTS_EXCLUSIVE = ['large', 'mid', 'small'];
 
-  for (const seg of SEGMENTS) {
-    const symbols = (lists[seg] || []).slice(0, maxSymbols);
-    segmentToSymbols[seg] = symbols;
-    for (const sym of symbols) {
-      if (!symbolToSegments.has(sym)) symbolToSegments.set(sym, []);
-      symbolToSegments.get(sym).push(seg);
+  for (const seg of SEGMENTS_EXCLUSIVE) {
+    const rawList = lists[seg] || [];
+    const symbols = [];
+    for (const sym of rawList) {
+      if (symbols.length >= maxSymbols) break;
+      if (!seenAcrossCaps.has(sym)) {
+        symbols.push(sym);
+        seenAcrossCaps.add(sym);
+      }
     }
+    segmentToSymbols[seg] = symbols;
   }
 
-  let uniqueSymbols = [...symbolToSegments.keys()];
+  // Flexi: take full list up to maxSymbols (no exclusion - flexi overlaps with large/mid)
+  const flexiList = (lists.flexi || []).slice(0, maxSymbols);
+  segmentToSymbols.flexi = flexiList;
+  flexiList.forEach((sym) => seenAcrossCaps.add(sym));
+
+  const uniqueSymbols = [...seenAcrossCaps];
   if (!uniqueSymbols.length) {
     return Object.fromEntries(SEGMENTS.map((s) => [s, { topGainers: [], topLosers: [] }]));
-  }
-  // Cap to maxSymbols (50/100/150) - respects user's Top N selection
-  if (uniqueSymbols.length > maxSymbols) {
-    uniqueSymbols = uniqueSymbols.slice(0, maxSymbols);
   }
 
   const BATCH_SIZE = market === 'in' ? 15 : 8;
@@ -919,7 +927,26 @@ app.get('/api/kite/holdings', async (req, res) => {
     const kite = new KiteConnect({ api_key: apiKey });
     kite.setAccessToken(accessToken);
     const raw = await kite.getHoldings();
-    const holdings = Array.isArray(raw) ? raw : [];
+    const rawList = Array.isArray(raw) ? raw : (raw?.data && Array.isArray(raw.data) ? raw.data : []);
+    const holdings = rawList.map((h) => {
+      const qty = h.quantity ?? 0;
+      const avg = h.average_price ?? 0;
+      const last = h.last_price ?? 0;
+      const close = h.close_price ?? last;
+      let pnl = h.pnl;
+      if (pnl == null && qty > 0 && avg > 0) {
+        pnl = qty * (last - avg);
+      }
+      let dayChangePct = h.day_change_percentage;
+      if (dayChangePct == null && close > 0) {
+        dayChangePct = ((last - close) / close) * 100;
+      }
+      // When day change is 0 (e.g. market closed), show overall return % from avg price
+      if ((dayChangePct == null || Math.abs(dayChangePct) < 0.001) && avg > 0) {
+        dayChangePct = ((last - avg) / avg) * 100;
+      }
+      return { ...h, pnl, day_change_percentage: dayChangePct };
+    });
     res.setHeader('Content-Type', 'application/json');
     res.json({ holdings });
   } catch (err) {
