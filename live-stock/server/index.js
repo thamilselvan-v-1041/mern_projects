@@ -943,7 +943,7 @@ app.get('/api/settings/kite', (req, res) => {
     hasApiKey: !!apiKey,
     hasSecret: !!apiSecret,
     hasAccessToken: !!accessToken,
-    loginUrl: apiKey ? `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3` : null,
+    loginUrl: apiKey ? `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3` : 'https://developers.kite.trade/login',
   });
 });
 
@@ -1051,8 +1051,11 @@ app.get('/api/kite/holdings', async (req, res) => {
 app.post('/api/auto-trade/run', async (req, res) => {
   try {
     const creds = getKiteFromRequest(req);
-    if (!creds.apiKey || !creds.accessToken) {
-      return res.status(400).json({ success: false, error: 'Kite not configured. Set API key and generate access token in Settings.' });
+    if (!creds.apiKey || !creds.apiSecret) {
+      return res.status(400).json({ success: false, error: 'API Key and Secret Key required. Enter them in Settings and sign in to generate an access token.' });
+    }
+    if (!creds.accessToken) {
+      return res.status(400).json({ success: false, error: 'Access token required. Sign in with Kite in Settings to generate an access token.' });
     }
     const dryRun = req.query.dryRun !== 'false';
     const customStocks = req.body?.stocks;

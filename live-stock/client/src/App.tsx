@@ -577,6 +577,8 @@ export default function App() {
   const [xlsxFileName, setXlsxFileName] = useState<string | null>(null);
   const [xlsxUploadError, setXlsxUploadError] = useState<string | null>(null);
   const xlsxInputRef = useRef<HTMLInputElement>(null);
+  const settingsSigninGroupRef = useRef<HTMLDivElement>(null);
+  const settingsAccessTokenRef = useRef<HTMLDivElement>(null);
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
   const [kiteInvalidateLoading, setKiteInvalidateLoading] = useState(false);
@@ -593,6 +595,18 @@ export default function App() {
     error?: string;
     orders?: { symbol: string; name?: string; status: string; orderId?: string; error?: string }[];
   } | null>(null);
+  const [failedOrdersFromTrade, setFailedOrdersFromTrade] = useState<Array<{
+    order_id: string;
+    tradingsymbol: string;
+    name?: string;
+    exchange: string;
+    status: string;
+    transaction_type: string;
+    quantity: number;
+    order_timestamp: string;
+    status_message?: string;
+    average_price?: number;
+  }>>([]);
 
   const fetchForMarket = useCallback((m: string, forceRefresh = false, silent = false) => {
     const isBackground = silent || forceRefresh;
@@ -670,6 +684,18 @@ export default function App() {
       setKiteGenerateResult(null);
     }
   }, [ordersModalTab]);
+
+  useEffect(() => {
+    if (!historyModalOpen || ordersModalTab !== 'settings') return;
+    const hasCreds = kiteForm.apiKey && kiteForm.secret;
+    const hasToken = !!(kiteForm.requestToken.trim() || kiteForm.accessToken.trim());
+    const el = hasToken ? settingsAccessTokenRef.current : hasCreds ? settingsSigninGroupRef.current : null;
+    if (!el) return;
+    const id = requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.secret, kiteForm.requestToken, kiteForm.accessToken]);
 
   useEffect(() => {
     if (historyModalOpen) {
@@ -1010,7 +1036,12 @@ export default function App() {
       const res = await fetch(`${API}/auto-trade/run?dryRun=false`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
-        body: JSON.stringify({ stocks: toSend }),
+        body: JSON.stringify({
+          stocks: toSend,
+          apiKey: kiteForm.apiKey,
+          apiSecret: kiteForm.secret,
+          accessToken: kiteForm.accessToken,
+        }),
       });
       const data = await res.json();
       const entry = {
@@ -1037,6 +1068,24 @@ export default function App() {
   };
 
   const handleCloseTradeResult = () => {
+    const failed = tradeResult?.orders?.filter((o) => o.status === 'FAILED') ?? [];
+    if (failed.length > 0) {
+      const ts = new Date().toISOString();
+      setFailedOrdersFromTrade((prev) => [
+        ...failed.map((o, i) => ({
+          order_id: `failed-${o.symbol}-${ts}-${i}`,
+          tradingsymbol: o.symbol,
+          name: o.name,
+          exchange: 'NSE',
+          status: 'REJECTED',
+          transaction_type: 'BUY',
+          quantity: (o as { quantity?: number }).quantity ?? 1,
+          order_timestamp: ts,
+          status_message: o.error || 'Order failed',
+        })),
+        ...prev,
+      ]);
+    }
     setTradeConfirmModal(null);
     setTradeResult(null);
     setOrdersModalTab('orders');
@@ -1580,183 +1629,213 @@ export default function App() {
                         Clear credentials
                       </button>
                     </div>
-                    {kiteError && <p className="settings-error">{kiteError}</p>}
-                    <div className="settings-field">
-                      <label>API Key</label>
-                      <input
-                        type="text"
-                        className="settings-input"
-                        placeholder="Enter API key"
-                        value={kiteForm.apiKey}
-                        onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="settings-field">
-                      <label>Secret Key</label>
-                      <input
-                        type="text"
-                        className="settings-input"
-                        placeholder="Enter secret key"
-                        value={kiteForm.secret}
-                        onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="settings-field">
-                      <label>Access Token</label>
-                      <div className="settings-input-with-btn-row">
+                    <div className="settings-kite-login-section">
+                      <h3 className="settings-kite-login-title">Sign in with Kite</h3>
+                      <p className="settings-kite-login-desc">Get API Key and Secret Key from your app at <a href="https://developers.kite.trade/login" target="_blank" rel="noopener noreferrer">kite.trade</a>.</p>
+                      <div className="settings-field">
+                        <label>API Key (from kite.trade)</label>
                         <input
                           type="text"
                           className="settings-input"
-                          placeholder="Paste access token or generate below"
-                          value={kiteForm.accessToken}
-                          onChange={(e) => {
-                            setKiteForm((f) => ({ ...f, accessToken: e.target.value }));
-                            setKiteInvalidateError(null);
-                          }}
+                          placeholder="Your app API key"
+                          value={kiteForm.apiKey}
+                          onChange={(e) => setKiteForm((f) => ({ ...f, apiKey: e.target.value }))}
                           autoComplete="off"
                         />
-                        <button
-                          type="button"
-                          className="settings-invalidate-btn"
-                          onClick={async () => {
-                            const accessToken = kiteForm.accessToken.trim();
-                            if (!accessToken) return;
-                            if (!kiteForm.apiKey) {
-                              setKiteInvalidateError('API Key required to invalidate token.');
-                              return;
-                            }
-                            setKiteInvalidateError(null);
-                            setKiteInvalidateLoading(true);
-                            try {
-                              const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite/invalidate-token`, {
-                                method: 'DELETE',
-                                headers: kiteHeaders({ ...kiteForm, accessToken }),
-                              });
-                              if (data.error) throw new Error(data.error);
-                              setKiteForm((f) => ({ ...f, accessToken: '' }));
-                              setKiteGenerateResult(null);
-                            } catch (e) {
-                              setKiteInvalidateError((e as Error).message);
-                            } finally {
-                              setKiteInvalidateLoading(false);
-                            }
-                          }}
-                          disabled={!kiteForm.accessToken.trim() || kiteInvalidateLoading}
-                          title="Invalidate access token via Kite API (security)"
-                        >
-                          {kiteInvalidateLoading ? (
-                            <span className="settings-icon-spinner" aria-hidden />
-                          ) : (
-                            'Invalidate'
-                          )}
-                        </button>
                       </div>
-                      {kiteInvalidateError && (
-                        <p className="settings-field-error">{kiteInvalidateError}</p>
-                      )}
-                    </div>
-                    <div className="settings-field">
-                      <label>Request Token (generate access token)</label>
-                      {kiteForm.apiKey && (
-                        <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
-                          <a href={`https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`} target="_blank" rel="noopener noreferrer">Get request token from Kite login</a>
-                        </p>
-                      )}
-                      <div className="settings-input-wrap">
+                      <div className="settings-field">
+                        <label>Secret Key (from kite.trade)</label>
                         <input
                           type="text"
-                          className="settings-input settings-input-with-icon"
-                          placeholder="Enter request token"
-                          value={kiteForm.requestToken}
-                          onChange={(e) => setKiteForm((f) => ({ ...f, requestToken: e.target.value }))}
+                          className="settings-input"
+                          placeholder="Your app secret key"
+                          value={kiteForm.secret}
+                          onChange={(e) => setKiteForm((f) => ({ ...f, secret: e.target.value }))}
                           autoComplete="off"
                         />
-                        <button
-                          type="button"
-                          className="settings-input-icon-btn"
-                          onClick={async () => {
-                            if (!kiteForm.requestToken.trim()) return;
-                            if (!kiteForm.apiKey || !kiteForm.secret) {
-                              setKiteError('Enter API Key and Secret Key first.');
-                              return;
-                            }
-                            setKiteError(null);
-                            setKiteGenerateResult(null);
-                            setKiteGenerateLoading(true);
-                            try {
-                              const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
-                                body: JSON.stringify({
-                                  requestToken: kiteForm.requestToken.trim(),
-                                  apiKey: kiteForm.apiKey,
-                                  apiSecret: kiteForm.secret,
-                                }),
-                              });
-                              if (data.error) throw new Error(data.error);
-                              setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
-                              setKiteGenerateResult({ success: true, accessToken: data.accessToken });
-                            } catch (e) {
-                              setKiteGenerateResult({ success: false, error: (e as Error).message });
-                            } finally {
-                              setKiteGenerateLoading(false);
-                            }
-                          }}
-                          disabled={kiteGenerateLoading || !kiteForm.requestToken.trim()}
-                          title="Generate access token"
-                          aria-label="Generate access token"
-                        >
-                          {kiteGenerateLoading ? (
-                            <span className="settings-icon-spinner" aria-hidden />
-                          ) : (
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          )}
-                        </button>
                       </div>
                     </div>
-                    {kiteGenerateResult && (
-                      <div className="settings-generate-result">
-                        <h4 className="settings-generate-result-title">
-                          {kiteGenerateResult.success ? 'Access Token' : 'Error'}
-                        </h4>
-                        {kiteGenerateResult.success ? (
-                          <p className="settings-generate-success">
-                            Token generated. Valid until market close. Regenerate daily.
-                          </p>
-                        ) : (
-                          <p className="settings-generate-error">{kiteGenerateResult.error}</p>
-                        )}
+                    {kiteForm.apiKey && kiteForm.secret && (
+                    <div className="settings-signin-group" ref={settingsSigninGroupRef}>
+                      <h3 className="settings-kite-login-title">Sign in with Zerodha</h3>
+                      <p className="settings-kite-login-hint">Sign in with your existing Zerodha account, then copy <code>request_token</code> from the redirect URL.</p>
+                      <a
+                        href={`https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="settings-kite-login-btn"
+                      >
+                        Sign in with Zerodha
+                      </a>
+                      <div className="settings-request-token-inner">
+                        <label>Request Token → Generate Access Token</label>
+                        <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
+                          Paste the <code>request_token</code> from the sign-in redirect URL, then click Generate.
+                        </p>
+                        <div className="settings-input-with-btn-row">
+                          <input
+                            type="text"
+                            className="settings-input"
+                            placeholder="Enter request token"
+                            value={kiteForm.requestToken}
+                            onChange={(e) => setKiteForm((f) => ({ ...f, requestToken: e.target.value }))}
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            className="settings-generate-btn"
+                            onClick={async () => {
+                              if (!kiteForm.requestToken.trim()) return;
+                              if (!kiteForm.apiKey || !kiteForm.secret) {
+                                setKiteError('Enter API Key and Secret Key first.');
+                                return;
+                              }
+                              setKiteError(null);
+                              setKiteGenerateResult(null);
+                              setKiteGenerateLoading(true);
+                              try {
+                                const data = await fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', ...kiteHeaders(kiteForm) },
+                                  body: JSON.stringify({
+                                    requestToken: kiteForm.requestToken.trim(),
+                                    apiKey: kiteForm.apiKey,
+                                    apiSecret: kiteForm.secret,
+                                  }),
+                                });
+                                if (data.error) throw new Error(data.error);
+                                setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
+                                setKiteGenerateResult({ success: true, accessToken: data.accessToken });
+                              } catch (e) {
+                                setKiteGenerateResult({ success: false, error: (e as Error).message });
+                              } finally {
+                                setKiteGenerateLoading(false);
+                              }
+                            }}
+                            disabled={kiteGenerateLoading || !kiteForm.requestToken.trim()}
+                            title="Generate access token"
+                            aria-label="Generate access token"
+                          >
+                            {kiteGenerateLoading ? (
+                              <span className="settings-icon-spinner" aria-hidden />
+                            ) : (
+                              'Generate'
+                            )}
+                          </button>
+                        </div>
                       </div>
+                      {(kiteForm.requestToken.trim() || kiteForm.accessToken.trim()) && (
+                        <div className="settings-access-token-inner" ref={settingsAccessTokenRef}>
+                          <label>Access Token</label>
+                          <div className="settings-input-with-btn-row">
+                            <input
+                              type="text"
+                              className="settings-input"
+                              placeholder="Paste access token or click Generate"
+                              value={kiteForm.accessToken}
+                              onChange={(e) => {
+                                setKiteForm((f) => ({ ...f, accessToken: e.target.value }));
+                                setKiteInvalidateError(null);
+                              }}
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              className="settings-invalidate-btn"
+                              onClick={async () => {
+                                const accessToken = kiteForm.accessToken.trim();
+                                if (!accessToken) return;
+                                if (!kiteForm.apiKey) {
+                                  setKiteInvalidateError('API Key required to invalidate token.');
+                                  return;
+                                }
+                                setKiteInvalidateError(null);
+                                setKiteInvalidateLoading(true);
+                                try {
+                                  const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite/invalidate-token`, {
+                                    method: 'DELETE',
+                                    headers: kiteHeaders({ ...kiteForm, accessToken }),
+                                  });
+                                  if (data.error) throw new Error(data.error);
+                                  setKiteForm((f) => ({ ...f, accessToken: '' }));
+                                  setKiteGenerateResult(null);
+                                } catch (e) {
+                                  setKiteInvalidateError((e as Error).message);
+                                } finally {
+                                  setKiteInvalidateLoading(false);
+                                }
+                              }}
+                              disabled={!kiteForm.accessToken.trim() || kiteInvalidateLoading}
+                              title="Invalidate access token via Kite API (security)"
+                            >
+                              {kiteInvalidateLoading ? (
+                                <span className="settings-icon-spinner" aria-hidden />
+                              ) : (
+                                'Invalidate'
+                              )}
+                            </button>
+                          </div>
+                          {kiteInvalidateError && (
+                            <p className="settings-field-error">{kiteInvalidateError}</p>
+                          )}
+                        </div>
+                      )}
+                      {kiteGenerateResult && (
+                        <div className="settings-generate-result" style={{ marginTop: '1rem' }}>
+                          <h4 className="settings-generate-result-title">
+                            {kiteGenerateResult.success ? 'Access Token' : 'Error'}
+                          </h4>
+                          {kiteGenerateResult.success ? (
+                            <p className="settings-generate-success">
+                              Token generated. Valid until market close. Regenerate daily.
+                            </p>
+                          ) : (
+                            <p className="settings-generate-error">{kiteGenerateResult.error}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     )}
+                    {kiteError && <p className="settings-error">{kiteError}</p>}
                   </div>
                 </div>
               ) : (
                 <div className="orders-tab-wrapper">
                   {kiteOrdersLoading ? (
                     <p className="orders-empty-msg">Loading orders...</p>
-                  ) : kiteOrdersError ? (
+                  ) : kiteOrdersError && failedOrdersFromTrade.length === 0 ? (
                     <div className="orders-error-msg">
                       <p>{kiteOrdersError}</p>
-                      <button
-                        type="button"
-                        className="history-btn"
-                        style={{ marginTop: '0.5rem' }}
-                        onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
-                      >
-                        Configure
-                      </button>
+                      {kiteConfigured ? (
+                        <button
+                          type="button"
+                          className="history-btn"
+                          style={{ marginTop: '0.5rem' }}
+                          onClick={() => setOrdersRefreshTrigger((t) => t + 1)}
+                        >
+                          Retry
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="history-btn"
+                          style={{ marginTop: '0.5rem' }}
+                          onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
+                        >
+                          Configure
+                        </button>
+                      )}
                     </div>
-                  ) : kiteOrders.length === 0 ? (
+                  ) : kiteOrders.length === 0 && failedOrdersFromTrade.length === 0 ? (
                     <p className="orders-empty-msg">No orders from Kite. Orders shown are for today only.</p>
                   ) : (
+                    <>
                     <ul className="proceed-history-list kite-orders-list">
-                      {[...kiteOrders]
+                      {[...failedOrdersFromTrade, ...kiteOrders]
                         .sort((a, b) => (b.order_timestamp || '').localeCompare(a.order_timestamp || ''))
-                        .map((o) => (
+                        .map((o) => {
+                          const avgPrice = 'average_price' in o ? o.average_price : undefined;
+                          return (
                         <li key={o.order_id} className={o.status === 'COMPLETE' ? 'success' : o.status === 'REJECTED' || o.status === 'CANCELLED' ? 'error' : ''}>
                           <div className="order-line1">
                             <span className="symbol">{o.tradingsymbol}</span>
@@ -1765,17 +1844,23 @@ export default function App() {
                             {o.name && <span className="name">{o.name}</span>}
                             <span className="exchange">({o.exchange})</span>
                             <span className="status">{o.status}</span>
-                            <span className="txn-type">{o.transaction_type}</span>
+                            <span className={`txn-type txn-${(o.transaction_type || '').toLowerCase()}`}>{o.transaction_type || '—'}</span>
                             <span className="qty">Qty: {o.quantity}</span>
-                            {o.average_price != null && o.average_price > 0 && (
-                              <span className="price">₹{o.average_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            {avgPrice != null && avgPrice > 0 && (
+                              <span className="price">₹{avgPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             )}
-                            {o.status_message && <span className="error">{o.status_message}</span>}
                           </div>
+                          {(o.status === 'REJECTED' || o.status === 'CANCELLED') && (
+                            <div className="order-line-error">
+                              {o.status_message || (o as { status_message_raw?: string }).status_message_raw || 'Order failed'}
+                            </div>
+                          )}
                           <span className="history-time">{o.order_timestamp ? new Date(o.order_timestamp).toLocaleString('en-IN') : ''}</span>
                         </li>
-                      ))}
+                          );
+                      })}
                     </ul>
+                    </>
                   )}
                 </div>
               )}
@@ -1804,9 +1889,9 @@ export default function App() {
 
       <main className="main">
         {loading && segments.length === 0 ? (
-          <div className="select-category-placeholder">
-            <span className="refresh-spinner" aria-hidden style={{ display: 'inline-block', marginRight: '0.5rem' }} />
-            Loading stocks…
+          <div className="loading-stocks-center">
+            <span className="refresh-spinner" aria-hidden />
+            <span>Loading stocks…</span>
           </div>
         ) : !segmentFilter ? (
           <div className="select-category-placeholder">

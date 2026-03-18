@@ -259,6 +259,42 @@
   opacity: 0.6;
 }
 
+.settings-generate-btn {
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #16a34a;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.settings-generate-btn:hover:not(:disabled) {
+  color: #15803d;
+  background: #dcfce7;
+  border-color: #bbf7d0;
+}
+
+.settings-generate-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.settings-generate-btn .settings-icon-spinner {
+  display: inline-block;
+  vertical-align: middle;
+  width: 14px;
+  height: 14px;
+}
+
+.settings-generate-btn:disabled .settings-icon-spinner {
+  margin: 0 auto;
+}
+
 .settings-icon-spinner {
   display: inline-block;
   width: 14px;
@@ -347,6 +383,125 @@
 
 .settings-hint-row .settings-hint {
   margin: 0;
+}
+
+.settings-kite-login-section {
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.settings-kite-login-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.settings-kite-login-desc {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.settings-kite-login-desc a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.settings-kite-login-desc a:hover {
+  text-decoration: underline;
+}
+
+.settings-signin-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.settings-signin-group .settings-kite-login-title {
+  margin: 0 0 0.25rem;
+}
+
+.settings-signin-group .settings-kite-login-hint {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.settings-request-token-inner {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.settings-request-token-inner label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #52525b;
+  margin-bottom: 0.35rem;
+}
+
+.settings-access-token-inner {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+.settings-access-token-inner label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #52525b;
+  margin-bottom: 0.35rem;
+}
+
+.settings-kite-login-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.settings-kite-login-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  background: #2563eb;
+  border: none;
+  border-radius: 8px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.settings-kite-login-btn:hover {
+  background: #1d4ed8;
+}
+
+.settings-kite-login-hint {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.settings-kite-login-hint code {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.8em;
+  background: #e2e8f0;
+  border-radius: 4px;
 }
 
 .settings-hint {
@@ -558,6 +713,24 @@
 .main {
   padding-top: 0.85rem;
   padding-bottom: 1rem;
+}
+
+.loading-stocks-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 8rem);
+  gap: 0.75rem;
+  color: #71717a;
+  font-size: 0.95rem;
+}
+
+.loading-stocks-center .refresh-spinner {
+  display: block;
+  width: 2rem;
+  height: 2rem;
+  border-width: 3px;
 }
 
 .select-category-placeholder {
@@ -1140,14 +1313,38 @@
   width: 100%;
 }
 
+.kite-orders-list .order-line-error {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: #dc2626;
+}
+
 .kite-orders-list .exchange {
   font-size: 0.8rem;
   color: #71717a;
 }
 
 .kite-orders-list .txn-type {
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.kite-orders-list .txn-type.txn-buy {
+  color: #16a34a;
+  background: #dcfce7;
+}
+
+.kite-orders-list .txn-type.txn-sell {
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+.kite-orders-list .txn-type:not(.txn-buy):not(.txn-sell) {
   color: #52525b;
+  background: #f4f4f5;
 }
 
 .kite-orders-list .qty {

@@ -47,7 +47,7 @@ export async function placeKiteOrders(stocks, options = {}) {
   const accessToken = credentials?.accessToken || process.env.KITE_ACCESS_TOKEN;
 
   if (!apiKey || !apiSecret) {
-    return { success: false, error: 'KITE_API_KEY and KITE_API_SECRET required' };
+    return { success: false, error: 'API Key and Secret Key required. Set them in Settings.' };
   }
 
   if (!dryRun && !accessToken) {
