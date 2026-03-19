@@ -579,6 +579,7 @@ export default function App() {
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const settingsSigninGroupRef = useRef<HTMLDivElement>(null);
   const settingsAccessTokenRef = useRef<HTMLDivElement>(null);
+  const kiteFormRef = useRef<{ apiKey: string; secret: string; accessToken: string; requestToken: string }>({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
   const [kiteInvalidateLoading, setKiteInvalidateLoading] = useState(false);
@@ -676,6 +677,86 @@ export default function App() {
       return () => { document.body.style.overflow = prev; };
     }
   }, [historyModalOpen, reportFullscreen]);
+
+  kiteFormRef.current = kiteForm;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestToken = params.get('request_token')?.trim();
+    if (!requestToken) return;
+    if (window.opener) {
+      window.opener.postMessage({ type: 'kite-request-token', requestToken }, window.location.origin);
+      window.close();
+      return;
+    }
+    try {
+      sessionStorage.setItem('kite-request-token', requestToken);
+      window.history.replaceState({}, '', window.location.pathname);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || e.data?.type !== 'kite-request-token') return;
+      const token = e.data?.requestToken?.trim();
+      if (!token) return;
+      const creds = kiteFormRef.current;
+      if (!creds.apiKey || !creds.secret) {
+        setKiteForm((f) => ({ ...f, requestToken: token }));
+        return;
+      }
+      setKiteGenerateLoading(true);
+      setKiteError(null);
+      setKiteGenerateResult(null);
+      fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...kiteHeaders(creds) },
+        body: JSON.stringify({ requestToken: token, apiKey: creds.apiKey, apiSecret: creds.secret }),
+      })
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
+          setKiteGenerateResult({ success: true, accessToken: data.accessToken });
+        })
+        .catch((e) => {
+          setKiteGenerateResult({ success: false, error: (e as Error).message });
+        })
+        .finally(() => setKiteGenerateLoading(false));
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
+    const stored = sessionStorage.getItem('kite-request-token');
+    if (!stored || !historyModalOpen || ordersModalTab !== 'settings') return;
+    sessionStorage.removeItem('kite-request-token');
+    const creds = kiteFormRef.current;
+    if (creds.apiKey && creds.secret) {
+      setKiteGenerateLoading(true);
+      setKiteError(null);
+      setKiteGenerateResult(null);
+      fetchJson<{ success?: boolean; error?: string; accessToken?: string }>(`${API}/settings/kite/generate-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...kiteHeaders(creds) },
+        body: JSON.stringify({ requestToken: stored, apiKey: creds.apiKey, apiSecret: creds.secret }),
+      })
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setKiteForm((f) => ({ ...f, accessToken: data.accessToken || '', requestToken: '' }));
+          setKiteGenerateResult({ success: true, accessToken: data.accessToken });
+        })
+        .catch((e) => {
+          setKiteForm((f) => ({ ...f, requestToken: stored }));
+          setKiteGenerateResult({ success: false, error: (e as Error).message });
+        })
+        .finally(() => setKiteGenerateLoading(false));
+    } else {
+      setKiteForm((f) => ({ ...f, requestToken: stored }));
+    }
+  }, [historyModalOpen, ordersModalTab]);
 
   useEffect(() => {
     if (ordersModalTab === 'settings') {
@@ -1658,15 +1739,17 @@ export default function App() {
                     {kiteForm.apiKey && kiteForm.secret && (
                     <div className="settings-signin-group" ref={settingsSigninGroupRef}>
                       <h3 className="settings-kite-login-title">Sign in with Zerodha</h3>
-                      <p className="settings-kite-login-hint">Sign in with your existing Zerodha account, then copy <code>request_token</code> from the redirect URL.</p>
-                      <a
-                        href={`https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <p className="settings-kite-login-hint">Sign in with Zerodha. After login, you will be redirected back and the access token will be generated automatically. Set your Kite app&apos;s redirect URL to this app (e.g. <code>{window.location.origin}</code>).</p>
+                      <button
+                        type="button"
                         className="settings-kite-login-btn"
+                        onClick={() => {
+                          const url = `https://kite.zerodha.com/connect/login?api_key=${kiteForm.apiKey}&v=3`;
+                          window.open(url, 'kite-login', 'width=500,height=600,scrollbars=yes');
+                        }}
                       >
                         Sign in with Zerodha
-                      </a>
+                      </button>
                       <div className="settings-request-token-inner">
                         <label>Request Token → Generate Access Token</label>
                         <p className="settings-hint" style={{ margin: '0 0 0.5rem' }}>
@@ -1724,8 +1807,7 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      {(kiteForm.requestToken.trim() || kiteForm.accessToken.trim()) && (
-                        <div className="settings-access-token-inner" ref={settingsAccessTokenRef}>
+                      <div className="settings-access-token-inner" ref={settingsAccessTokenRef}>
                           <label>Access Token</label>
                           <div className="settings-input-with-btn-row">
                             <input
@@ -1779,7 +1861,6 @@ export default function App() {
                             <p className="settings-field-error">{kiteInvalidateError}</p>
                           )}
                         </div>
-                      )}
                       {kiteGenerateResult && (
                         <div className="settings-generate-result" style={{ marginTop: '1rem' }}>
                           <h4 className="settings-generate-result-title">
