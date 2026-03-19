@@ -1106,9 +1106,15 @@ export default function App() {
 
   const handleConfirmTrade = async () => {
     if (!tradeConfirmModal?.stocksToBuy?.length) return;
+    const qty = (s: { symbol: string }) => buyQuantityBySymbol[s.symbol] ?? 1;
+    const effectiveChecked = new Set(confirmCheckedSymbols);
+    tradeConfirmModal.stocksToBuy.forEach((s) => {
+      if (qty(s) === 0) effectiveChecked.delete(s.symbol);
+    });
+    setConfirmCheckedSymbols(effectiveChecked);
     const toSend = tradeConfirmModal.stocksToBuy
-      .filter((s) => confirmCheckedSymbols.has(s.symbol))
-      .map((s) => ({ ...s, quantity: Math.max(1, buyQuantityBySymbol[s.symbol] ?? 1) }));
+      .filter((s) => effectiveChecked.has(s.symbol) && qty(s) > 0)
+      .map((s) => ({ ...s, quantity: Math.max(1, qty(s)) }));
     if (toSend.length === 0) return;
     setAutoTradeLoading(true);
     setTradeResult(null);
@@ -1383,15 +1389,32 @@ export default function App() {
                           <span className="trade-confirm-qty-wrap">
                             <input
                               type="number"
-                              min={1}
+                              min={0}
                               max={9999}
+                              step={1}
                               value={buyQuantityBySymbol[s.symbol] ?? 1}
-                              onChange={(e) =>
-                                setBuyQuantityBySymbol((prev) => ({
-                                  ...prev,
-                                  [s.symbol]: Math.max(1, Math.min(9999, parseInt(e.target.value, 10) || 1)),
-                                }))
-                              }
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === '') {
+                                  setBuyQuantityBySymbol((prev) => ({ ...prev, [s.symbol]: 0 }));
+                                } else {
+                                  const n = parseInt(v, 10);
+                                  if (!isNaN(n)) {
+                                    const clamped = Math.max(0, Math.min(9999, n));
+                                    setBuyQuantityBySymbol((prev) => ({ ...prev, [s.symbol]: clamped }));
+                                  }
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const v = e.target.value.trim();
+                                if (v === '') {
+                                  setBuyQuantityBySymbol((prev) => ({ ...prev, [s.symbol]: 0 }));
+                                } else {
+                                  const n = parseInt(v, 10);
+                                  const clamped = !isNaN(n) ? Math.max(0, Math.min(9999, n)) : 0;
+                                  setBuyQuantityBySymbol((prev) => ({ ...prev, [s.symbol]: clamped }));
+                                }
+                              }}
                               className="trade-confirm-qty-input"
                               aria-label={`Quantity for ${s.symbol}`}
                             />
