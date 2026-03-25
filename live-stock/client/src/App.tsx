@@ -3,6 +3,54 @@ import ReactMarkdown from 'react-markdown';
 import * as XLSX from 'xlsx';
 import './App.css';
 
+function goldFiniteNum(n: unknown): n is number {
+  if (typeof n === 'number') return Number.isFinite(n);
+  if (n == null || n === '') return false;
+  const x = Number(n);
+  return Number.isFinite(x);
+}
+
+function fmtGoldInr(n: unknown): string {
+  if (!goldFiniteNum(n)) return '—';
+  return `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Day change from Goodreturns page (+₹381 / −₹50). */
+function fmtGoldChangeInr(n: unknown): string | null {
+  if (!goldFiniteNum(n)) return null;
+  const v = Number(n);
+  const sign = v >= 0 ? '+' : '−';
+  const abs = Math.abs(v);
+  return `${sign}₹${abs.toLocaleString('en-IN')}`;
+}
+
+/** Jina title often ends with " on 25 March 2026" — omit that for the modal line. */
+function goodreturnsPageTitleWithoutTrailingDate(title: string | null | undefined): string | null {
+  if (!title || typeof title !== 'string') return null;
+  const s = title.replace(/\s+on\s+\d{1,2}\s+\w+\s+\d{4}\s*$/i, '').trim();
+  return s.length ? s : null;
+}
+
+/** Splits `₹14,837 (+381)` — bracket green for +, red for −, gray for 0. */
+function GoodreturnsLastTenRateCell({ value }: { value: string }) {
+  const s = String(value).trim();
+  const m = s.match(/^(.+?)\s*(\((?:\+|−|-)?[\d,]+\))$/);
+  if (!m) return <>{s}</>;
+  const main = m[1];
+  const bracket = m[2];
+  const inner = bracket.slice(1, -1).trim();
+  let cls = 'gold-rate-bracket-neutral';
+  if (inner.startsWith('+')) cls = 'gold-rate-bracket-up';
+  else if (inner.startsWith('-') || inner.startsWith('−')) cls = 'gold-rate-bracket-down';
+  return (
+    <>
+      {main}
+      {' '}
+      <span className={cls}>{bracket}</span>
+    </>
+  );
+}
+
 type HoldingRow = {
   tradingsymbol: string;
   exchange: string;
@@ -101,6 +149,15 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const FUNDAMENTALS_CACHE_KEY = 'live-stock-fundamentals-cache';
+
+function stripErrorUrl(msg: string): string {
+  const stripped = msg
+    .replace(/\s*read\s*more.*$/i, '')
+    .replace(/\s*https?:\/\/\S+/g, '')
+    .trim();
+  const firstSentence = stripped.match(/^.*?(?:[!?]|\.(?=\s|$))/);
+  return firstSentence ? firstSentence[0].trim() : stripped;
+}
 
 function kiteHeaders(creds: { apiKey: string; secret: string; accessToken: string }): Record<string, string> {
   const h: Record<string, string> = {};
@@ -541,6 +598,30 @@ export default function App() {
   const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [goldPageOpen, setGoldPageOpen] = useState(false);
+  const [goldLoading, setGoldLoading] = useState(false);
+  const [goldError, setGoldError] = useState<string | null>(null);
+  const [goldPayload, setGoldPayload] = useState<{
+    goodreturns?: {
+      ok: boolean;
+      sourceUrl?: string;
+      /** Jina `Title:` line when present */
+      pageTitle?: string | null;
+      gold24kPerGram?: number | null;
+      gold22kPerGram?: number | null;
+      gold18kPerGram?: number | null;
+      change24kInr?: number | null;
+      change22kInr?: number | null;
+      change18kInr?: number | null;
+      fetchedAt?: string;
+      error?: string;
+      lastTenDaysOneGram?: Array<{ dateLabel: string; rate24k: string; rate22k: string }>;
+      /** Raster chart image URL from Goodreturns (embeddable; iframe page is usually blocked). */
+      chartImageUrl?: string | null;
+      /** Full Goodreturns Chennai page URL (open in new tab if chart image missing). */
+      chartIframeUrl?: string;
+    };
+  } | null>(null);
   const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio' | 'analyse' | 'settings'>('orders');
   const [ordersRefreshTrigger, setOrdersRefreshTrigger] = useState(0);
   const [kiteHoldings, setKiteHoldings] = useState<Array<{
@@ -671,12 +752,29 @@ export default function App() {
   }, [fundamentalsCache]);
 
   useEffect(() => {
-    if (historyModalOpen || reportFullscreen) {
+    if (historyModalOpen || reportFullscreen || goldPageOpen) {
       const prev = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
       return () => { document.body.style.overflow = prev; };
     }
-  }, [historyModalOpen, reportFullscreen]);
+  }, [historyModalOpen, reportFullscreen, goldPageOpen]);
+
+  useEffect(() => {
+    if (!goldPageOpen) return;
+    setGoldLoading(true);
+    setGoldError(null);
+    fetch(`${API}/gold/chennai`)
+      .then(async (r) => {
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Failed to load gold data');
+        setGoldPayload(j);
+      })
+      .catch((e: Error) => {
+        setGoldError(e.message);
+        setGoldPayload(null);
+      })
+      .finally(() => setGoldLoading(false));
+  }, [goldPageOpen]);
 
   kiteFormRef.current = kiteForm;
 
@@ -803,7 +901,6 @@ export default function App() {
 
   useEffect(() => {
     if (historyModalOpen && (ordersModalTab === 'portfolio' || ordersModalTab === 'analyse')) {
-      setKiteHoldingsError(null);
       setKiteHoldingsLoading(true);
       fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
         headers: kiteHeaders(kiteForm),
@@ -813,6 +910,7 @@ export default function App() {
             setKiteHoldingsError(data.error);
             setKiteHoldings([]);
           } else {
+            setKiteHoldingsError(null);
             setKiteHoldings(data.holdings || []);
           }
         })
@@ -1130,54 +1228,52 @@ export default function App() {
           accessToken: kiteForm.accessToken,
         }),
       });
-      const data = await res.json();
-      const entry = {
-        timestamp: ts,
+      let data: { success?: boolean; error?: string; orders?: unknown[] };
+      try {
+        const text = await res.text();
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { success: false, error: 'Invalid server response' };
+      }
+      const orders = Array.isArray(data.orders) ? data.orders : [];
+      setTradeResult({
         success: data.success ?? false,
         error: data.error,
-        orders: data.orders,
-      };
-      setTradeResult({
-        success: entry.success,
-        error: entry.error,
-        orders: entry.orders,
+        orders,
       });
-      if (entry.success === false && entry.error) {
-        setProceedErrorPopup(entry.error);
-      }
     } catch (err) {
-      const errMsg = (err as Error).message;
-      setTradeResult({ success: false, error: errMsg });
-      setProceedErrorPopup(errMsg);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setTradeResult({ success: false, error: errMsg, orders: [] });
     } finally {
       setAutoTradeLoading(false);
     }
   };
 
   const handleCloseTradeResult = () => {
-    const failed = tradeResult?.orders?.filter((o) => o.status === 'FAILED') ?? [];
+    const orders = Array.isArray(tradeResult?.orders) ? tradeResult.orders : [];
+    const failed = orders.filter((o) => o?.status === 'FAILED');
     if (failed.length > 0) {
       const ts = new Date().toISOString();
       setFailedOrdersFromTrade((prev) => [
         ...failed.map((o, i) => ({
-          order_id: `failed-${o.symbol}-${ts}-${i}`,
-          tradingsymbol: o.symbol,
-          name: o.name,
+          order_id: `failed-${o?.symbol ?? 'unknown'}-${ts}-${i}`,
+          tradingsymbol: o?.symbol ?? 'unknown',
+          name: o?.name ?? '',
           exchange: 'NSE',
           status: 'REJECTED',
           transaction_type: 'BUY',
-          quantity: (o as { quantity?: number }).quantity ?? 1,
+          quantity: (o as { quantity?: number })?.quantity ?? 1,
           order_timestamp: ts,
-          status_message: o.error || 'Order failed',
+          status_message: o?.error || 'Order failed',
         })),
         ...prev,
       ]);
     }
-    setTradeConfirmModal(null);
-    setTradeResult(null);
     setOrdersModalTab('orders');
     setHistoryModalOpen(true);
     setOrdersRefreshTrigger((t) => t + 1);
+    setTradeConfirmModal(null);
+    setTradeResult(null);
   };
 
   const handleChartPeriodChange = (stock: Stock, period: ChartPeriod) => {
@@ -1203,7 +1299,7 @@ export default function App() {
     return (
       <div className="app">
         <header className="header" />
-        <div className="error-banner">Error: {error}. Make sure the server is running.</div>
+        <div className="error-banner">Error: {stripErrorUrl(error)}. Make sure the server is running.</div>
       </div>
     );
   }
@@ -1237,6 +1333,14 @@ export default function App() {
               title="View my orders"
             >
               My Zerodha
+            </button>
+            <button
+              type="button"
+              className="history-btn"
+              onClick={() => setGoldPageOpen(true)}
+              title="Gold price (Chennai) rates"
+            >
+              Gold
             </button>
           </div>
         </div>
@@ -1308,7 +1412,7 @@ export default function App() {
               <h3>Error</h3>
               <button className="auto-trade-close" onClick={() => setProceedErrorPopup(null)} aria-label="Close">×</button>
             </div>
-            <p className="auto-trade-error">{proceedErrorPopup}</p>
+            <p className="auto-trade-error">{proceedErrorPopup ? stripErrorUrl(proceedErrorPopup) : ''}</p>
           </div>
         </div>
       )}
@@ -1318,7 +1422,7 @@ export default function App() {
           <div className="auto-trade-result-inner trade-confirm-modal">
             <div className="auto-trade-result-header">
               <h3>{tradeResult ? (tradeResult.success ? 'Order placed' : 'Order failed') : 'Confirm trade'}</h3>
-              <button className="auto-trade-close" onClick={tradeResult ? handleCloseTradeResult : handleCancelTrade} aria-label="Close">×</button>
+              <button type="button" className="auto-trade-close" onClick={(e) => { e.preventDefault(); (tradeResult ? handleCloseTradeResult : handleCancelTrade)(); }} aria-label="Close">×</button>
             </div>
             {tradeResult ? (
               <div className="trade-result-content">
@@ -1328,12 +1432,12 @@ export default function App() {
                     {tradeResult.orders && tradeResult.orders.length > 0 && (
                       <ul className="trade-result-orders">
                         {tradeResult.orders.map((o, j) => (
-                          <li key={j} className={o.status === 'PLACED' ? 'placed' : o.status === 'FAILED' ? 'failed' : ''}>
-                            <span className="symbol">{o.symbol}</span>
-                            {o.name && <span className="name">{o.name}</span>}
-                            <span className="status">{o.status}</span>
-                            {o.orderId && <span className="order-id">#{o.orderId}</span>}
-                            {o.error && <span className="error">{o.error}</span>}
+                          <li key={j} className={o?.status === 'PLACED' ? 'placed' : o?.status === 'FAILED' ? 'failed' : ''}>
+                            <span className="symbol">{o?.symbol ?? '—'}</span>
+                            {o?.name && <span className="name">{o.name}</span>}
+                            <span className="status">{o?.status ?? ''}</span>
+                            {o?.orderId && <span className="order-id">#{o.orderId}</span>}
+                            {o?.error && <span className="error">{stripErrorUrl(o.error)}</span>}
                           </li>
                         ))}
                       </ul>
@@ -1341,23 +1445,23 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <p className="trade-result-msg error">{tradeResult.error}</p>
+                    <p className="trade-result-msg error">{tradeResult.error ? stripErrorUrl(tradeResult.error) : ''}</p>
                     {tradeResult.orders && tradeResult.orders.length > 0 && (
                       <ul className="trade-result-orders">
                         {tradeResult.orders.map((o, j) => (
                           <li key={j} className="failed">
-                            <span className="symbol">{o.symbol}</span>
-                            {o.name && <span className="name">{o.name}</span>}
-                            <span className="status">{o.status}</span>
-                            {o.error && <span className="error">{o.error}</span>}
+                            <span className="symbol">{o?.symbol ?? '—'}</span>
+                            {o?.name && <span className="name">{o.name}</span>}
+                            <span className="status">{o?.status ?? ''}</span>
+                            {o?.error && <span className="error">{stripErrorUrl(o.error)}</span>}
                           </li>
                         ))}
                       </ul>
                     )}
                   </>
                 )}
-                <button className="proceed-btn" onClick={handleCloseTradeResult} style={{ marginTop: '1rem', width: '100%' }}>
-                  Done
+                <button type="button" className="proceed-btn" onClick={(e) => { e.preventDefault(); handleCloseTradeResult(); }} style={{ marginTop: '1rem', width: '100%' }}>
+                  {tradeResult?.success ? 'View Orders' : 'Done'}
                 </button>
               </div>
             ) : (
@@ -1427,12 +1531,13 @@ export default function App() {
                       ))}
                     </ul>
                     <div className="trade-confirm-actions">
-                      <button className="trade-cancel-btn" onClick={handleCancelTrade} disabled={autoTradeLoading}>
+                      <button type="button" className="trade-cancel-btn" onClick={handleCancelTrade} disabled={autoTradeLoading}>
                         Cancel
                       </button>
                       <button
+                        type="button"
                         className="proceed-btn"
-                        onClick={handleConfirmTrade}
+                        onClick={(e) => { e.preventDefault(); handleConfirmTrade(); }}
                         disabled={autoTradeLoading || confirmCheckedSymbols.size === 0}
                       >
                         {autoTradeLoading ? <span className="refresh-spinner" aria-hidden /> : 'Buy'}
@@ -1554,11 +1659,11 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  {kiteConfigured && analyseSource === 'kite' && kiteHoldingsLoading ? (
+                  {kiteConfigured && analyseSource === 'kite' && kiteHoldingsLoading && !kiteHoldingsError ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
                   ) : kiteConfigured && analyseSource === 'kite' && kiteHoldingsError ? (
                     <div className="orders-error-msg">
-                      <p>{kiteHoldingsError}</p>
+                      <p>{stripErrorUrl(kiteHoldingsError)}</p>
                       <button
                         type="button"
                         className="history-btn"
@@ -1572,7 +1677,7 @@ export default function App() {
                     <p className="orders-empty-msg">No data</p>
                   ) : (analyseSource === 'xlsx' || !kiteConfigured) && xlsxUploadError ? (
                     <div className="orders-error-msg">
-                      <p>{xlsxUploadError}</p>
+                      <p>{stripErrorUrl(xlsxUploadError)}</p>
                     </div>
                   ) : (analyseSource === 'xlsx' || !kiteConfigured) && xlsxHoldings.length === 0 ? (
                     <p className="orders-empty-msg">No data</p>
@@ -1584,12 +1689,11 @@ export default function App() {
                     </div>
                   ) : portfolioAnalysisError ? (
                     <div className="orders-error-msg">
-                      <p>{portfolioAnalysisError}</p>
+                      <p>{stripErrorUrl(portfolioAnalysisError)}</p>
                       {kiteConfigured && (
                         <button
                           type="button"
                           className="history-btn"
-                          style={{ marginTop: '0.5rem' }}
                           onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
                         >
                           Configure
@@ -1675,15 +1779,14 @@ export default function App() {
                     );
                   })()}
                   <div className="portfolio-scroll">
-                  {kiteHoldingsLoading ? (
+                  {kiteHoldingsLoading && !kiteHoldingsError ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
                   ) : kiteHoldingsError ? (
                     <div className="orders-error-msg">
-                      <p>{kiteHoldingsError}</p>
+                      <p>{stripErrorUrl(kiteHoldingsError)}</p>
                       <button
                         type="button"
                         className="history-btn"
-                        style={{ marginTop: '0.5rem' }}
                         onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
                       >
                         Configure
@@ -1881,7 +1984,7 @@ export default function App() {
                             </button>
                           </div>
                           {kiteInvalidateError && (
-                            <p className="settings-field-error">{kiteInvalidateError}</p>
+                            <p className="settings-field-error">{stripErrorUrl(kiteInvalidateError)}</p>
                           )}
                         </div>
                       {kiteGenerateResult && (
@@ -1894,13 +1997,13 @@ export default function App() {
                               Token generated. Valid until market close. Regenerate daily.
                             </p>
                           ) : (
-                            <p className="settings-generate-error">{kiteGenerateResult.error}</p>
+                            <p className="settings-generate-error">{kiteGenerateResult.error ? stripErrorUrl(kiteGenerateResult.error) : ''}</p>
                           )}
                         </div>
                       )}
                     </div>
                     )}
-                    {kiteError && <p className="settings-error">{kiteError}</p>}
+                    {kiteError && <p className="settings-error">{stripErrorUrl(kiteError)}</p>}
                   </div>
                 </div>
               ) : (
@@ -1909,12 +2012,11 @@ export default function App() {
                     <p className="orders-empty-msg">Loading orders...</p>
                   ) : kiteOrdersError && failedOrdersFromTrade.length === 0 ? (
                     <div className="orders-error-msg">
-                      <p>{kiteOrdersError}</p>
+                      <p>{stripErrorUrl(kiteOrdersError)}</p>
                       {kiteConfigured ? (
                         <button
                           type="button"
                           className="history-btn"
-                          style={{ marginTop: '0.5rem' }}
                           onClick={() => setOrdersRefreshTrigger((t) => t + 1)}
                         >
                           Retry
@@ -1923,7 +2025,6 @@ export default function App() {
                         <button
                           type="button"
                           className="history-btn"
-                          style={{ marginTop: '0.5rem' }}
                           onClick={() => { setOrdersModalTab('settings'); setHistoryModalOpen(true); }}
                         >
                           Configure
@@ -1956,7 +2057,7 @@ export default function App() {
                           </div>
                           {(o.status === 'REJECTED' || o.status === 'CANCELLED') && (
                             <div className="order-line-error">
-                              {o.status_message || (o as { status_message_raw?: string }).status_message_raw || 'Order failed'}
+                              {stripErrorUrl(o.status_message || (o as { status_message_raw?: string }).status_message_raw || 'Order failed')}
                             </div>
                           )}
                           <span className="history-time">{o.order_timestamp ? new Date(o.order_timestamp).toLocaleString('en-IN') : ''}</span>
@@ -1967,6 +2068,149 @@ export default function App() {
                     </>
                   )}
                 </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {goldPageOpen && (
+        <div className="auto-trade-result" role="dialog" aria-label="Gold price (Chennai) rates">
+          <div className="auto-trade-result-inner trade-confirm-modal gold-page-modal">
+            <div className="auto-trade-result-header">
+              <h3>Gold price (Chennai)</h3>
+              <button type="button" className="auto-trade-close" onClick={() => setGoldPageOpen(false)} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div className="history-modal-content gold-modal-content">
+              {goldLoading && (
+                <div className="gold-loading">
+                  <span className="refresh-spinner" aria-hidden />
+                  <span>Loading gold rates…</span>
+                </div>
+              )}
+              {!goldLoading && goldError && <p className="auto-trade-error">{goldError}</p>}
+              {!goldLoading && !goldError && goldPayload && (
+                <>
+                  {goldPayload.goodreturns?.ok && (
+                    <section className="gold-section gold-today-section" aria-label="Goodreturns Chennai gold rates">
+                      {(() => {
+                        const line = goodreturnsPageTitleWithoutTrailingDate(goldPayload.goodreturns.pageTitle);
+                        return line ? <p className="gold-page-title-line">{line}</p> : null;
+                      })()}
+                      <div className="gold-today-grid">
+                        <div className="gold-today-card">
+                          <div className="gold-today-label">24K gold / g</div>
+                          <div className="gold-today-value">{fmtGoldInr(goldPayload.goodreturns.gold24kPerGram)}</div>
+                          {(() => {
+                            const ch = fmtGoldChangeInr(goldPayload.goodreturns.change24kInr);
+                            if (!ch) return null;
+                            return (
+                              <div className={`gold-today-change ${(goldPayload.goodreturns.change24kInr ?? 0) >= 0 ? 'gold-today-change-up' : 'gold-today-change-down'}`}>
+                                {ch} vs prior day
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <div className="gold-today-card">
+                          <div className="gold-today-label">22K gold / g</div>
+                          <div className="gold-today-value">{fmtGoldInr(goldPayload.goodreturns.gold22kPerGram)}</div>
+                          {(() => {
+                            const ch = fmtGoldChangeInr(goldPayload.goodreturns.change22kInr);
+                            if (!ch) return null;
+                            return (
+                              <div className={`gold-today-change ${(goldPayload.goodreturns.change22kInr ?? 0) >= 0 ? 'gold-today-change-up' : 'gold-today-change-down'}`}>
+                                {ch} vs prior day
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <div className="gold-today-card">
+                          <div className="gold-today-label">18K gold / g</div>
+                          <div className="gold-today-value">{fmtGoldInr(goldPayload.goodreturns.gold18kPerGram)}</div>
+                          {(() => {
+                            const ch = fmtGoldChangeInr(goldPayload.goodreturns.change18kInr);
+                            if (!ch) return null;
+                            return (
+                              <div className={`gold-today-change ${(goldPayload.goodreturns.change18kInr ?? 0) >= 0 ? 'gold-today-change-up' : 'gold-today-change-down'}`}>
+                                {ch} vs prior day
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                      {((goldPayload.goodreturns.lastTenDaysOneGram &&
+                        goldPayload.goodreturns.lastTenDaysOneGram.length > 0) ||
+                        goldPayload.goodreturns.chartImageUrl ||
+                        goldPayload.goodreturns.chartIframeUrl) && (
+                        <section className="gold-section gold-section-last-ten" aria-label="Last 10 days Chennai gold 1 gram">
+                          <h4 className="gold-section-title">Gold Rate in Chennai for Last 10 Days (1 gram)</h4>
+                          {goldPayload.goodreturns.lastTenDaysOneGram &&
+                            goldPayload.goodreturns.lastTenDaysOneGram.length > 0 && (
+                            <div className="gold-table-wrap">
+                              <table className="gold-table">
+                                <thead>
+                                  <tr>
+                                    <th>Date</th>
+                                    <th>24K</th>
+                                    <th>22K</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {goldPayload.goodreturns.lastTenDaysOneGram.map((row, i) => (
+                                    <tr key={`${row.dateLabel}-${i}`}>
+                                      <td>{row.dateLabel}</td>
+                                      <td>
+                                        <GoodreturnsLastTenRateCell value={row.rate24k} />
+                                      </td>
+                                      <td>
+                                        <GoodreturnsLastTenRateCell value={row.rate22k} />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                          <div className="gold-goodreturns-chart">
+                            {goldPayload.goodreturns.chartImageUrl ? (
+                              <img
+                                src={goldPayload.goodreturns.chartImageUrl}
+                                alt="Chennai gold rate chart (Goodreturns)"
+                                loading="lazy"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <p className="gold-chart-fallback">
+                                The live chart page can’t be embedded here (Goodreturns blocks iframes).{' '}
+                                <a
+                                  href={goldPayload.goodreturns.chartIframeUrl ?? 'https://www.goodreturns.in/gold-rates/chennai.html'}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  Open Chennai gold chart on Goodreturns
+                                </a>
+                              </p>
+                            )}
+                          </div>
+                        </section>
+                      )}
+                    </section>
+                  )}
+                  {!goldLoading && goldPayload.goodreturns && !goldPayload.goodreturns.ok && (
+                    <p className="gold-source">
+                      Goodreturns Chennai rates unavailable ({goldPayload.goodreturns.error ?? 'unknown'}).{' '}
+                      <a
+                        href="https://www.goodreturns.in/gold-rates/chennai.html"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open page
+                      </a>
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </div>

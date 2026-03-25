@@ -246,6 +246,371 @@ async function fetchQuoteViaChart(symbol) {
   return null;
 }
 
+/** Goodreturns blocks direct server fetch (Cloudflare). Jina reader returns markdown we can parse. */
+const GOODRETURNS_CHENNAI_URL = 'https://www.goodreturns.in/gold-rates/chennai.html';
+const GOODRETURNS_FETCH_MS = 25_000;
+const GOODRETURNS_CACHE_MS = 30 * 60 * 1000;
+/** Don’t cache failures for 30m — allows retry after Jina 451 / network blips. */
+const GOODRETURNS_ERROR_CACHE_MS = 60 * 1000;
+let goodreturnsChennaiCache = { at: 0, data: null };
+
+/** Jina often prefixes the body with Title: / URL Source: / Markdown Content: */
+function stripJinaReaderPreamble(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let t = raw.replace(/\r/g, '');
+  const mc = t.match(/^[\s\S]*?Markdown Content:\s*\n/i);
+  if (mc) t = t.slice(mc.index + mc[0].length);
+  return t;
+}
+
+function parseTitleLineFromJina(raw) {
+  const m = String(raw || '').match(/^Title:\s*(.+)$/im);
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * Per-gram price and optional day change (+₹381 / -₹50) after the label block on chennai.html (Jina markdown).
+ * Also matches HTML-flattened text where newlines are missing (single-line).
+ */
+function parseGoldLaneInr(t, label) {
+  const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let re = new RegExp(`${esc}\\s*\\n+\\s*₹\\s*([\\d,]+)`, 'i');
+  let m = t.match(re);
+  if (!m) {
+    re = new RegExp(`${esc}\\s+₹\\s*([\\d,]+)`, 'i');
+    m = t.match(re);
+  }
+  if (!m) return { inrPerGram: null, changeInr: null };
+  const inrPerGram = parseInt(String(m[1]).replace(/,/g, ''), 10);
+  const after = t.slice((m.index ?? 0) + m[0].length);
+  let ch = after.match(/\n\s*\n\s*([+−-])\s*₹\s*([\d,]+)/);
+  if (!ch) ch = after.match(/\s+([+−-])\s*₹\s*([\d,]+)/);
+  let changeInr = null;
+  if (ch) {
+    const sign = ch[1] === '-' || ch[1] === '−' ? -1 : 1;
+    const v = parseInt(String(ch[2]).replace(/,/g, ''), 10);
+    if (Number.isFinite(v)) changeInr = sign * v;
+  }
+  return {
+    inrPerGram: Number.isFinite(inrPerGram) ? inrPerGram : null,
+    changeInr,
+  };
+}
+
+/**
+ * Markdown block: ## Gold Rate in Chennai for Last 10 Days (1 gram) … pipe table.
+ * Rows: | Mar 25, 2026 | ₹14,837 (+381) | ₹13,600 (+350) |
+ */
+function parseLastTenDaysOneGramTable(t) {
+  const marker = '## Gold Rate in Chennai for Last 10 Days (1 gram)';
+  const idx = t.indexOf(marker);
+  if (idx === -1) return [];
+  const rest = t.slice(idx + marker.length);
+  const lines = rest.split('\n');
+  const out = [];
+  let state = 'seek_header';
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (state === 'seek_header') {
+      if (/^\|\s*Date\s*\|/i.test(line)) state = 'seek_sep';
+      continue;
+    }
+    if (state === 'seek_sep') {
+      if (/^\|\s*[-—\s:|]+\|/.test(line)) state = 'rows';
+      continue;
+    }
+    if (state === 'rows') {
+      if (!line.startsWith('|')) break;
+      const parts = line.split('|').map((s) => s.trim());
+      if (parts.length < 4) continue;
+      const dateLabel = parts[1];
+      const rate24k = parts[2];
+      const rate22k = parts[3];
+      if (/^date$/i.test(dateLabel)) continue;
+      if (/^[-—]+$/.test(dateLabel.replace(/\s/g, ''))) continue;
+      if (!dateLabel || !rate24k || !rate22k) continue;
+      out.push({ dateLabel, rate24k, rate22k });
+    }
+  }
+  return out;
+}
+
+/** Strip HTML to plain text with line breaks so markdown-style parsers can run. */
+function htmlToPlainTextForGoodreturns(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(div|p|tr|h[1-6]|li|table|thead|tbody|th)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n/g, '\n\n')
+    .trim();
+}
+
+function parseLastTenDaysFromHtml(html) {
+  const out = [];
+  const re = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const row = m[1];
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((c) =>
+      c[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()
+    );
+    if (cells.length < 3) continue;
+    const [dateLabel, rate24k, rate22k] = cells;
+    if (/^date$/i.test(dateLabel)) continue;
+    if (!/^\w{3}\s+\d+|\d{1,2}\s+\w+\s+\d{4}/i.test(dateLabel)) continue;
+    if (!rate24k.includes('₹') || !rate22k.includes('₹')) continue;
+    out.push({ dateLabel, rate24k, rate22k });
+  }
+  return out;
+}
+
+/** Fallback when lane labels don’t match (flattened HTML). */
+function parseRatesFromFlatText(t) {
+  const para = t.match(
+    /₹\s*([\d,]+)\s*per gram for 24 karat[\s\S]{0,120}?₹\s*([\d,]+)\s*per gram for 22 karat[\s\S]{0,120}?₹\s*([\d,]+)\s*per gram for 18 karat/i
+  );
+  if (!para) return null;
+  return {
+    gold24kPerGram: parseInt(para[1].replace(/,/g, ''), 10),
+    gold22kPerGram: parseInt(para[2].replace(/,/g, ''), 10),
+    gold18kPerGram: parseInt(para[3].replace(/,/g, ''), 10),
+  };
+}
+
+function parseGoodreturnsJinaMarkdown(markdown, htmlRaw = null) {
+  if (!markdown || typeof markdown !== 'string') return null;
+  const t = stripJinaReaderPreamble(markdown);
+  const lane24 = parseGoldLaneInr(t, '24K Gold/g');
+  const lane22 = parseGoldLaneInr(t, '22K Gold/g');
+  const lane18 = parseGoldLaneInr(t, '18K Gold/g');
+  let gold24kPerGram = lane24.inrPerGram;
+  let gold22kPerGram = lane22.inrPerGram;
+  let gold18kPerGram = lane18.inrPerGram;
+  let change24kInr = lane24.changeInr;
+  let change22kInr = lane22.changeInr;
+  let change18kInr = lane18.changeInr;
+  if (gold24kPerGram == null || gold22kPerGram == null || gold18kPerGram == null) {
+    const para = t.match(
+      /\*\*₹([\d,]+)\*\* per gram for 24 karat[\s\S]*?\*\*₹([\d,]+)\*\* per gram for 22 karat[\s\S]*?\*\*₹([\d,]+)\*\* per gram for 18 karat/i
+    );
+    if (para) {
+      if (gold24kPerGram == null) gold24kPerGram = parseInt(para[1].replace(/,/g, ''), 10);
+      if (gold22kPerGram == null) gold22kPerGram = parseInt(para[2].replace(/,/g, ''), 10);
+      if (gold18kPerGram == null) gold18kPerGram = parseInt(para[3].replace(/,/g, ''), 10);
+    }
+  }
+  if (gold24kPerGram == null || gold22kPerGram == null || gold18kPerGram == null) {
+    const loose = parseRatesFromFlatText(t);
+    if (loose) {
+      if (gold24kPerGram == null) gold24kPerGram = loose.gold24kPerGram;
+      if (gold22kPerGram == null) gold22kPerGram = loose.gold22kPerGram;
+      if (gold18kPerGram == null) gold18kPerGram = loose.gold18kPerGram;
+    }
+  }
+  const dm = t.match(/###\s*(\d{1,2}\s+\w+\s+\d{4})/);
+  const headlineDate = dm ? dm[1].trim() : null;
+  let lastTenDaysOneGram = parseLastTenDaysOneGramTable(t);
+  if (lastTenDaysOneGram.length === 0 && htmlRaw) {
+    lastTenDaysOneGram = parseLastTenDaysFromHtml(htmlRaw);
+  }
+  if (gold24kPerGram == null && gold22kPerGram == null && gold18kPerGram == null) return null;
+  return {
+    gold24kPerGram,
+    gold22kPerGram,
+    gold18kPerGram,
+    change24kInr,
+    change22kInr,
+    change18kInr,
+    headlineDate,
+    pageTitle: parseTitleLineFromJina(markdown),
+    lastTenDaysOneGram,
+  };
+}
+
+/** Same page as the Goodreturns graph; override with GOODRETURNS_CHENNAI_CHART_IFRAME_URL if needed. */
+function getGoodreturnsChennaiChartIframeUrl() {
+  const e = process.env.GOODRETURNS_CHENNAI_CHART_IFRAME_URL;
+  if (typeof e === 'string' && e.trim()) return e.trim();
+  return GOODRETURNS_CHENNAI_URL;
+}
+
+function scoreAndPickBestGoldChartUrl(urls) {
+  const bad = (u) =>
+    /logo|adnxs|getuid|favicon|icon\.svg|white-logo|goodreturns-logo|spacer|1x1|pixel/i.test(u);
+  const candidates = [...new Set(urls)].filter(
+    (u) => /goodreturns\.in/i.test(u) && !bad(u) && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u)
+  );
+  const score = (u) =>
+    (/(chart|graph|gold|rate|price|chennai|history|highchart)/i.test(u) ? 5 : 0) +
+    (/images\.goodreturns\.in/i.test(u) ? 2 : 0);
+  candidates.sort((a, b) => score(b) - score(a));
+  return candidates[0] || null;
+}
+
+/** Jina markdown images after the last-10-days heading (same chart asset as on the page). */
+function parseChennaiGoldChartImageUrlFromMarkdown(markdown) {
+  const t = stripJinaReaderPreamble(String(markdown || ''));
+  const collect = (s) => {
+    const out = [];
+    const imgRe = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
+    let m;
+    while ((m = imgRe.exec(s)) !== null) out.push(m[1]);
+    return out;
+  };
+  const marker = '## Gold Rate in Chennai for Last 10 Days (1 gram)';
+  const idx = t.indexOf(marker);
+  const slice = idx >= 0 ? t.slice(idx, idx + 10000) : t.slice(0, 12000);
+  let best = scoreAndPickBestGoldChartUrl(collect(slice));
+  if (!best) best = scoreAndPickBestGoldChartUrl(collect(t));
+  return best;
+}
+
+/** `<img src>` from raw HTML when Jina isn’t used (direct fetch). */
+function parseChartImageFromHtml(html) {
+  const urls = [];
+  const re = /<img[^>]+src=["']([^"']+)["']/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) urls.push(m[1]);
+  const re2 = /data-src=["']([^"']+)["']/gi;
+  while ((m = re2.exec(html)) !== null) urls.push(m[1]);
+  return scoreAndPickBestGoldChartUrl(urls);
+}
+
+function pickBestChartImageUrl(jinaMarkdown, htmlRaw) {
+  const env = process.env.GOODRETURNS_CHENNAI_CHART_IMAGE_URL;
+  if (typeof env === 'string' && env.trim()) return env.trim();
+  const fromMd = jinaMarkdown ? parseChennaiGoldChartImageUrlFromMarkdown(jinaMarkdown) : null;
+  if (fromMd) return fromMd;
+  if (htmlRaw) return parseChartImageFromHtml(htmlRaw);
+  return null;
+}
+
+async function fetchGoodreturnsChennaiFromNetwork() {
+  if (process.env.GOODRETURNS_DISABLE === '1' || process.env.GOODRETURNS_DISABLE === 'true') {
+    return { ok: false, error: 'disabled', sourceUrl: GOODRETURNS_CHENNAI_URL };
+  }
+  const jinaBase = (process.env.GOODRETURNS_JINA_PREFIX || 'https://r.jina.ai/').replace(/\/?$/, '/');
+  const jinaUrl = `${jinaBase}${GOODRETURNS_CHENNAI_URL}`;
+  const jinaHeaders = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    Accept: 'text/plain,text/markdown,*/*',
+  };
+  const jinaKey = process.env.JINA_API_KEY || process.env.GOODRETURNS_JINA_API_KEY;
+  if (jinaKey && String(jinaKey).trim()) {
+    jinaHeaders.Authorization = `Bearer ${String(jinaKey).trim()}`;
+  }
+
+  let jinaNote = '';
+  try {
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), GOODRETURNS_FETCH_MS);
+    const res = await fetch(jinaUrl, { signal: ac.signal, headers: jinaHeaders });
+    clearTimeout(to);
+    const text = await res.text();
+    let jinaBlocked = false;
+    try {
+      if (text.trim().startsWith('{')) {
+        const j = JSON.parse(text);
+        if (j && (j.code === 451 || j.name === 'SecurityCompromiseError')) {
+          jinaBlocked = true;
+        }
+      }
+    } catch {
+      /* not JSON */
+    }
+    if (res.ok && !jinaBlocked) {
+      const parsed = parseGoodreturnsJinaMarkdown(text);
+      if (parsed) {
+        return {
+          ok: true,
+          sourceUrl: GOODRETURNS_CHENNAI_URL,
+          ...parsed,
+          chartImageUrl: pickBestChartImageUrl(text, null),
+          fetchedAt: new Date().toISOString(),
+        };
+      }
+      jinaNote = 'Jina response parse failed';
+    } else {
+      jinaNote =
+        res.status === 451 || jinaBlocked ? 'Jina blocked (HTTP 451)' : `Jina HTTP ${res.status}`;
+      if (!res.ok) console.warn('[goodreturns]', jinaNote);
+    }
+  } catch (e) {
+    jinaNote = `Jina: ${e.message}` || 'Jina failed';
+    console.warn('[goodreturns]', e.message);
+  }
+
+  /* Direct fetch: Goodreturns sometimes serves HTML to our server when Jina is blocked. */
+  try {
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), GOODRETURNS_FETCH_MS);
+    const res = await fetch(GOODRETURNS_CHENNAI_URL, {
+      signal: ac.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    clearTimeout(to);
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: jinaNote ? `${jinaNote}; direct HTTP ${res.status}` : `HTTP ${res.status}`,
+        sourceUrl: GOODRETURNS_CHENNAI_URL,
+      };
+    }
+    const html = await res.text();
+    const plain = htmlToPlainTextForGoodreturns(html);
+    const parsed = parseGoodreturnsJinaMarkdown(plain, html);
+    if (!parsed) {
+      return {
+        ok: false,
+        error: jinaNote ? `${jinaNote}; direct parse failed` : 'parse_failed',
+        sourceUrl: GOODRETURNS_CHENNAI_URL,
+      };
+    }
+    return {
+      ok: true,
+      sourceUrl: GOODRETURNS_CHENNAI_URL,
+      ...parsed,
+      chartImageUrl: pickBestChartImageUrl(null, html),
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch (e) {
+    console.warn('[goodreturns direct]', e.message);
+    return {
+      ok: false,
+      error: jinaNote ? `${jinaNote}; direct: ${e.message}` : e.message || 'fetch_failed',
+      sourceUrl: GOODRETURNS_CHENNAI_URL,
+    };
+  }
+}
+
+async function getGoodreturnsChennaiCached() {
+  const now = Date.now();
+  const c = goodreturnsChennaiCache;
+  if (c.data?.ok && now - c.at < GOODRETURNS_CACHE_MS) {
+    return c.data;
+  }
+  if (c.data && !c.data.ok && now - c.at < GOODRETURNS_ERROR_CACHE_MS) {
+    return c.data;
+  }
+  const data = await fetchGoodreturnsChennaiFromNetwork();
+  goodreturnsChennaiCache = { at: now, data };
+  return data;
+}
+
 /** Fetch quote; try v8 chart first (no cookies), then yahoo-finance2. */
 async function fetchQuote(symbol) {
   const fromChart = await fetchQuoteViaChart(symbol);
@@ -625,6 +990,23 @@ app.get('/api/chart/:symbol', async (req, res) => {
     res.json({ symbol, period, history });
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Chennai gold rates from Goodreturns (via Jina reader). No Yahoo/COMEX data. */
+app.get('/api/gold/chennai', async (req, res) => {
+  try {
+    const goodreturns = await getGoodreturnsChennaiCached();
+    const chartIframeUrl = getGoodreturnsChennaiChartIframeUrl();
+    res.json({
+      goodreturns: {
+        ...goodreturns,
+        chartIframeUrl,
+      },
+    });
+  } catch (err) {
+    console.error('[api/gold/chennai]', err);
     res.status(500).json({ error: err.message });
   }
 });

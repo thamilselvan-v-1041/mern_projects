@@ -1178,6 +1178,233 @@
   box-shadow: 0 4px 24px rgba(0,0,0,0.15);
 }
 
+.auto-trade-result-inner.gold-page-modal {
+  max-width: min(920px, 96vw);
+  min-width: min(400px, 96vw);
+  max-height: min(88vh, 900px);
+}
+
+.gold-modal-content {
+  padding: 0 1.25rem 1.25rem;
+}
+
+.gold-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  color: #52525b;
+  font-size: 0.95rem;
+}
+
+.gold-section {
+  margin-bottom: 1.5rem;
+}
+
+.gold-section:last-of-type {
+  margin-bottom: 0;
+}
+
+.gold-section-last-ten {
+  margin-top: 1.5rem;
+}
+
+.gold-goodreturns-chart {
+  margin-top: 1.75rem;
+}
+
+.gold-goodreturns-chart img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.gold-chart-fallback {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #52525b;
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+}
+
+.gold-chart-fallback a {
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.gold-section-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.gold-section-sub {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: #71717a;
+}
+
+.gold-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+}
+
+table.gold-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.gold-table th,
+.gold-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #f4f4f5;
+}
+
+.gold-table th {
+  background: #fafafa;
+  font-weight: 600;
+  color: #3f3f46;
+  white-space: nowrap;
+}
+
+.gold-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.gold-table td:last-child {
+  font-variant-numeric: tabular-nums;
+}
+
+.gold-rate-bracket-up {
+  color: #15803d;
+  font-weight: 400;
+}
+
+.gold-rate-bracket-down {
+  color: #e11d48;
+  font-weight: 400;
+}
+
+.gold-rate-bracket-neutral {
+  color: #71717a;
+  font-weight: 400;
+}
+
+.gold-source {
+  font-size: 0.75rem;
+  color: #a1a1aa;
+  margin: 1rem 0 0;
+}
+
+.gold-page-title-line {
+  font-size: 0.78rem;
+  color: #71717a;
+  margin: 0 0 0.65rem;
+  line-height: 1.35;
+}
+
+.gold-today-change {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.35rem;
+}
+
+.gold-today-change-up {
+  color: #15803d;
+}
+
+.gold-today-change-down {
+  color: #b91c1c;
+}
+
+.gold-today-section {
+  margin-bottom: 1.25rem;
+}
+
+.gold-today-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.gold-today-card {
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+}
+
+.gold-today-card-wide {
+  grid-column: 1 / -1;
+}
+
+.gold-today-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #52525b;
+  margin-bottom: 0.35rem;
+}
+
+.gold-today-asof {
+  font-weight: 400;
+  color: #71717a;
+}
+
+.gold-today-value {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  color: #18181b;
+}
+
+.gold-today-formula {
+  font-size: 0.72rem;
+  color: #71717a;
+  line-height: 1.4;
+  margin: 0 0 0.4rem;
+  font-family: ui-monospace, monospace;
+}
+
+.gold-today-formula-note {
+  font-family: inherit;
+  font-style: italic;
+  margin-top: 0.1rem;
+}
+
+.gold-today-meta {
+  font-size: 0.8rem;
+  color: #52525b;
+  margin-bottom: 0.35rem;
+}
+
+.gold-today-result {
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #18181b;
+}
+
+.gold-live-usd {
+  font-size: 1.25rem;
+}
+
+.gold-today-note {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
 .auto-trade-result-header {
   display: flex;
   align-items: center;
@@ -1471,7 +1698,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 40vh;
+  min-height: 50vh;
+  padding: 1.5rem 1.25rem;
+}
+
+.orders-tab-wrapper .orders-error-msg {
+  gap: 0.5rem;
 }
 
 .portfolio-tab-wrapper .portfolio-scroll {
@@ -1490,7 +1722,12 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 40vh;
+  min-height: 50vh;
+  padding: 1.5rem 1.25rem;
+}
+
+.portfolio-tab-wrapper .portfolio-scroll .orders-error-msg {
+  gap: 0.5rem;
 }
 
 .analyse-tab-wrapper .orders-empty-msg,
@@ -1501,7 +1738,11 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 40vh;
+  min-height: 50vh;
+}
+
+.analyse-tab-wrapper .orders-error-msg {
+  gap: 0.5rem;
 }
 
 .portfolio-overlay {
