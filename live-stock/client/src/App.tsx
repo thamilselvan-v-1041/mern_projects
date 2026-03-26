@@ -616,10 +616,6 @@ export default function App() {
       fetchedAt?: string;
       error?: string;
       lastTenDaysOneGram?: Array<{ dateLabel: string; rate24k: string; rate22k: string }>;
-      /** Raster chart image URL from Goodreturns (embeddable; iframe page is usually blocked). */
-      chartImageUrl?: string | null;
-      /** Full Goodreturns Chennai page URL (open in new tab if chart image missing). */
-      chartIframeUrl?: string;
     };
   } | null>(null);
   const [ordersModalTab, setOrdersModalTab] = useState<'orders' | 'portfolio' | 'analyse' | 'settings'>('orders');
@@ -2140,59 +2136,33 @@ export default function App() {
                           })()}
                         </div>
                       </div>
-                      {((goldPayload.goodreturns.lastTenDaysOneGram &&
-                        goldPayload.goodreturns.lastTenDaysOneGram.length > 0) ||
-                        goldPayload.goodreturns.chartImageUrl ||
-                        goldPayload.goodreturns.chartIframeUrl) && (
+                      {goldPayload.goodreturns.lastTenDaysOneGram &&
+                        goldPayload.goodreturns.lastTenDaysOneGram.length > 0 && (
                         <section className="gold-section gold-section-last-ten" aria-label="Last 10 days Chennai gold 1 gram">
                           <h4 className="gold-section-title">Gold Rate in Chennai for Last 10 Days (1 gram)</h4>
-                          {goldPayload.goodreturns.lastTenDaysOneGram &&
-                            goldPayload.goodreturns.lastTenDaysOneGram.length > 0 && (
-                            <div className="gold-table-wrap">
-                              <table className="gold-table">
-                                <thead>
-                                  <tr>
-                                    <th>Date</th>
-                                    <th>24K</th>
-                                    <th>22K</th>
+                          <div className="gold-table-wrap">
+                            <table className="gold-table">
+                              <thead>
+                                <tr>
+                                  <th>Date</th>
+                                  <th>24K</th>
+                                  <th>22K</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {goldPayload.goodreturns.lastTenDaysOneGram.map((row, i) => (
+                                  <tr key={`${row.dateLabel}-${i}`}>
+                                    <td>{row.dateLabel}</td>
+                                    <td>
+                                      <GoodreturnsLastTenRateCell value={row.rate24k} />
+                                    </td>
+                                    <td>
+                                      <GoodreturnsLastTenRateCell value={row.rate22k} />
+                                    </td>
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {goldPayload.goodreturns.lastTenDaysOneGram.map((row, i) => (
-                                    <tr key={`${row.dateLabel}-${i}`}>
-                                      <td>{row.dateLabel}</td>
-                                      <td>
-                                        <GoodreturnsLastTenRateCell value={row.rate24k} />
-                                      </td>
-                                      <td>
-                                        <GoodreturnsLastTenRateCell value={row.rate22k} />
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-                          <div className="gold-goodreturns-chart">
-                            {goldPayload.goodreturns.chartImageUrl ? (
-                              <img
-                                src={goldPayload.goodreturns.chartImageUrl}
-                                alt="Chennai gold rate chart (Goodreturns)"
-                                loading="lazy"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <p className="gold-chart-fallback">
-                                The live chart page can’t be embedded here (Goodreturns blocks iframes).{' '}
-                                <a
-                                  href={goldPayload.goodreturns.chartIframeUrl ?? 'https://www.goodreturns.in/gold-rates/chennai.html'}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  Open Chennai gold chart on Goodreturns
-                                </a>
-                              </p>
-                            )}
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
                         </section>
                       )}

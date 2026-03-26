@@ -435,64 +435,6 @@ function parseGoodreturnsJinaMarkdown(markdown, htmlRaw = null) {
   };
 }
 
-/** Same page as the Goodreturns graph; override with GOODRETURNS_CHENNAI_CHART_IFRAME_URL if needed. */
-function getGoodreturnsChennaiChartIframeUrl() {
-  const e = process.env.GOODRETURNS_CHENNAI_CHART_IFRAME_URL;
-  if (typeof e === 'string' && e.trim()) return e.trim();
-  return GOODRETURNS_CHENNAI_URL;
-}
-
-function scoreAndPickBestGoldChartUrl(urls) {
-  const bad = (u) =>
-    /logo|adnxs|getuid|favicon|icon\.svg|white-logo|goodreturns-logo|spacer|1x1|pixel/i.test(u);
-  const candidates = [...new Set(urls)].filter(
-    (u) => /goodreturns\.in/i.test(u) && !bad(u) && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u)
-  );
-  const score = (u) =>
-    (/(chart|graph|gold|rate|price|chennai|history|highchart)/i.test(u) ? 5 : 0) +
-    (/images\.goodreturns\.in/i.test(u) ? 2 : 0);
-  candidates.sort((a, b) => score(b) - score(a));
-  return candidates[0] || null;
-}
-
-/** Jina markdown images after the last-10-days heading (same chart asset as on the page). */
-function parseChennaiGoldChartImageUrlFromMarkdown(markdown) {
-  const t = stripJinaReaderPreamble(String(markdown || ''));
-  const collect = (s) => {
-    const out = [];
-    const imgRe = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g;
-    let m;
-    while ((m = imgRe.exec(s)) !== null) out.push(m[1]);
-    return out;
-  };
-  const marker = '## Gold Rate in Chennai for Last 10 Days (1 gram)';
-  const idx = t.indexOf(marker);
-  const slice = idx >= 0 ? t.slice(idx, idx + 10000) : t.slice(0, 12000);
-  let best = scoreAndPickBestGoldChartUrl(collect(slice));
-  if (!best) best = scoreAndPickBestGoldChartUrl(collect(t));
-  return best;
-}
-
-/** `<img src>` from raw HTML when Jina isn’t used (direct fetch). */
-function parseChartImageFromHtml(html) {
-  const urls = [];
-  const re = /<img[^>]+src=["']([^"']+)["']/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) urls.push(m[1]);
-  const re2 = /data-src=["']([^"']+)["']/gi;
-  while ((m = re2.exec(html)) !== null) urls.push(m[1]);
-  return scoreAndPickBestGoldChartUrl(urls);
-}
-
-function pickBestChartImageUrl(jinaMarkdown, htmlRaw) {
-  const env = process.env.GOODRETURNS_CHENNAI_CHART_IMAGE_URL;
-  if (typeof env === 'string' && env.trim()) return env.trim();
-  const fromMd = jinaMarkdown ? parseChennaiGoldChartImageUrlFromMarkdown(jinaMarkdown) : null;
-  if (fromMd) return fromMd;
-  if (htmlRaw) return parseChartImageFromHtml(htmlRaw);
-  return null;
-}
-
 async function fetchGoodreturnsChennaiFromNetwork() {
   if (process.env.GOODRETURNS_DISABLE === '1' || process.env.GOODRETURNS_DISABLE === 'true') {
     return { ok: false, error: 'disabled', sourceUrl: GOODRETURNS_CHENNAI_URL };
@@ -534,7 +476,6 @@ async function fetchGoodreturnsChennaiFromNetwork() {
           ok: true,
           sourceUrl: GOODRETURNS_CHENNAI_URL,
           ...parsed,
-          chartImageUrl: pickBestChartImageUrl(text, null),
           fetchedAt: new Date().toISOString(),
         };
       }
@@ -584,7 +525,6 @@ async function fetchGoodreturnsChennaiFromNetwork() {
       ok: true,
       sourceUrl: GOODRETURNS_CHENNAI_URL,
       ...parsed,
-      chartImageUrl: pickBestChartImageUrl(null, html),
       fetchedAt: new Date().toISOString(),
     };
   } catch (e) {
@@ -998,13 +938,7 @@ app.get('/api/chart/:symbol', async (req, res) => {
 app.get('/api/gold/chennai', async (req, res) => {
   try {
     const goodreturns = await getGoodreturnsChennaiCached();
-    const chartIframeUrl = getGoodreturnsChennaiChartIframeUrl();
-    res.json({
-      goodreturns: {
-        ...goodreturns,
-        chartIframeUrl,
-      },
-    });
+    res.json({ goodreturns });
   } catch (err) {
     console.error('[api/gold/chennai]', err);
     res.status(500).json({ error: err.message });
