@@ -1,3 +1,8 @@
+/* Stock list + header: one centered column (slightly wider for list + filter text) */
+:root {
+  --app-content-max-width: 656px;
+}
+
 .app {
   max-width: min(1200px, 100vw - 2rem);
   margin: 0 auto;
@@ -16,9 +21,32 @@
   padding-top: max(0.75rem, env(safe-area-inset-top));
   border-bottom: 1px solid #e4e4e7;
   background: #fff;
+}
+
+.header-content {
+  width: 100%;
+  max-width: var(--app-content-max-width);
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  gap: 0.65rem;
+  align-items: stretch;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.header-toolbar {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .settings-btn-top-right {
@@ -30,26 +58,86 @@
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
   flex-wrap: nowrap;
+  gap: 0.45rem;
   min-width: 0;
+  justify-content: flex-start;
+  padding: 0.1rem 0 0.25rem;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
-  padding-bottom: 2px;
 }
 
-.header-actions > select,
-.header-actions > .header-right {
+.header-actions > .market-picker,
+.header-actions > .segment-picker,
+.header-actions > .limit-picker,
+.header-actions > .sort-picker,
+.header-actions > .refresh-btn {
   flex-shrink: 0;
 }
 
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-left: auto;
+.header-actions > .sector-picker {
+  flex-shrink: 1;
+}
+
+/* Single-row toolbar: widths tuned to --app-content-max-width */
+.header-actions .market-picker {
+  width: auto;
+  min-width: 6.5rem;
+  max-width: 7.5rem;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.85rem;
+}
+
+.header-actions .segment-picker {
+  width: auto;
+  min-width: 5.75rem;
+  max-width: 6.5rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.header-actions .limit-picker {
+  width: auto;
+  min-width: 5.75rem;
+  max-width: 6.75rem;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.header-actions .refresh-btn {
+  padding: 0 0.45rem;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.header-actions .last-fetched {
+  font-size: 0.68rem;
+  letter-spacing: -0.01em;
+}
+
+.header-actions .sector-picker {
+  flex: 1 1 auto;
+  min-width: 3.25rem;
+  max-width: 7.75rem;
+  width: auto;
+  min-height: 34px;
+  height: 34px;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.8125rem;
+}
+
+.header-actions .sort-picker {
+  flex: 0 0 7.375rem;
+  width: 7.375rem;
+  min-width: 7rem;
+  max-width: 8rem;
+  min-height: 34px;
+  height: 34px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .market-picker,
@@ -70,12 +158,6 @@
 .limit-picker:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.header-title-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
 }
 
 .proceed-btn {
@@ -735,7 +817,7 @@
 .main {
   padding-top: 0.85rem;
   padding-bottom: 1rem;
-  max-width: 600px;
+  max-width: var(--app-content-max-width);
   margin-left: auto;
   margin-right: auto;
   width: 100%;
@@ -790,7 +872,7 @@
   border-bottom: 2px solid;
 }
 
-/* Fixed width; same 34px row height as other header pickers */
+/* Header toolbar sets widths via `.header-actions` (single row with Profit/sort) */
 .sort-picker,
 .sector-picker {
   padding: 0.3rem 0.45rem;
@@ -800,9 +882,6 @@
   border: 1px solid #d4d4d8;
   border-radius: 8px;
   cursor: pointer;
-  width: 7.75rem;
-  min-width: 7.75rem;
-  max-width: 7.75rem;
   box-sizing: border-box;
   display: inline-block;
   vertical-align: middle;
@@ -1228,9 +1307,9 @@
   box-shadow: 0 4px 24px rgba(0,0,0,0.15);
 }
 
-/* Align with list column (600px) */
+/* Align with list column */
 .auto-trade-result-inner.gold-page-modal {
-  max-width: min(600px, calc(100vw - 2rem));
+  max-width: min(var(--app-content-max-width), calc(100vw - 2rem));
   min-width: 0;
   width: 100%;
   max-height: min(92dvh, calc(100dvh - 2rem));
@@ -2485,41 +2564,42 @@ table.gold-table {
   .header-actions {
     gap: 0.4rem;
     flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
-  .header-right {
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-
-  .market-picker,
-  .segment-picker,
-  .limit-picker {
-    padding: 0 0.6rem;
+  .header-actions .market-picker,
+  .header-actions .segment-picker,
+  .header-actions .limit-picker {
+    padding: 0 0.45rem;
     font-size: 16px; /* prevents iOS zoom on focus */
     min-height: 34px;
   }
 
-  .sector-picker,
-  .sort-picker {
-    min-height: 34px;
-    height: 34px;
-    width: 7.75rem;
-    min-width: 7.75rem;
-    max-width: 7.75rem;
-    line-height: 1.2;
+  .header-actions .limit-picker {
+    min-width: 5.5rem;
+    width: 5.75rem;
+    max-width: 6.5rem;
   }
 
-  .sort-picker {
-    padding: 0 0.6rem;
+  .header-actions .sort-picker {
+    padding: 0 0.45rem;
     font-size: 16px;
     font-weight: 600;
+    flex: 0 0 7.375rem;
+    width: 7.375rem;
+    min-width: 7rem;
+    max-width: 8rem;
   }
 
-  .sector-picker {
-    padding: 0.3rem 0.42rem;
-    font-size: clamp(0.8125rem, 0.65rem + 1.1vw, 1rem);
+  .header-actions .sector-picker {
+    padding: 0.3rem 0.35rem;
+    font-size: clamp(0.75rem, 2.5vw, 0.95rem);
     font-weight: 400;
+    flex: 1 1 auto;
+    min-width: 2.75rem;
+    max-width: 7rem;
   }
 
   .refresh-btn {
@@ -2717,13 +2797,6 @@ table.gold-table {
 
 @media (max-width: 380px) {
   .header-actions {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-
-  .header-right {
-    margin-left: auto;
-    flex-shrink: 0;
+    gap: 0.35rem;
   }
 }

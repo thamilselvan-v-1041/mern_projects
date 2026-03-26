@@ -1342,6 +1342,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
+        <div className="header-content">
         <div className="header-title-row">
           <div className="proceed-area">
             <button
@@ -1379,6 +1380,7 @@ export default function App() {
             </button>
           </div>
         </div>
+        <div className="header-toolbar">
         <div className="header-actions">
             <select
               className="market-picker"
@@ -1414,42 +1416,42 @@ export default function App() {
               <option value={100}>Top 100</option>
               <option value={150}>Top 150</option>
             </select>
-            <div className="header-right">
-              <button className="refresh-btn" onClick={() => fetchForMarket('in', true, true).then(() => fetchForMarket('us', true, true))} title="Refresh">
-                {refreshing ? (
-                  <span className="refresh-spinner" aria-hidden />
-                ) : (
-                  <span className="refresh-icon">↻</span>
-                )}
-                <span className="last-fetched">
-                  {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                </span>
-              </button>
-              <select
-                className="sector-picker"
-                value={sectorFilter}
-                onChange={(e) => setSectorFilter(e.target.value)}
-                title="Filter by sector (from listed stocks)"
-              >
-                <option value="all">All sectors</option>
-                {sectorOptions.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt === '__none__' ? 'Unknown' : opt}
-                  </option>
-                ))}
-              </select>
-              <select
-                className={`sort-picker sort-${sortOrder}`}
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-                title="Sort by profit, loss, best rank, or best price"
-              >
-                <option value="desc">Profit</option>
-                <option value="asc">Loss</option>
-                <option value="best">Best</option>
-                <option value="bestprice">Best Price</option>
-              </select>
-            </div>
+            <button className="refresh-btn" onClick={() => fetchForMarket('in', true, true).then(() => fetchForMarket('us', true, true))} title="Refresh">
+              {refreshing ? (
+                <span className="refresh-spinner" aria-hidden />
+              ) : (
+                <span className="refresh-icon">↻</span>
+              )}
+              <span className="last-fetched">
+                {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+              </span>
+            </button>
+            <select
+              className="sector-picker"
+              value={sectorFilter}
+              onChange={(e) => setSectorFilter(e.target.value)}
+              title="Filter by sector (from listed stocks)"
+            >
+              <option value="all">All sectors</option>
+              {sectorOptions.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt === '__none__' ? 'Unknown' : opt}
+                </option>
+              ))}
+            </select>
+            <select
+              className={`sort-picker sort-${sortOrder}`}
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+              title="Sort by profit, loss, best rank, or best price"
+            >
+              <option value="desc">Profit</option>
+              <option value="asc">Loss</option>
+              <option value="best">Best</option>
+              <option value="bestprice">Best Price</option>
+            </select>
+        </div>
+        </div>
         </div>
       </header>
 
