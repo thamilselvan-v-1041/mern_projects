@@ -631,8 +631,8 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
     return Object.fromEntries(SEGMENTS.map((s) => [s, { topGainers: [], topLosers: [] }]));
   }
 
-  const BATCH_SIZE = market === 'in' ? 15 : 8;
-  const DELAY_MS = market === 'in' ? 100 : 250;
+  const BATCH_SIZE = market === 'in' ? 12 : 8;
+  const DELAY_MS = market === 'in' ? 180 : 250;
   const fetched = await fetchSymbolsBatched(uniqueSymbols, market, BATCH_SIZE, DELAY_MS);
 
   const segmentData = {};
@@ -653,13 +653,131 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
   return segmentData;
 }
 
+/**
+ * Yahoo returns GICS-style names; map to common Indian market buckets for the sector filter.
+ * Uses both sector + industry when sector alone is vague.
+ */
+function normalizeSectorForDisplay(sectorRaw, industryRaw) {
+  const sector = (sectorRaw || '').trim();
+  const industry = (industryRaw || '').trim();
+  const s = sector.toLowerCase();
+  const i = industry.toLowerCase();
+  if (!sector && !industry) return null;
+
+  if (
+    /\bbanks?\b/i.test(sector) ||
+    /\bbanks?\b/i.test(industry) ||
+    /banking|private sector bank|public sector bank/i.test(industry)
+  ) {
+    return 'Banking';
+  }
+  if (/financial services/i.test(sector) || /^capital markets$/i.test(industry) || /asset management|insurance|finance company/i.test(industry)) {
+    return 'Finance';
+  }
+  if (
+    /consumer defensive/i.test(sector) ||
+    /fast moving consumer goods/i.test(sector) ||
+    /fmcg|packaged food|tobacco|household|personal care/i.test(i)
+  ) {
+    return 'FMCG';
+  }
+  if (
+    /consumer cyclical/i.test(sector) ||
+    (/auto|apparel|retail|leisure/i.test(i) && !/packaged food/i.test(i))
+  ) {
+    return 'Consumer Goods';
+  }
+  if (/technology/i.test(sector) || /software|information technology|IT services|semiconductor/i.test(i)) {
+    return 'IT';
+  }
+  if (/basic materials/i.test(sector) || /steel|metal|mining|aluminium|copper|zinc|iron/i.test(i)) {
+    return 'Metal';
+  }
+  if (/energy/i.test(sector) || /oil|gas|petroleum|power generation/i.test(i)) {
+    return 'Energy';
+  }
+  if (/healthcare|health care/i.test(sector) || /pharma|drug|hospital|biotech/i.test(i)) {
+    return 'Healthcare';
+  }
+  if (/real estate/i.test(sector) || /real estate|REIT/i.test(i)) {
+    return 'Real Estate';
+  }
+  if (/utilities/i.test(sector)) {
+    return 'Utilities';
+  }
+  if (/communication services/i.test(sector) || /telecom|media|entertainment/i.test(i)) {
+    return 'Telecom & Media';
+  }
+  if (/industrials/i.test(sector)) {
+    return 'Industrials';
+  }
+
+  return sector || industry || null;
+}
+
+/**
+ * NSE India quote-equity returns industryInfo without Yahoo’s crumb (Yahoo quoteSummary often fails server-side).
+ * @param {string} symbol Plain NSE symbol (no .NS)
+ */
+async function fetchSectorFromNse(symbol) {
+  const sym = String(symbol || '')
+    .replace(/\.(NS|BO)$/i, '')
+    .trim()
+    .toUpperCase();
+  if (!sym) return null;
+  const url = `https://www.nseindia.com/api/quote-equity?symbol=${encodeURIComponent(sym)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const ii = data?.industryInfo;
+    if (!ii || typeof ii !== 'object') return null;
+    const sectorRaw = [ii.macro, ii.sector].find((x) => typeof x === 'string' && x.trim())?.trim() || '';
+    const industryRaw = [ii.industry, ii.basicIndustry].find((x) => typeof x === 'string' && x.trim())?.trim() || '';
+    return normalizeSectorForDisplay(sectorRaw, industryRaw);
+  } catch {
+    return null;
+  }
+}
+
+/** US / fallback: Yahoo quoteSummary via yahoo-finance2 (may fail without browser cookies). */
+async function fetchSectorFromYahoo(yfSymbol) {
+  try {
+    const r = await yahooFinance.quoteSummary(yfSymbol, { modules: ['summaryProfile', 'assetProfile'] });
+    const sp = r?.summaryProfile || {};
+    const ap = r?.assetProfile || {};
+    const sectorRaw =
+      (typeof sp.sector === 'string' && sp.sector.trim() ? sp.sector.trim() : '') ||
+      (typeof ap.sector === 'string' && ap.sector.trim() ? ap.sector.trim() : '');
+    const industryRaw =
+      (typeof sp.industry === 'string' && sp.industry.trim() ? sp.industry.trim() : '') ||
+      (typeof ap.industry === 'string' && ap.industry.trim() ? ap.industry.trim() : '');
+    return normalizeSectorForDisplay(sectorRaw, industryRaw);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSectorForStock(symbol, market, yfSymbol) {
+  if (market === 'in') {
+    const nse = await fetchSectorFromNse(symbol);
+    if (nse) return nse;
+  }
+  return fetchSectorFromYahoo(yfSymbol);
+}
+
 async function fetchSymbolData(symbol, market) {
   const yfSymbol = toYahooSymbol(symbol, market);
-  const [quote, history] = await Promise.all([
-    fetchQuote(yfSymbol),
-    fetchHistorical(yfSymbol),
-  ]);
+  const [quote, history] = await Promise.all([fetchQuote(yfSymbol), fetchHistorical(yfSymbol)]);
   if (!quote) return null;
+  /** India: NSE quote-equity (reliable). US: Yahoo quoteSummary (best-effort). */
+  const sector = await fetchSectorForStock(symbol, market, yfSymbol);
   const weeklyChange = history.length >= 5
     ? ((history[history.length - 1]?.close - history[0]?.close) / (history[0]?.close || 1)) * 100
     : null;
@@ -682,6 +800,7 @@ async function fetchSymbolData(symbol, market) {
     fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh,
     fiftyTwoWeekLow: quote.fiftyTwoWeekLow,
     history: history.slice(-14).map((q) => ({ date: q.date, close: q.close })),
+    ...(sector ? { sector } : {}),
   };
 }
 
@@ -696,38 +815,31 @@ async function getStocksViaScreener(market, count = 50) {
       yahooFinance.screener({ scrIds: 'day_gainers', region, lang, count }),
       yahooFinance.screener({ scrIds: 'day_losers', region, lang, count }),
     ]);
-    const gainers = (gainersRes?.quotes || []).map((q, i) => ({
-      symbol: q.symbol || '',
-      market,
-      name: q.shortName || q.longName || q.symbol || '',
-      price: q.regularMarketPrice ?? q.preMarketPrice,
-      change: q.regularMarketChange ?? 0,
-      changePercent: q.regularMarketChangePercent ?? 0,
-      volume: q.regularMarketVolume,
-      marketCap: q.marketCap,
-      weekChange: null,
-      monthChange: null,
-      history: [],
-      segment: 'flexi',
-      segmentName: 'Flexi Cap',
-      rank: i + 1,
-    })).filter((s) => s.symbol && s.price != null);
-    const losers = (losersRes?.quotes || []).map((q, i) => ({
-      symbol: q.symbol || '',
-      market,
-      name: q.shortName || q.longName || q.symbol || '',
-      price: q.regularMarketPrice ?? q.preMarketPrice,
-      change: q.regularMarketChange ?? 0,
-      changePercent: q.regularMarketChangePercent ?? 0,
-      volume: q.regularMarketVolume,
-      marketCap: q.marketCap,
-      weekChange: null,
-      monthChange: null,
-      history: [],
-      segment: 'flexi',
-      segmentName: 'Flexi Cap',
-      rank: i + 1,
-    })).filter((s) => s.symbol && s.price != null);
+    const mapScreenerQuote = (q, rank) => {
+      const sectorNorm = normalizeSectorForDisplay(
+        q.sector ? String(q.sector).trim() : '',
+        q.industry ? String(q.industry).trim() : '',
+      );
+      return {
+        symbol: q.symbol || '',
+        market,
+        name: q.shortName || q.longName || q.symbol || '',
+        price: q.regularMarketPrice ?? q.preMarketPrice,
+        change: q.regularMarketChange ?? 0,
+        changePercent: q.regularMarketChangePercent ?? 0,
+        volume: q.regularMarketVolume,
+        marketCap: q.marketCap,
+        weekChange: null,
+        monthChange: null,
+        history: [],
+        segment: 'flexi',
+        segmentName: 'Flexi Cap',
+        rank,
+        ...(sectorNorm ? { sector: sectorNorm } : {}),
+      };
+    };
+    const gainers = (gainersRes?.quotes || []).map((q, i) => mapScreenerQuote(q, i + 1)).filter((s) => s.symbol && s.price != null);
+    const losers = (losersRes?.quotes || []).map((q, i) => mapScreenerQuote(q, i + 1)).filter((s) => s.symbol && s.price != null);
     const segmentData = {};
     for (const seg of SEGMENTS) {
       segmentData[seg] = {

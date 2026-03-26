@@ -206,6 +206,8 @@ type Stock = {
   segmentName: string;
   rank: number;
   market?: string;
+  /** Yahoo assetProfile sector when available */
+  sector?: string;
   weekChange?: number;
   monthChange?: number;
   history?: { date: string; close: number }[];
@@ -593,6 +595,8 @@ export default function App() {
   const [market, setMarket] = useState<string>('in');
   const [displayLimit, setDisplayLimit] = useState<50 | 100 | 150>(150);
   const [segmentFilter, setSegmentFilter] = useState<string>('all');
+  /** `__none__` = stocks with no sector label */
+  const [sectorFilter, setSectorFilter] = useState<string>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [autoTradeLoading, setAutoTradeLoading] = useState(false);
   const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
@@ -738,6 +742,10 @@ export default function App() {
     setActiveStockId(null);
     setActiveTab(null);
   }, [segmentFilter, displayLimit, market]);
+
+  useEffect(() => {
+    setSectorFilter('all');
+  }, [market, segmentFilter]);
 
   useEffect(() => {
     try {
@@ -967,7 +975,7 @@ export default function App() {
 
   const segments = segmentsByMarket[market] || [];
 
-  const stocks = useMemo(() => {
+  const baseMerged = useMemo(() => {
     if (!segmentFilter) return [];
     let merged: Stock[] = [];
     if (segmentFilter === 'all') {
@@ -987,6 +995,37 @@ export default function App() {
         if (seen.has(s.symbol)) return false;
         seen.add(s.symbol);
         return true;
+      });
+    }
+    return merged;
+  }, [segments, segmentFilter]);
+
+  const sectorOptions = useMemo(() => {
+    const set = new Set<string>();
+    baseMerged.forEach((s) => {
+      const t = (s.sector || '').trim();
+      set.add(t ? t : '__none__');
+    });
+    return [...set].sort((a, b) => {
+      if (a === '__none__') return 1;
+      if (b === '__none__') return -1;
+      return a.localeCompare(b);
+    });
+  }, [baseMerged]);
+
+  useEffect(() => {
+    if (sectorFilter === 'all') return;
+    if (!sectorOptions.includes(sectorFilter)) setSectorFilter('all');
+  }, [sectorFilter, sectorOptions]);
+
+  const stocks = useMemo(() => {
+    if (!segmentFilter) return [];
+    let merged = baseMerged;
+    if (sectorFilter !== 'all') {
+      merged = merged.filter((s) => {
+        const t = (s.sector || '').trim();
+        if (sectorFilter === '__none__') return !t;
+        return t === sectorFilter;
       });
     }
     const byAbsoluteChange = [...merged].sort((a, b) => {
@@ -1046,7 +1085,7 @@ export default function App() {
       return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
     });
     return sorted.map((s, i) => ({ ...s, rank: i + 1 }));
-  }, [segments, segmentFilter, sortOrder, displayLimit, market]);
+  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit]);
 
   const handleStockTap = (stock: Stock) => {
     const id = `${stock.symbol}-${stock.segment}`;
@@ -1386,6 +1425,19 @@ export default function App() {
                   {lastUpdated ? new Date(lastUpdated).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
                 </span>
               </button>
+              <select
+                className="sector-picker"
+                value={sectorFilter}
+                onChange={(e) => setSectorFilter(e.target.value)}
+                title="Filter by sector (from listed stocks)"
+              >
+                <option value="all">All sectors</option>
+                {sectorOptions.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt === '__none__' ? 'Unknown' : opt}
+                  </option>
+                ))}
+              </select>
               <select
                 className={`sort-picker sort-${sortOrder}`}
                 value={sortOrder}

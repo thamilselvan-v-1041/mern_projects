@@ -1,5 +1,5 @@
 .app {
-  max-width: 600px;
+  max-width: min(1200px, 100vw - 2rem);
   margin: 0 auto;
   padding: 1rem 1.5rem;
   min-height: 100vh;
@@ -31,7 +31,18 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.header-actions > select,
+.header-actions > .header-right {
+  flex-shrink: 0;
 }
 
 .header-right {
@@ -724,6 +735,11 @@
 .main {
   padding-top: 0.85rem;
   padding-bottom: 1rem;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .loading-stocks-center {
@@ -774,20 +790,54 @@
   border-bottom: 2px solid;
 }
 
-.sort-picker {
-  padding: 0 0.6rem;
+/* Fixed width; same 34px row height as other header pickers */
+.sort-picker,
+.sector-picker {
+  padding: 0.3rem 0.45rem;
   min-height: 34px;
-  font-size: 0.85rem;
-  font-weight: 600;
+  height: 34px;
   background: #f4f4f5;
   border: 1px solid #d4d4d8;
   border-radius: 8px;
   cursor: pointer;
-  width: fit-content;
-  min-width: 6ch;
+  width: 7.75rem;
+  min-width: 7.75rem;
+  max-width: 7.75rem;
   box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  vertical-align: middle;
+  text-align: center;
+  text-align-last: center;
+  line-height: 1.2;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Profit / Loss / Best / Best Price — original typography */
+.sort-picker {
+  padding: 0 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.sector-picker {
+  font-size: clamp(0.68rem, 0.42rem + 0.75vw, 0.8125rem);
+  font-weight: 400;
+  font-style: normal;
+  color: #52525b;
+}
+
+.sort-picker option {
+  font-weight: 600;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.sector-picker option {
+  font-weight: 400;
+  font-size: 0.875rem;
+  line-height: 1.35;
 }
 
 .sort-picker.sort-profit,
@@ -1178,7 +1228,7 @@
   box-shadow: 0 4px 24px rgba(0,0,0,0.15);
 }
 
-/* Align with main shell `.app` (max-width: 600px); header fixed, body scrolls when tall */
+/* Align with list column (600px) */
 .auto-trade-result-inner.gold-page-modal {
   max-width: min(600px, calc(100vw - 2rem));
   min-width: 0;
@@ -2434,6 +2484,7 @@ table.gold-table {
 
   .header-actions {
     gap: 0.4rem;
+    flex-wrap: nowrap;
   }
 
   .header-right {
@@ -2443,11 +2494,32 @@ table.gold-table {
 
   .market-picker,
   .segment-picker,
-  .limit-picker,
-  .sort-picker {
+  .limit-picker {
     padding: 0 0.6rem;
     font-size: 16px; /* prevents iOS zoom on focus */
     min-height: 34px;
+  }
+
+  .sector-picker,
+  .sort-picker {
+    min-height: 34px;
+    height: 34px;
+    width: 7.75rem;
+    min-width: 7.75rem;
+    max-width: 7.75rem;
+    line-height: 1.2;
+  }
+
+  .sort-picker {
+    padding: 0 0.6rem;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .sector-picker {
+    padding: 0.3rem 0.42rem;
+    font-size: clamp(0.8125rem, 0.65rem + 1.1vw, 1rem);
+    font-weight: 400;
   }
 
   .refresh-btn {
@@ -2645,12 +2717,13 @@ table.gold-table {
 
 @media (max-width: 380px) {
   .header-actions {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
   }
 
   .header-right {
-    margin-left: 0;
-    justify-content: flex-end;
+    margin-left: auto;
+    flex-shrink: 0;
   }
 }
