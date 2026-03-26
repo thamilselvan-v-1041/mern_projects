@@ -35,6 +35,11 @@ function getKiteFromRequest(req) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** GICS sectors for US tickers in US_STOCKS (see scripts/generate-us-sector-map.mjs). Avoids Yahoo quoteSummary crumb failures. */
+const US_STATIC_SECTOR_BY_SYMBOL = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'usSectorMap.generated.json'), 'utf8'),
+);
+
 // Browser-like headers so Yahoo accepts requests (blocks bot User-Agents when opened in browser works)
 const YAHOO_FETCH_OPTIONS = {
   fetchOptions: {
@@ -769,6 +774,17 @@ async function fetchSectorForStock(symbol, market, yfSymbol) {
     const nse = await fetchSectorFromNse(symbol);
     if (nse) return nse;
   }
+  if (market === 'us') {
+    const sym = String(symbol || '')
+      .replace(/\.(NS|BO)$/i, '')
+      .trim()
+      .toUpperCase();
+    const raw = US_STATIC_SECTOR_BY_SYMBOL[sym];
+    if (raw) {
+      const n = normalizeSectorForDisplay(raw, '');
+      if (n) return n;
+    }
+  }
   return fetchSectorFromYahoo(yfSymbol);
 }
 
@@ -816,10 +832,19 @@ async function getStocksViaScreener(market, count = 50) {
       yahooFinance.screener({ scrIds: 'day_losers', region, lang, count }),
     ]);
     const mapScreenerQuote = (q, rank) => {
-      const sectorNorm = normalizeSectorForDisplay(
-        q.sector ? String(q.sector).trim() : '',
-        q.industry ? String(q.industry).trim() : '',
-      );
+      const sym = String(q.symbol || '')
+        .replace(/\.(NS|BO)$/i, '')
+        .trim()
+        .toUpperCase();
+      const fromStatic =
+        market === 'us' && sym && US_STATIC_SECTOR_BY_SYMBOL[sym]
+          ? normalizeSectorForDisplay(US_STATIC_SECTOR_BY_SYMBOL[sym], '')
+          : null;
+      const sectorNorm =
+        normalizeSectorForDisplay(
+          q.sector ? String(q.sector).trim() : '',
+          q.industry ? String(q.industry).trim() : '',
+        ) || fromStatic;
       return {
         symbol: q.symbol || '',
         market,

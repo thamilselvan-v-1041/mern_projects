@@ -9,7 +9,8 @@
     "client": "cd client && npm run dev",
     "build": "cd client && npm run build",
     "start": "npm run build && node server/index.js",
-    "kite-login": "node server/kite-login.js"
+    "kite-login": "node server/kite-login.js",
+    "generate-us-sectors": "node scripts/generate-us-sector-map.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
