@@ -1052,6 +1052,15 @@
   font-size: 0.85rem;
 }
 
+.stock-item.search-stock-item {
+  background: #eafaf0;
+  border-color: #bbf7d0;
+}
+
+.stock-item.search-stock-item:hover {
+  background: #ecfdf5;
+}
+
 .stock-item.search-stock-item-highlight {
   background: #ecfdf5;
   border-color: #86efac;

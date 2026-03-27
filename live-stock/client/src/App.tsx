@@ -176,6 +176,45 @@ function parsePriceLike(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function toNumberOrNull(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(v.replace(/[^\d.-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Try to infer market cap bucket for searched rows. */
+function inferCapType(stock: Stock, fundamentals: Record<string, string> | null): string | null {
+  let marketCapInCr: number | null = null;
+
+  // Prefer formatted fundamentals units first (most reliable for India display).
+  if (fundamentals?.marketCap) {
+    const s = String(fundamentals.marketCap);
+    const n = toNumberOrNull(s);
+    if (n != null) {
+      if (/lakh\s*cr/i.test(s)) marketCapInCr = n * 100000;
+      else if (/\bcr\b/i.test(s)) marketCapInCr = n;
+      else if (/\bl\b/i.test(s)) marketCapInCr = n / 100;
+    }
+  }
+
+  // Fallback: infer units from raw quote marketCap.
+  if (marketCapInCr == null) {
+    const fromStock = toNumberOrNull(stock.marketCap);
+    if (fromStock != null) {
+      // If the number is already "small", treat it as Cr; else assume base currency amount.
+      marketCapInCr = fromStock < 100000 ? fromStock : fromStock / 1e7;
+    }
+  }
+
+  if (marketCapInCr == null) return null;
+  if (marketCapInCr >= 20000) return 'Large';
+  if (marketCapInCr >= 5000) return 'Mid';
+  return 'Small';
+}
+
 async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -513,7 +552,7 @@ function StockItem({
                 {[
                   ['Price', fundamentals.price ?? '—', null],
                   ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
-                  ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? null : stock.segmentName?.replace(/\s+Cap$/, '')],
+                  ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? inferCapType(stock, fundamentals) : stock.segmentName?.replace(/\s+Cap$/, '')],
                   ['Volume', fundamentals.volume, null],
                   ['Avg Volume', fundamentals.avgVolume, null],
                   ['P/E', fundamentals.pe, null],
@@ -1738,13 +1777,6 @@ export default function App() {
           onSelect={handleSearchSelect}
           onClose={() => {
             setStockSearchOpen(false);
-            const pinnedIds = new Set(searchPinnedStocks.map((s) => `${s.symbol}-${s.segment}`));
-            setSelectedStockIds((prev) => {
-              const next = new Set(prev);
-              pinnedIds.forEach((id) => next.delete(id));
-              return next;
-            });
-            setSearchPinnedStocks([]);
           }}
           onRemoteSearch={handleRemoteSearch}
         />
