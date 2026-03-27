@@ -659,65 +659,71 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
 }
 
 /**
- * Yahoo returns GICS-style names; map to common Indian market buckets for the sector filter.
- * Uses both sector + industry when sector alone is vague.
+ * Normalize raw sector/industry into a small set of major groups for UI filters.
+ * Major groups:
+ * - Financials (Banking, Finance)
+ * - Consumption (FMCG, Consumer Goods, Consumer Discretionary)
+ * - Industrials (Industrial, Metal, Diversified)
+ * - Energy & Utilities (Energy, Utilities)
+ * - Tech & Communication (IT, Telecom & Media)
+ * - Healthcare (Health Care)
+ * - Services (Services)
  */
 function normalizeSectorForDisplay(sectorRaw, industryRaw) {
   const sector = (sectorRaw || '').trim();
   const industry = (industryRaw || '').trim();
-  const s = sector.toLowerCase();
-  const i = industry.toLowerCase();
   if (!sector && !industry) return null;
+  const combined = `${sector} ${industry}`.toLowerCase();
 
+  // 1) Financials = Banking + Finance
   if (
-    /\bbanks?\b/i.test(sector) ||
-    /\bbanks?\b/i.test(industry) ||
-    /banking|private sector bank|public sector bank/i.test(industry)
+    /\bbanks?\b|banking|financial|finance|capital markets|asset management|insurance|nbfc|broker|lending|credit|fintech/.test(combined)
   ) {
-    return 'Banking';
+    return 'Financials';
   }
-  if (/financial services/i.test(sector) || /^capital markets$/i.test(industry) || /asset management|insurance|finance company/i.test(industry)) {
-    return 'Finance';
-  }
+
+  // 2) Consumption = FMCG + Consumer Goods + Consumer Discretionary
   if (
-    /consumer defensive/i.test(sector) ||
-    /fast moving consumer goods/i.test(sector) ||
-    /fmcg|packaged food|tobacco|household|personal care/i.test(i)
+    /consumer defensive|consumer cyclical|consumer discretionary|fmcg|fast moving consumer goods|packaged food|tobacco|household|personal care|retail|apparel|leisure|restaurant|hotel|travel|auto/.test(combined)
   ) {
-    return 'FMCG';
+    return 'Consumption';
   }
+
+  // 3) Tech & Communication = IT + Telecom & Media
   if (
-    /consumer cyclical/i.test(sector) ||
-    (/auto|apparel|retail|leisure/i.test(i) && !/packaged food/i.test(i))
+    /technology|information technology|it services|software|semiconductor|internet|communication services|telecom|media|entertainment|broadcast|digital/.test(combined)
   ) {
-    return 'Consumer Goods';
+    return 'Tech & Communication';
   }
-  if (/technology/i.test(sector) || /software|information technology|IT services|semiconductor/i.test(i)) {
-    return 'IT';
+
+  // 4) Energy & Utilities = Energy + Utilities
+  if (
+    /energy|oil|gas|petroleum|refining|power generation|utilities|electric|water|renewable/.test(combined)
+  ) {
+    return 'Energy & Utilities';
   }
-  if (/basic materials/i.test(sector) || /steel|metal|mining|aluminium|copper|zinc|iron/i.test(i)) {
-    return 'Metal';
-  }
-  if (/energy/i.test(sector) || /oil|gas|petroleum|power generation/i.test(i)) {
-    return 'Energy';
-  }
-  if (/healthcare|health care/i.test(sector) || /pharma|drug|hospital|biotech/i.test(i)) {
+
+  // 5) Healthcare = Health Care
+  if (
+    /healthcare|health care|pharma|pharmaceutical|drug|hospital|biotech|life sciences|medical/.test(combined)
+  ) {
     return 'Healthcare';
   }
-  if (/real estate/i.test(sector) || /real estate|REIT/i.test(i)) {
-    return 'Real Estate';
-  }
-  if (/utilities/i.test(sector)) {
-    return 'Utilities';
-  }
-  if (/communication services/i.test(sector) || /telecom|media|entertainment/i.test(i)) {
-    return 'Telecom & Media';
-  }
-  if (/industrials/i.test(sector)) {
+
+  // 6) Industrials = Industrial + Metal + Diversified
+  if (
+    /industrials|industrial|manufacturing|engineering|aerospace|defense|construction|transport|logistics|basic materials|metal|mining|aluminium|copper|zinc|iron|steel|diversified|conglomerate|real estate|reit/.test(combined)
+  ) {
     return 'Industrials';
   }
 
-  return sector || industry || null;
+  // 7) Services = Services
+  if (/services|business services|professional services/.test(combined)) {
+    return 'Services';
+  }
+
+  // Default unknown categories to Services to keep filter buckets compact.
+  return 'Services';
 }
 
 /**

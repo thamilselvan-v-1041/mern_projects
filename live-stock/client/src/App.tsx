@@ -376,6 +376,7 @@ function StockItem({
               <div className="fundamentals-grid">
                 {[
                   ['Price', fundamentals.price ?? '—', null],
+                  ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
                   ['Market Cap', fundamentals.marketCap, stock.segmentName?.replace(/\s+Cap$/, '')],
                   ['Volume', fundamentals.volume, null],
                   ['Avg Volume', fundamentals.avgVolume, null],
@@ -541,7 +542,7 @@ function StockListSection({
         ) : stocks.map((stock) => {
           const id = `${stock.symbol}-${stock.segment}`;
           const isExpanded = activeStockId === id;
-          const period = chartPeriod[id] ?? '1m';
+          const period = chartPeriod[id] ?? '1y';
           const chartDataForPeriod = chartCache[id]?.[period] ?? null;
           return (
             <StockItem
@@ -577,6 +578,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeStockId, setActiveStockId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType | null>(null);
+  const [preferredTab, setPreferredTab] = useState<TabType>('fundamentals');
   const [analysisCache, setAnalysisCache] = useState<Record<string, Analysis>>({});
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, Record<string, string>>>(() => {
@@ -1094,9 +1096,10 @@ export default function App() {
       setActiveTab(null);
       return;
     }
+    const openTab = preferredTab || 'fundamentals';
     setActiveStockId(id);
-    setActiveTab('fundamentals');
-    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1m' }));
+    setActiveTab(openTab);
+    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
     const market = stock.market || 'in';
 
     // Load fundamentals if not cached
@@ -1138,10 +1141,29 @@ export default function App() {
         .catch(() => setAnalysisCache((c) => ({ ...c, [id]: { pros: ['Analysis failed'], cons: ['Try again'] } })))
         .finally(() => setLoadingAnalysisId(null));
     }
+
+    if (openTab === 'chart') {
+      const period = chartPeriod[id] ?? '1y';
+      if (!chartCache[id]?.[period]) {
+        setLoadingChartId(id);
+        fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${market}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.error) throw new Error(data.error);
+            setChartCache((c) => ({
+              ...c,
+              [id]: { ...(c[id] ?? {}), [period]: data.history ?? [] },
+            }));
+          })
+          .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), [period]: [] } })))
+          .finally(() => setLoadingChartId(null));
+      }
+    }
   };
 
   const handleTabClick = async (stock: Stock, tab: TabType) => {
     const id = `${stock.symbol}-${stock.segment}`;
+    setPreferredTab(tab);
     const isSameStock = activeStockId === id;
     const isSameTab = activeTab === tab;
     if (isSameStock && isSameTab) {
@@ -1184,8 +1206,8 @@ export default function App() {
     }
 
     if (tab === 'chart') {
-      setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1m' }));
-      const period = chartPeriod[id] ?? '1m';
+      setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
+      const period = chartPeriod[id] ?? '1y';
       if (!chartCache[id]?.[period]) {
         setLoadingChartId(id);
         fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${stock.market || 'in'}`)
@@ -1435,7 +1457,7 @@ export default function App() {
               <option value="all">All sectors</option>
               {sectorOptions.map((opt) => (
                 <option key={opt} value={opt}>
-                  {opt === '__none__' ? 'Unknown' : opt}
+                  {opt === '__none__' ? 'Others' : opt}
                 </option>
               ))}
             </select>
