@@ -204,6 +204,97 @@
   gap: 0.5rem;
 }
 
+.stock-search-panel {
+  width: 100%;
+  max-width: var(--app-content-max-width);
+  margin: 0.1rem auto 0.35rem;
+  border: 1px solid #e4e4e7;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.stock-search-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.stock-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 0.65rem;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  font-size: 0.86rem;
+  color: #27272a;
+  background: #fff;
+}
+
+.stock-search-close {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  background: #fff;
+  color: #52525b;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.stock-search-results {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.stock-search-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem;
+}
+
+.stock-search-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.stock-search-item:hover {
+  background: #f4f4f5;
+}
+
+.stock-search-item-symbol {
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: #111827;
+  min-width: 4.5rem;
+}
+
+.stock-search-item-name {
+  color: #52525b;
+  font-size: 0.84rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-search-empty {
+  margin: 0;
+  padding: 0.8rem 0.65rem;
+  color: #71717a;
+  font-size: 0.84rem;
+}
+
 .history-btn {
   padding: 0 0.6rem;
   min-height: 34px;
@@ -956,6 +1047,17 @@
   background: #f4f4f5;
 }
 
+.stock-item.search-stock-item .stock-rank {
+  color: #16a34a;
+  font-size: 0.85rem;
+}
+
+.stock-item.search-stock-item-highlight {
+  background: #ecfdf5;
+  border-color: #86efac;
+  transition: background 0.35s ease, border-color 0.35s ease;
+}
+
 .stock-row {
   display: flex;
   justify-content: space-between;
@@ -1017,6 +1119,28 @@
 
 .stock-price {
   text-align: right;
+}
+
+.search-item-clear-btn {
+  width: 1.3rem;
+  height: 1.3rem;
+  border: 1px solid #d4d4d8;
+  border-radius: 999px;
+  background: #fff;
+  color: #71717a;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.2rem;
+}
+
+.search-item-clear-btn:hover {
+  color: #ef4444;
+  border-color: #fca5a5;
+  background: #fef2f2;
 }
 
 .price {
@@ -1094,6 +1218,21 @@
   display: flex;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+.fund-row.fund-row-stack {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  row-gap: 0.25rem;
+  column-gap: 0.5rem;
+  align-items: baseline;
+}
+
+.fund-row-pair {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 1rem;
 }
 
 .fund-label {
@@ -1748,6 +1887,19 @@ table.gold-table {
 .kite-holdings-list .holding-item .qty {
   font-size: 0.85rem;
   color: #52525b;
+}
+
+.kite-holdings-list .holding-item .best-sale-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #7f1d1d;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  letter-spacing: 0.01em;
 }
 
 .kite-holdings-list .holding-item .holding-line2 .price {
@@ -2661,6 +2813,10 @@ table.gold-table {
   .fund-row {
     padding: 0.35rem 0;
     border-bottom: 1px solid #f4f4f5;
+  }
+
+  .fund-row-pair {
+    grid-template-columns: 1fr 1fr;
   }
 
   .fund-row:last-child {

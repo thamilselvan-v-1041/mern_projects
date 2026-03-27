@@ -1311,6 +1311,64 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
   }
 });
 
+/** Lightweight live quote for UI search cards / buy flow. */
+app.get('/api/quote/:symbol', async (req, res) => {
+  try {
+    const symbol = (req.params.symbol || '').toUpperCase();
+    const market = req.query.market || 'in';
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+    const yfSymbol = toYahooSymbol(symbol, market);
+    const q = await fetchQuote(yfSymbol);
+    if (!q) return res.status(404).json({ error: 'Quote not found' });
+    const price = q.regularMarketPrice ?? q.preMarketPrice ?? null;
+    const changePercent = q.regularMarketChangePercent ?? q.regularMarketChange ?? null;
+    return res.json({
+      symbol: (q.symbol || symbol).replace(/\.(NS|BO)$/i, ''),
+      name: q.shortName || q.longName || symbol,
+      market,
+      price,
+      change: q.regularMarketChange ?? 0,
+      changePercent,
+      volume: q.regularMarketVolume ?? null,
+      marketCap: q.marketCap ?? null,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'quote_failed' });
+  }
+});
+
+/** Search stocks by text (fallback for UI when not found in local list). */
+app.get('/api/search/stocks', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length < 1) return res.json({ q, results: [] });
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=20&newsCount=0`;
+    const r = await fetch(url, { headers: YAHOO_HEADERS });
+    if (!r.ok) return res.status(r.status).json({ error: `search_${r.status}` });
+    const data = await r.json();
+    const quotes = Array.isArray(data?.quotes) ? data.quotes : [];
+    const results = quotes
+      .filter((x) => x?.symbol && (x?.quoteType === 'EQUITY' || x?.quoteType === 'ETF'))
+      .map((x) => {
+        const symbol = String(x.symbol || '').trim();
+        const exchange = String(x.exchDisp || x.exchange || '').toUpperCase();
+        const market = /\.NS$|\.BO$/i.test(symbol) || /NSE|BSE/.test(exchange) ? 'in' : 'us';
+        return {
+          symbol,
+          name: String(x.shortname || x.longname || symbol),
+          market,
+          exchange,
+        };
+      })
+      // India market search should only include NSE (not BSE) instruments.
+      .filter((x) => x.market !== 'in' || /\.NS$/i.test(x.symbol) || /\bNSE\b/.test(String(x.exchange || '')))
+      .slice(0, 20);
+    res.json({ q, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'search_failed' });
+  }
+});
+
 app.post('/api/analyze', async (req, res) => {
   try {
     const { stock } = req.body;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import * as XLSX from 'xlsx';
+import StockSearchPanel from './components/StockSearchPanel';
 import './App.css';
 
 function goldFiniteNum(n: unknown): n is number {
@@ -167,6 +168,14 @@ function kiteHeaders(creds: { apiKey: string; secret: string; accessToken: strin
   return h;
 }
 
+function parsePriceLike(v: unknown): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const s = String(v ?? '').replace(/[^\d.-]/g, '').trim();
+  if (!s) return 0;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
 async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -254,6 +263,107 @@ function sampleForChart<T>(arr: T[], maxBars: number): T[] {
   return result;
 }
 
+type BestSaleSignal = {
+  isBestSale: boolean;
+  score: number;
+  reason: string;
+};
+
+function toNum(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * Rule-based sell timing signal:
+ * - checks 1Y price behavior (near highs, pullback, momentum fade)
+ * - checks fundamentals (high P/E, forward P/E weakness, low dividend)
+ * Returns a "Best Sale" signal only on strong confluence.
+ */
+function deriveBestSaleSignal(args: {
+  history: Array<{ date?: string; close?: number }> | null | undefined;
+  fundamentals?: Record<string, unknown> | null;
+  averagePrice?: number;
+  lastPrice?: number;
+  dayChangePct?: number;
+}): BestSaleSignal {
+  const history = (args.history || []).filter((x) => toNum(x?.close) != null) as Array<{ close: number }>;
+  const closes = history.map((h) => h.close).filter((x) => Number.isFinite(x));
+  const latest = toNum(args.lastPrice) ?? (closes.length ? closes[closes.length - 1] : null);
+  const avg = toNum(args.averagePrice);
+  const dayChg = toNum(args.dayChangePct);
+  if (!latest || !closes.length) return { isBestSale: false, score: 0, reason: 'Insufficient live data' };
+
+  const high1y = Math.max(...closes);
+  const low1y = Math.min(...closes);
+  const idxHigh = closes.lastIndexOf(high1y);
+  const recent21 = closes.slice(Math.max(0, closes.length - 21));
+  const ago21 = recent21.length >= 2 ? recent21[0] : latest;
+  const momentum21 = ago21 > 0 ? ((latest - ago21) / ago21) * 100 : 0;
+  const drawdownFromHigh = high1y > 0 ? ((high1y - latest) / high1y) * 100 : 0;
+  const gainVsAvg = avg && avg > 0 ? ((latest - avg) / avg) * 100 : 0;
+  const inUpperBand = low1y > 0 ? (latest - low1y) / Math.max(1, high1y - low1y) >= 0.72 : false;
+  const highWasRecent = idxHigh >= closes.length - 45;
+
+  const f = args.fundamentals || {};
+  const pe = toNum(f.pe);
+  const forwardPE = toNum(f.forwardPE);
+  const divYield = toNum(f.dividendYield);
+
+  let score = 0;
+  const reasons: string[] = [];
+
+  if (gainVsAvg >= 20) {
+    score += 2;
+    reasons.push(`up ${gainVsAvg.toFixed(1)}% vs buy price`);
+  } else if (gainVsAvg >= 12) {
+    score += 1;
+    reasons.push(`up ${gainVsAvg.toFixed(1)}% vs buy price`);
+  }
+  if (highWasRecent && drawdownFromHigh >= 7) {
+    score += 2;
+    reasons.push(`${drawdownFromHigh.toFixed(1)}% below recent 1Y high`);
+  } else if (drawdownFromHigh >= 4) {
+    score += 1;
+    reasons.push(`${drawdownFromHigh.toFixed(1)}% below 1Y high`);
+  }
+  if (momentum21 <= -4) {
+    score += 1;
+    reasons.push(`1M momentum weak (${momentum21.toFixed(1)}%)`);
+  }
+  if (dayChg != null && dayChg <= -1.5) {
+    score += 1;
+    reasons.push(`today down ${dayChg.toFixed(2)}%`);
+  }
+  if (inUpperBand) {
+    score += 1;
+    reasons.push('still in upper 1Y price band');
+  }
+  if (pe != null && pe >= 36) {
+    score += 1;
+    reasons.push(`high P/E ${pe.toFixed(1)}`);
+  }
+  if (forwardPE != null && pe != null && forwardPE > pe * 0.98) {
+    score += 1;
+    reasons.push('forward P/E not improving');
+  }
+  if (divYield != null && divYield < 0.8) {
+    score += 1;
+    reasons.push('low dividend support');
+  }
+
+  const isBestSale = score >= 5 && gainVsAvg >= 10 && drawdownFromHigh >= 3;
+  return {
+    isBestSale,
+    score,
+    reason: reasons.slice(0, 3).join(' | ') || 'No strong sell signals',
+  };
+}
+
 function StockItem({
   stock,
   expanded,
@@ -271,6 +381,8 @@ function StockItem({
   selected,
   onSelectChange,
   showSelect,
+  onClearSearchItem,
+  highlightedSearchId,
 }: {
   stock: Stock;
   expanded: boolean;
@@ -288,14 +400,21 @@ function StockItem({
   selected?: boolean;
   onSelectChange?: (checked: boolean) => void;
   showSelect?: boolean;
+  onClearSearchItem?: () => void;
+  highlightedSearchId?: string | null;
 }) {
   const isUp = (stock.changePercent ?? 0) >= 0;
   const currency = stock.market === 'us' ? '$' : '₹';
   const history = chartData ?? stock.history ?? [];
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; close: number } | null>(null);
 
+  const isSearchPinned = stock.rank === 0 || String(stock.segment || '').startsWith('search-');
+  const isSearchHighlighted = isSearchPinned && highlightedSearchId === `${stock.symbol}-${stock.segment}`;
+  const displayName = isSearchPinned ? String(stock.name || '').replace(/\.NS$/i, '') : stock.name;
+  const displaySymbol = isSearchPinned ? String(stock.symbol || '').replace(/\.NS$/i, '') : stock.symbol;
+
   return (
-    <div className="stock-item">
+    <div className={`stock-item ${isSearchPinned ? 'search-stock-item' : ''} ${isSearchHighlighted ? 'search-stock-item-highlight' : ''}`}>
       <div className="stock-row" onClick={onStockTap} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onStockTap()}>
         {showSelect && onSelectChange && (
           <input
@@ -311,11 +430,28 @@ function StockItem({
           />
         )}
         <div className="stock-main">
-          <span className="stock-rank">#{stock.rank}</span>
+          <span className="stock-rank">
+            {isSearchPinned && onClearSearchItem ? (
+              <button
+                type="button"
+                className="search-item-clear-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClearSearchItem();
+                }}
+                title="Remove searched item"
+                aria-label="Remove searched item"
+              >
+                ×
+              </button>
+            ) : (
+              `#${stock.rank}`
+            )}
+          </span>
           <div>
-            <div className="stock-name">{stock.name}</div>
+            <div className="stock-name">{displayName}</div>
             <div className="stock-symbol-row">
-              <span className="stock-symbol">{stock.symbol}</span>
+              <span className="stock-symbol">{displaySymbol}</span>
               {stock.bestRank != null && (
                 <span className="stock-best-tag" title="Best buy rank among top stocks by volatility">
                   Best #{stock.bestRank}
@@ -377,17 +513,14 @@ function StockItem({
                 {[
                   ['Price', fundamentals.price ?? '—', null],
                   ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
-                  ['Market Cap', fundamentals.marketCap, stock.segmentName?.replace(/\s+Cap$/, '')],
+                  ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? null : stock.segmentName?.replace(/\s+Cap$/, '')],
                   ['Volume', fundamentals.volume, null],
                   ['Avg Volume', fundamentals.avgVolume, null],
                   ['P/E', fundamentals.pe, null],
                   ['Forward P/E', fundamentals.forwardPE, null],
                   ['EPS', fundamentals.eps, null],
                   ['Dividend Yield', fundamentals.dividendYield, null],
-                  ['52W High', fundamentals.fiftyTwoWeekHigh, null],
-                  ['52W Low', fundamentals.fiftyTwoWeekLow, null],
                   ['Open', fundamentals.open, null],
-                  ['Day Range', fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—', null],
                 ].map(([label, val, cap]) => (
                   <div key={label} className="fund-row">
                     <span className="fund-label">{label}</span>
@@ -397,6 +530,18 @@ function StockItem({
                     </span>
                   </div>
                 ))}
+                <div className="fund-row-pair">
+                  <div className="fund-row fund-row-stack">
+                    <span className="fund-label">52W Low</span>
+                    <span className="fund-value">{fundamentals.fiftyTwoWeekLow ?? '—'}</span>
+                    <span className="fund-label">Day Range</span>
+                    <span className="fund-value">{fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—'}</span>
+                  </div>
+                  <div className="fund-row">
+                    <span className="fund-label">52W High</span>
+                    <span className="fund-value">{fundamentals.fiftyTwoWeekHigh ?? '—'}</span>
+                  </div>
+                </div>
               </div>
               ) : loadingFundamentals ? (
               <div className="loading">Loading fundamentals...</div>
@@ -514,6 +659,8 @@ function StockListSection({
   selectedStockIds,
   onSelectStock,
   showSelect,
+  onClearSearchItem,
+  highlightedSearchId,
 }: {
   stocks: Stock[];
   activeStockId: string | null;
@@ -531,6 +678,8 @@ function StockListSection({
   selectedStockIds: Set<string>;
   onSelectStock: (id: string, checked: boolean) => void;
   showSelect: boolean;
+  onClearSearchItem?: (stock: Stock) => void;
+  highlightedSearchId?: string | null;
 }) {
   return (
     <section className="stock-list-section">
@@ -563,6 +712,8 @@ function StockListSection({
               selected={selectedStockIds.has(id)}
               onSelectChange={(checked) => onSelectStock(id, checked)}
               showSelect={showSelect}
+              onClearSearchItem={String(stock.segment || '').startsWith('search-') && onClearSearchItem ? () => onClearSearchItem(stock) : undefined}
+              highlightedSearchId={highlightedSearchId}
             />
           );
         })}
@@ -605,6 +756,9 @@ export default function App() {
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [goldPageOpen, setGoldPageOpen] = useState(false);
+  const [stockSearchOpen, setStockSearchOpen] = useState(false);
+  const [searchPinnedStocks, setSearchPinnedStocks] = useState<Stock[]>([]);
+  const [highlightedSearchId, setHighlightedSearchId] = useState<string | null>(null);
   const [goldLoading, setGoldLoading] = useState(false);
   const [goldError, setGoldError] = useState<string | null>(null);
   const [goldPayload, setGoldPayload] = useState<{
@@ -637,6 +791,7 @@ export default function App() {
   }>>([]);
   const [kiteHoldingsLoading, setKiteHoldingsLoading] = useState(false);
   const [kiteHoldingsError, setKiteHoldingsError] = useState<string | null>(null);
+  const [bestSaleBySymbol, setBestSaleBySymbol] = useState<Record<string, BestSaleSignal>>({});
   const [kiteOrders, setKiteOrders] = useState<Array<{
     order_id: string;
     tradingsymbol: string;
@@ -928,6 +1083,35 @@ export default function App() {
     }
   }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.accessToken]);
 
+  useEffect(() => {
+    if (!historyModalOpen || ordersModalTab !== 'portfolio') return;
+    if (kiteHoldingsLoading || kiteHoldingsError || kiteHoldings.length === 0) return;
+    let cancelled = false;
+    const unique = [...new Set(kiteHoldings.map((h) => String(h.tradingsymbol || '').trim()).filter(Boolean))];
+    const run = async () => {
+      const entries = await Promise.all(unique.map(async (sym) => {
+        const holding = kiteHoldings.find((h) => h.tradingsymbol === sym);
+        const market = 'in';
+        const [chartRes, fundamentalsRes] = await Promise.all([
+          fetch(`${API}/chart/${encodeURIComponent(sym)}?period=1y&market=${market}`).then((r) => r.json()).catch(() => ({})),
+          fetch(`${API}/fundamentals/${encodeURIComponent(sym)}?market=${market}`).then((r) => r.json()).catch(() => ({})),
+        ]);
+        const signal = deriveBestSaleSignal({
+          history: Array.isArray(chartRes?.history) ? chartRes.history : [],
+          fundamentals: fundamentalsRes && typeof fundamentalsRes === 'object' ? fundamentalsRes : null,
+          averagePrice: holding?.average_price,
+          lastPrice: holding?.last_price,
+          dayChangePct: holding?.day_change_percentage,
+        });
+        return [sym, signal] as const;
+      }));
+      if (cancelled) return;
+      setBestSaleBySymbol((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [historyModalOpen, ordersModalTab, kiteHoldingsLoading, kiteHoldingsError, kiteHoldings]);
+
   const kiteConfigured = !!(kiteForm.apiKey && kiteForm.accessToken);
   const holdingsForAnalysis = analyseSource === 'xlsx' && xlsxHoldings.length > 0 ? xlsxHoldings : kiteHoldings;
 
@@ -1086,8 +1270,12 @@ export default function App() {
       const bVal = b.changePercent ?? 0;
       return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
     });
-    return sorted.map((s, i) => ({ ...s, rank: i + 1 }));
-  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit]);
+    const ranked = sorted.map((s, i) => ({ ...s, rank: i + 1 }));
+    const pinnedForMarket = searchPinnedStocks
+      .filter((s) => (s.market || 'in') === market)
+      .map((s) => ({ ...s, rank: 0 }));
+    return [...pinnedForMarket, ...ranked];
+  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market]);
 
   const handleStockTap = (stock: Stock) => {
     const id = `${stock.symbol}-${stock.segment}`;
@@ -1161,6 +1349,119 @@ export default function App() {
     }
   };
 
+  const handleSearchSelect = (picked: { symbol: string; name: string; market?: string; segment?: string }) => {
+    const mkt = (picked.market || market) as string;
+    const seg = `search-${String(picked.symbol || '').replace(/[^A-Za-z0-9]/g, '_')}`;
+    const match = {
+      symbol: picked.symbol,
+      name: picked.name || picked.symbol,
+      price: 0,
+      change: 0,
+      changePercent: 0,
+      segment: seg,
+      segmentName: 'Search',
+      rank: 0,
+      market: mkt,
+    };
+    setSearchPinnedStocks((prev) => {
+      const key = `${match.symbol}|${mkt}`;
+      const next = prev.filter((s) => `${s.symbol}|${s.market || 'in'}` !== key);
+      return [match as Stock, ...next];
+    });
+    setMarket(mkt);
+    setSegmentFilter('all');
+    setSectorFilter('all');
+    setPreferredTab('fundamentals');
+    const id = `${match.symbol}-${match.segment}`;
+    setHighlightedSearchId(id);
+    setTimeout(() => {
+      setHighlightedSearchId((prev) => (prev === id ? null : prev));
+    }, 1500);
+    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
+    const marketCode = match.market || 'in';
+    if (!fundamentalsCache[id]) {
+      setLoadingFundamentalsId(id);
+      fetch(`${API}/fundamentals/${match.symbol}?market=${marketCode}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setFundamentalsCache((c) => ({ ...c, [id]: data }));
+        })
+        .catch(() => { /* live-only */ })
+        .finally(() => setLoadingFundamentalsId(null));
+    }
+
+    fetch(`${API}/quote/${encodeURIComponent(match.symbol)}?market=${marketCode}`)
+      .then((r) => r.json())
+      .then((q) => {
+        const livePrice = parsePriceLike(q?.price);
+        const liveChangePct = Number.isFinite(Number(q?.changePercent)) ? Number(q.changePercent) : null;
+        const liveChange = Number.isFinite(Number(q?.change)) ? Number(q.change) : null;
+        setSearchPinnedStocks((prev) => prev.map((row) => {
+          if (!(row.symbol === match.symbol && (row.market || 'in') === marketCode)) return row;
+          return {
+            ...row,
+            price: livePrice > 0 ? livePrice : row.price,
+            changePercent: liveChangePct != null ? liveChangePct : row.changePercent,
+            change: liveChange != null ? liveChange : row.change,
+            volume: Number.isFinite(Number(q?.volume)) ? Number(q.volume) : row.volume,
+            marketCap: Number.isFinite(Number(q?.marketCap)) ? Number(q.marketCap) : row.marketCap,
+          };
+        }));
+      })
+      .catch(() => { /* ignore */ });
+  };
+
+  const handleRemoteSearch = useCallback(async (query: string) => {
+    const raw = String(query || '').trim();
+    const q = raw
+      .replace(/\.(NS|BO)$/i, '')
+      .replace(/\b(NSE|BSE)\b/gi, '')
+      .trim();
+    if (q.length < 1) return [];
+    const r = await fetch(`${API}/search/stocks?q=${encodeURIComponent(q)}`);
+    const data = await r.json().catch(() => ({}));
+    const rows = Array.isArray(data?.results) ? data.results : [];
+    return rows
+      .map((x: Record<string, unknown>) => ({
+        symbol: String(x.symbol || ''),
+        name: String(x.name || x.symbol || ''),
+        market: String(x.market || 'us'),
+        exchange: String(x.exchange || ''),
+        segment: 'search',
+      }))
+      .filter((x: { symbol: string; name: string; market: string; segment: string }) => {
+        const m = String(x.market || '').toLowerCase();
+        return market === 'in' ? m === 'in' : m === 'us';
+      })
+      .filter((x: { symbol: string; name: string; market: string; exchange?: string; segment: string }) => {
+        if (!(x.symbol && x.name)) return false;
+        if (market !== 'in') return true;
+        return /\.NS$/i.test(x.symbol) || /\bNSE\b/i.test(String(x.exchange || ''));
+      })
+      // Support both stock name and symbol in the same Yahoo search response.
+      .filter((x: { symbol: string; name: string; market: string; exchange?: string; segment: string }) => {
+        const sym = String(x.symbol || '').toLowerCase();
+        const name = String(x.name || '').toLowerCase();
+        const qq = q.toLowerCase();
+        return name.includes(qq) || sym.includes(qq);
+      });
+  }, [market]);
+
+  const handleClearSearchPinnedItem = useCallback((stock: Stock) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    setSearchPinnedStocks((prev) => prev.filter((s) => !(s.symbol === stock.symbol && s.segment === stock.segment)));
+    setSelectedStockIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    if (activeStockId === id) {
+      setActiveStockId(null);
+      setActiveTab(null);
+    }
+  }, [activeStockId]);
+
   const handleTabClick = async (stock: Stock, tab: TabType) => {
     const id = `${stock.symbol}-${stock.segment}`;
     setPreferredTab(tab);
@@ -1225,13 +1526,19 @@ export default function App() {
     }
   };
 
-  const handleProceed = () => {
+  const handleProceed = async () => {
     setProceedErrorPopup(null);
     const inSegments = segmentsByMarket['in'] || [];
 
     // Resolve selected stock ids to full stock objects (only user-selected items)
     const selectedStocks: Stock[] = [];
+    const pinnedIn = searchPinnedStocks.filter((s) => (s.market || 'in') === 'in');
     for (const id of selectedStockIds) {
+      const pinnedHit = pinnedIn.find((s) => `${s.symbol}-${s.segment}` === id);
+      if (pinnedHit) {
+        selectedStocks.push(pinnedHit);
+        continue;
+      }
       for (const seg of inSegments) {
         const found = [...(seg.topGainers || []), ...(seg.topLosers || [])].find(
           (s) => `${s.symbol}-${seg.segment}` === id
@@ -1243,11 +1550,26 @@ export default function App() {
       }
     }
 
-    const stocksToBuy = selectedStocks.map((s) => ({
-      symbol: s.symbol,
-      name: s.name,
-      price: s.price,
-      changePercent: s.changePercent,
+    const stocksToBuy = await Promise.all(selectedStocks.map(async (s) => {
+      let price = s.price;
+      let changePercent = s.changePercent;
+      if ((price == null || price <= 0) && String(s.segment || '').startsWith('search')) {
+        try {
+          const marketCode = s.market || 'in';
+          const q = await fetch(`${API}/quote/${encodeURIComponent(s.symbol)}?market=${marketCode}`).then((r) => r.json());
+          const qp = parsePriceLike(q?.price);
+          if (qp > 0) price = qp;
+          if (q?.changePercent != null && Number.isFinite(Number(q.changePercent))) changePercent = Number(q.changePercent);
+        } catch {
+          // keep current values
+        }
+      }
+      return {
+        symbol: s.symbol,
+        name: s.name,
+        price,
+        changePercent,
+      };
     }));
 
     setTradeConfirmModal({ stocksToBuy });
@@ -1400,8 +1722,32 @@ export default function App() {
             >
               Gold
             </button>
+            <button
+              type="button"
+              className="history-btn"
+              onClick={() => setStockSearchOpen((v) => !v)}
+              title="Search stocks by common name"
+              aria-label="Search stocks"
+            >
+              🔍
+            </button>
           </div>
         </div>
+        <StockSearchPanel
+          open={stockSearchOpen}
+          onSelect={handleSearchSelect}
+          onClose={() => {
+            setStockSearchOpen(false);
+            const pinnedIds = new Set(searchPinnedStocks.map((s) => `${s.symbol}-${s.segment}`));
+            setSelectedStockIds((prev) => {
+              const next = new Set(prev);
+              pinnedIds.forEach((id) => next.delete(id));
+              return next;
+            });
+            setSearchPinnedStocks([]);
+          }}
+          onRemoteSearch={handleRemoteSearch}
+        />
         <div className="header-toolbar">
         <div className="header-actions">
             <select
@@ -1874,6 +2220,14 @@ export default function App() {
                             <span className="symbol">{h.tradingsymbol}</span>
                             <span className="exchange">{h.exchange}</span>
                             <span className="qty">Qty {h.quantity}</span>
+                            {bestSaleBySymbol[h.tradingsymbol]?.isBestSale && (
+                              <span
+                                className="best-sale-tag"
+                                title={`Best Sale score ${bestSaleBySymbol[h.tradingsymbol]?.score}: ${bestSaleBySymbol[h.tradingsymbol]?.reason}`}
+                              >
+                                Best Sale
+                              </span>
+                            )}
                           </div>
                           <div className="holding-line2">
                             <span className="price">Avg ₹{h.average_price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
@@ -2309,6 +2663,8 @@ export default function App() {
             selectedStockIds={selectedStockIds}
             onSelectStock={handleSelectStock}
             showSelect
+            onClearSearchItem={handleClearSearchPinnedItem}
+            highlightedSearchId={highlightedSearchId}
           />
         )}
       </main>
