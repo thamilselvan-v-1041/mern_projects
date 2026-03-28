@@ -1,6 +1,6 @@
 /* Stock list + header: one centered column (slightly wider for list + filter text) */
 :root {
-  --app-content-max-width: 656px;
+  --app-content-max-width: 728px;
 }
 
 .app {
@@ -73,7 +73,8 @@
 .header-actions > .segment-picker,
 .header-actions > .limit-picker,
 .header-actions > .sort-picker,
-.header-actions > .refresh-btn {
+.header-actions > .refresh-btn,
+.header-actions > .header-toolbar-search-btn {
   flex-shrink: 0;
 }
 
@@ -119,8 +120,8 @@
 
 .header-actions .sector-picker {
   flex: 1 1 auto;
-  min-width: 3.25rem;
-  max-width: 7.75rem;
+  min-width: 5rem;
+  max-width: 10.5rem;
   width: auto;
   min-height: 34px;
   height: 34px;
@@ -138,6 +139,12 @@
   padding: 0.4rem 0.55rem;
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+.header-actions .header-toolbar-search-btn {
+  min-width: 34px;
+  padding: 0 0.5rem;
+  justify-content: center;
 }
 
 .market-picker,
@@ -202,15 +209,111 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.proceed-area-primary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.proceed-area-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.header-indices {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 0;
+  margin-left: auto;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  color: #3f3f46;
+  flex-shrink: 0;
+}
+
+.header-indices-placeholder {
+  color: #a1a1aa;
+  letter-spacing: 0.1em;
+}
+
+.header-index-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.06rem;
+  text-align: left;
+}
+
+.header-index-item + .header-index-item {
+  border-left: 1px solid #d4d4d8;
+  padding-left: 0.65rem;
+  margin-left: 0.65rem;
+}
+
+.header-index-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #71717a;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.header-index-values {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 0.3rem;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.header-index-price {
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: #18181b;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-index-points {
+  font-weight: 600;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.header-index-points--up {
+  color: #16a34a;
+}
+
+.header-index-points--down {
+  color: #dc2626;
+}
+
+.header-index-points--flat {
+  color: #71717a;
 }
 
 .stock-search-panel {
   width: 100%;
   max-width: var(--app-content-max-width);
-  margin: 0.1rem auto 0.35rem;
+  margin: 0;
   border: 1px solid #e4e4e7;
   border-radius: 10px;
   background: #fafafa;
+  box-sizing: border-box;
 }
 
 .stock-search-head {
@@ -2759,8 +2862,8 @@ table.gold-table {
     font-size: clamp(0.75rem, 2.5vw, 0.95rem);
     font-weight: 400;
     flex: 1 1 auto;
-    min-width: 2.75rem;
-    max-width: 7rem;
+    min-width: 4.25rem;
+    max-width: min(10.5rem, 42vw);
   }
 
   .refresh-btn {

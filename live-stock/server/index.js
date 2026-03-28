@@ -1088,6 +1088,38 @@ app.get('/api/gold/chennai', async (req, res) => {
   }
 });
 
+/** Yahoo symbols: Nifty 50, S&P BSE Sensex */
+const INDIA_INDEX_YAHOO = { nifty: '^NSEI', sensex: '^BSESN' };
+
+function mapIndexQuote(q) {
+  if (!q) return null;
+  const price = q.regularMarketPrice ?? q.preMarketPrice;
+  const change = q.regularMarketChange ?? 0;
+  const changePercent = q.regularMarketChangePercent ?? 0;
+  return {
+    price: price != null ? Number(price) : null,
+    change: Number(change),
+    changePercent: Number(changePercent),
+  };
+}
+
+app.get('/api/indices/in', async (req, res) => {
+  try {
+    const [niftyQ, sensexQ] = await Promise.all([
+      fetchQuote(INDIA_INDEX_YAHOO.nifty),
+      fetchQuote(INDIA_INDEX_YAHOO.sensex),
+    ]);
+    res.json({
+      nifty: mapIndexQuote(niftyQ),
+      sensex: mapIndexQuote(sensexQ),
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[api/indices/in]', err);
+    res.status(500).json({ error: err.message || 'indices_failed' });
+  }
+});
+
 const SCREENER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml',

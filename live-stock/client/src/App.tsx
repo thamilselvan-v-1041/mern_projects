@@ -800,6 +800,12 @@ export default function App() {
   const [highlightedSearchId, setHighlightedSearchId] = useState<string | null>(null);
   const [goldLoading, setGoldLoading] = useState(false);
   const [goldError, setGoldError] = useState<string | null>(null);
+  const [indicesIn, setIndicesIn] = useState<{
+    nifty: { price: number | null; change: number; changePercent: number } | null;
+    sensex: { price: number | null; change: number; changePercent: number } | null;
+    fetchedAt?: string;
+  } | null>(null);
+  const [indicesLoading, setIndicesLoading] = useState(false);
   const [goldPayload, setGoldPayload] = useState<{
     goodreturns?: {
       ok: boolean;
@@ -922,11 +928,27 @@ export default function App() {
       });
   }, []);
 
+  const fetchIndicesIn = useCallback(() => {
+    setIndicesLoading(true);
+    fetch(`${API}/indices/in`)
+      .then(async (r) => {
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'indices_failed');
+        setIndicesIn(j);
+      })
+      .catch(() => setIndicesIn(null))
+      .finally(() => setIndicesLoading(false));
+  }, []);
+
   useEffect(() => {
     fetchForMarket('in', false, false).then(() => {
       fetchForMarket('us', false, true);
     });
   }, [fetchForMarket]);
+
+  useEffect(() => {
+    fetchIndicesIn();
+  }, [fetchIndicesIn]);
 
   useEffect(() => {
     if (market === 'us' && (!segmentsByMarket.us || segmentsByMarket.us.length === 0)) {
@@ -1728,58 +1750,78 @@ export default function App() {
         <div className="header-content">
         <div className="header-title-row">
           <div className="proceed-area">
-            <button
-                className="proceed-btn"
-                onClick={handleProceed}
-                disabled={autoTradeLoading || tradeConfirmModal !== null || selectedStockIds.size === 0}
-                title="Buy selected stocks via Kite"
-              >
-                {autoTradeLoading ? (
-                  <span className="refresh-spinner" aria-hidden />
-                ) : (
+            <div className="proceed-area-primary">
+              <div className="proceed-area-left">
+                <button
+                  className="proceed-btn"
+                  onClick={handleProceed}
+                  disabled={autoTradeLoading || tradeConfirmModal !== null || selectedStockIds.size === 0}
+                  title="Buy selected stocks via Kite"
+                >
+                  {autoTradeLoading ? (
+                    <span className="refresh-spinner" aria-hidden />
+                  ) : (
+                    <>
+                      Buy
+                      {selectedStockIds.size > 0 && (
+                        <span className="proceed-badge"> ({selectedStockIds.size})</span>
+                      )}
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="history-btn"
+                  onClick={() => { setHistoryModalOpen(true); setOrdersModalTab('orders'); }}
+                  title="View my orders"
+                >
+                  My Zerodha
+                </button>
+                <button
+                  type="button"
+                  className="history-btn"
+                  onClick={() => setGoldPageOpen(true)}
+                  title="Gold price (Chennai) rates"
+                >
+                  Gold
+                </button>
+              </div>
+              <div className="header-indices" aria-live="polite">
+                {indicesLoading && (
+                  <span className="header-indices-placeholder" aria-hidden>
+                    …
+                  </span>
+                )}
+                {!indicesLoading && indicesIn && (
                   <>
-                    Buy
-                    {selectedStockIds.size > 0 && (
-                      <span className="proceed-badge"> ({selectedStockIds.size})</span>
-                    )}
+                    {(['nifty', 'sensex'] as const).map((key) => {
+                      const row = indicesIn[key];
+                      const label = key === 'nifty' ? 'NIFTY' : 'SENSEX';
+                      if (!row || row.price == null) return null;
+                      const pts = row.change;
+                      const sign = pts > 0 ? '+' : '';
+                      const tone = pts > 0 ? 'up' : pts < 0 ? 'down' : 'flat';
+                      return (
+                        <span key={key} className="header-index-item">
+                          <span className="header-index-label">{label}</span>
+                          <span className="header-index-values">
+                            <span className="header-index-price">
+                              {new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(row.price)}
+                            </span>
+                            <span className={`header-index-points header-index-points--${tone}`}>
+                              {sign}
+                              {new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(pts)}
+                            </span>
+                          </span>
+                        </span>
+                      );
+                    })}
                   </>
                 )}
-              </button>
-            <button
-              type="button"
-              className="history-btn"
-              onClick={() => { setHistoryModalOpen(true); setOrdersModalTab('orders'); }}
-              title="View my orders"
-            >
-              My Zerodha
-            </button>
-            <button
-              type="button"
-              className="history-btn"
-              onClick={() => setGoldPageOpen(true)}
-              title="Gold price (Chennai) rates"
-            >
-              Gold
-            </button>
-            <button
-              type="button"
-              className="history-btn"
-              onClick={() => setStockSearchOpen((v) => !v)}
-              title="Search stocks by common name"
-              aria-label="Search stocks"
-            >
-              🔍
-            </button>
+              </div>
+            </div>
           </div>
         </div>
-        <StockSearchPanel
-          open={stockSearchOpen}
-          onSelect={handleSearchSelect}
-          onClose={() => {
-            setStockSearchOpen(false);
-          }}
-          onRemoteSearch={handleRemoteSearch}
-        />
         <div className="header-toolbar">
         <div className="header-actions">
             <select
@@ -1816,7 +1858,14 @@ export default function App() {
               <option value={100}>Top 100</option>
               <option value={150}>Top 150</option>
             </select>
-            <button className="refresh-btn" onClick={() => fetchForMarket('in', true, true).then(() => fetchForMarket('us', true, true))} title="Refresh">
+            <button
+              className="refresh-btn"
+              onClick={() => {
+                fetchIndicesIn();
+                fetchForMarket('in', true, true).then(() => fetchForMarket('us', true, true));
+              }}
+              title="Refresh"
+            >
               {refreshing ? (
                 <span className="refresh-spinner" aria-hidden />
               ) : (
@@ -1850,8 +1899,25 @@ export default function App() {
               <option value="best">Best</option>
               <option value="bestprice">Best Price</option>
             </select>
+            <button
+              type="button"
+              className="history-btn header-toolbar-search-btn"
+              onClick={() => setStockSearchOpen((v) => !v)}
+              title="Search stocks by common name"
+              aria-label="Search stocks"
+            >
+              🔍
+            </button>
         </div>
         </div>
+        <StockSearchPanel
+          open={stockSearchOpen}
+          onSelect={handleSearchSelect}
+          onClose={() => {
+            setStockSearchOpen(false);
+          }}
+          onRemoteSearch={handleRemoteSearch}
+        />
         </div>
       </header>
 
