@@ -958,6 +958,120 @@ Format your response as JSON only:
   return { pros: ['Analysis unavailable'], cons: ['Check server logs'] };
 }
 
+function inferOwnershipLabel(description, sector, industry, companyName) {
+  const t = `${description || ''} ${sector || ''} ${industry || ''} ${companyName || ''}`.toLowerCase();
+  if (
+    /\b(psu|public sector undertaking|government company|govt\.?\s*company|state-owned|government of india|ministry of|department of|central public sector|coal india|oil and natural|bharat petroleum|indian oil|ongc|ntpc|power grid|sail\b|bhel\b|bel\b|hal\b|nhpc\b|sjvn\b|irctc\b|concor\b)/i.test(
+      t,
+    )
+  ) {
+    return 'Government-linked / PSU (or strong public-sector context)';
+  }
+  if (/\bprivate\b/.test(t) && /\b(limited|ltd|inc|corp)\b/i.test(String(companyName || ''))) {
+    return 'Typically private-sector listed company';
+  }
+  if (!t.replace(/\s/g, '').length) return '— (profile unavailable)';
+  return 'Listed company — confirm ownership via latest shareholding / annual report';
+}
+
+async function fetchStockProfileForInfo(yfSymbol) {
+  try {
+    const r = await yahooFinance.quoteSummary(yfSymbol, { modules: ['summaryProfile', 'assetProfile'] });
+    const sp = r?.summaryProfile || {};
+    const ap = r?.assetProfile || {};
+    const descRaw = sp.longBusinessSummary || ap.longBusinessSummary || '';
+    const desc = typeof descRaw === 'string' ? descRaw.replace(/\s+/g, ' ').trim() : '';
+    const sector = String(sp.sector || ap.sector || '').trim();
+    const industry = String(sp.industry || ap.industry || '').trim();
+    const officers = Array.isArray(ap.companyOfficers) ? ap.companyOfficers : [];
+    const ceoRow = officers.find((o) => /chief executive|^ceo\b/i.test(String(o?.title || '')));
+    const ceo = ceoRow?.name
+      ? `${String(ceoRow.name).trim()}${ceoRow.title ? ` — ${String(ceoRow.title).trim()}` : ''}`
+      : '';
+    const website = sp.website || ap.website || '';
+    return {
+      description: desc.slice(0, 2000),
+      sector: sector || '—',
+      industry: industry || '—',
+      ceo,
+      website: website ? String(website) : '',
+    };
+  } catch (err) {
+    console.warn('[stock-info] quoteSummary failed:', err.message);
+    return null;
+  }
+}
+
+function computeThreeYearMetrics(history) {
+  const h = (history || []).filter((x) => x && Number(x.close) > 0);
+  if (h.length < 10) return null;
+  const first = Number(h[0].close);
+  const last = Number(h[h.length - 1].close);
+  const totalReturnPct = first > 0 ? ((last - first) / first) * 100 : null;
+  let peak = first;
+  let maxDrawdownPct = 0;
+  for (const q of h) {
+    const c = Number(q.close);
+    if (c > peak) peak = c;
+    const dd = peak > 0 ? ((peak - c) / peak) * 100 : 0;
+    if (dd > maxDrawdownPct) maxDrawdownPct = dd;
+  }
+  const years = 3;
+  const cagr = first > 0 && last > 0 ? (Math.pow(last / first, 1 / years) - 1) * 100 : null;
+  return {
+    totalReturnPct,
+    maxDrawdownPct,
+    cagr,
+    dataPoints: h.length,
+    startClose: first,
+    endClose: last,
+  };
+}
+
+function parseFundNumLoose(v) {
+  if (v == null) return null;
+  const n = parseFloat(String(v).replace(/[^\d.-]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function buildInvestmentPerspective(fundamentals, metrics) {
+  const lines = [];
+  const pe = parseFundNumLoose(fundamentals?.pe);
+  const fpe = parseFundNumLoose(fundamentals?.forwardPE);
+  const divy = parseFundNumLoose(fundamentals?.dividendYield);
+  if (metrics && metrics.totalReturnPct != null) {
+    lines.push(
+      `Roughly 3-year price return ≈ ${metrics.totalReturnPct.toFixed(1)}% (start-to-end). Estimated 3Y CAGR ≈ ${
+        metrics.cagr != null ? `${metrics.cagr.toFixed(1)}%` : 'n/a'
+      }.`,
+    );
+    lines.push(
+      `Within that window, max drawdown from a prior peak ≈ ${metrics.maxDrawdownPct.toFixed(1)}% (depth of largest dip from highs).`,
+    );
+  } else {
+    lines.push('Not enough 3-year price history to quantify return and drawdown — try again later or verify the symbol.');
+  }
+  if (pe != null) {
+    if (pe < 0 || pe > 200) {
+      lines.push(`Trailing P/E is unusual (${pe.toFixed(1)}); check earnings quality and one-offs.`);
+    } else if (pe > 40) {
+      lines.push(`Trailing P/E is elevated (~${pe.toFixed(1)}); valuation assumes strong growth — more sensitive to earnings misses.`);
+    } else if (pe < 12) {
+      lines.push(`Trailing P/E is relatively low (~${pe.toFixed(1)}); may reflect value or weak growth — compare with peers.`);
+    } else {
+      lines.push(`Trailing P/E near ${pe.toFixed(1)} — compare with sector peers and growth.`);
+    }
+  }
+  if (fpe != null && fpe > 0 && pe != null && pe > 0 && fpe < pe * 0.9) {
+    lines.push(`Forward P/E (${fpe.toFixed(1)}) is below trailing — consensus may expect higher forward earnings.`);
+  }
+  if (divy != null && divy > 2.5) {
+    lines.push(`Indicative dividend yield ~${divy.toFixed(1)}% — verify payout ratio and sustainability.`);
+  }
+  lines.push('Educational summary only — not investment advice. Use your own judgment and horizon.');
+  return lines;
+}
+
 /** Best-stock algorithm: rank top 150 losers by composite score.
  *  Uses: dip, 52W proximity (near low = more upside), liquidity, momentum, size, and related params. */
 function computeBestRanks(segmentData) {
@@ -1410,6 +1524,47 @@ app.post('/api/analyze', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/** Company profile, CEO, ownership hint, 3Y price stats + rule-based investment context (uses fundamentals when sent). */
+app.post('/api/stock-info', async (req, res) => {
+  try {
+    const stock = req.body?.stock;
+    const fundamentals = req.body?.fundamentals || {};
+    if (!stock || !stock.symbol) return res.status(400).json({ error: 'stock with symbol required' });
+    const market = stock.market || 'in';
+    const yfSymbol = toYahooSymbol(String(stock.symbol).toUpperCase(), market);
+    const [profileRaw, history] = await Promise.all([
+      fetchStockProfileForInfo(yfSymbol),
+      fetchHistorical(yfSymbol, 1095),
+    ]);
+    const metrics = computeThreeYearMetrics(history);
+    const fundSector = typeof fundamentals.sector === 'string' ? fundamentals.sector.trim() : '';
+    const profile = {
+      description: profileRaw?.description
+        || 'No company description returned (some listings have limited Yahoo profile data).',
+      sector: (profileRaw?.sector && profileRaw.sector !== '—' ? profileRaw.sector : null) || fundSector || '—',
+      industry: profileRaw?.industry || '—',
+      ceo: profileRaw?.ceo || '—',
+      website: profileRaw?.website || '',
+      ownershipLabel: inferOwnershipLabel(
+        profileRaw?.description || '',
+        profileRaw?.sector || fundSector,
+        profileRaw?.industry,
+        stock.name,
+      ),
+    };
+    const perspective = buildInvestmentPerspective(fundamentals, metrics);
+    res.json({
+      symbol: yfSymbol,
+      profile,
+      threeYear: metrics,
+      perspective,
+    });
+  } catch (err) {
+    console.error('[stock-info]', err);
+    res.status(500).json({ error: err.message || 'stock_info_failed' });
   }
 });
 

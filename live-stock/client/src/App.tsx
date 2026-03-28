@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import * as XLSX from 'xlsx';
 import StockSearchPanel from './components/StockSearchPanel';
@@ -168,6 +168,10 @@ function kiteHeaders(creds: { apiKey: string; secret: string; accessToken: strin
   return h;
 }
 
+function kiteHoldingKey(h: { tradingsymbol: string; exchange: string }) {
+  return `${String(h.exchange || '').trim()}-${String(h.tradingsymbol || '').trim()}`;
+}
+
 function parsePriceLike(v: unknown): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   const s = String(v ?? '').replace(/[^\d.-]/g, '').trim();
@@ -279,6 +283,27 @@ type Analysis = {
 };
 
 type TabType = 'fundamentals' | 'chart' | 'proscons';
+
+type StockInfoResponse = {
+  symbol?: string;
+  profile: {
+    description: string;
+    sector: string;
+    industry: string;
+    ceo: string;
+    website: string;
+    ownershipLabel: string;
+  };
+  threeYear: {
+    totalReturnPct: number | null;
+    maxDrawdownPct: number;
+    cagr: number | null;
+    dataPoints: number;
+    startClose: number;
+    endClose: number;
+  } | null;
+  perspective: string[];
+};
 type ChartPeriod = '7d' | '1m' | '1y' | '3y' | '5y';
 
 const CHART_PERIOD_LABELS: Record<ChartPeriod, string> = {
@@ -446,6 +471,39 @@ function StockItem({
   const currency = stock.market === 'us' ? '$' : '₹';
   const history = chartData ?? stock.history ?? [];
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; close: number } | null>(null);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoLoading, setInfoLoading] = useState(false);
+  const [infoError, setInfoError] = useState<string | null>(null);
+  const [infoData, setInfoData] = useState<StockInfoResponse | null>(null);
+
+  useEffect(() => {
+    if (!expanded) {
+      setInfoOpen(false);
+      setInfoError(null);
+      setInfoData(null);
+    }
+  }, [expanded]);
+
+  const openStockInfo = (e: MouseEvent) => {
+    e.stopPropagation();
+    setInfoOpen(true);
+    setInfoLoading(true);
+    setInfoError(null);
+    setInfoData(null);
+    fetch(`${API}/stock-info`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stock, fundamentals: fundamentals ?? {} }),
+    })
+      .then(async (r) => {
+        const d = (await r.json().catch(() => ({}))) as StockInfoResponse & { error?: string };
+        if (!r.ok) throw new Error(d.error || 'Failed to load info');
+        if (d.error) throw new Error(d.error);
+        setInfoData(d);
+      })
+      .catch((err: Error) => setInfoError(err.message))
+      .finally(() => setInfoLoading(false));
+  };
 
   const isSearchPinned = stock.rank === 0 || String(stock.segment || '').startsWith('search-');
   const isSearchHighlighted = isSearchPinned && highlightedSearchId === `${stock.symbol}-${stock.segment}`;
@@ -542,6 +600,19 @@ function StockItem({
                 <circle cx="12" cy="12" r="10" />
                 <path d="M8 12h8" />
                 <path d="M12 8v8" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`icon-btn stock-info-icon-btn ${infoOpen ? 'active' : ''}`}
+              onClick={openStockInfo}
+              title="Company profile, CEO, ownership, 3Y context"
+              aria-label="Stock info"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 16v-4" />
+                <path d="M12 8h.01" />
               </svg>
             </button>
           </div>
@@ -673,6 +744,104 @@ function StockItem({
             ) : null
           )}
           </div>
+          {infoOpen && (
+            <div
+              className="stock-info-modal-root"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Stock information"
+              onClick={() => setInfoOpen(false)}
+            >
+              <div className="stock-info-modal-inner" onClick={(e) => e.stopPropagation()}>
+                <div className="stock-info-modal-header">
+                  <h3 className="stock-info-modal-title">{displayName || stock.symbol}</h3>
+                  <button type="button" className="stock-info-modal-close" onClick={() => setInfoOpen(false)} aria-label="Close">
+                    ×
+                  </button>
+                </div>
+                <div className="stock-info-modal-body">
+                  {infoLoading && <p className="loading">Loading profile &amp; 3-year context…</p>}
+                  {infoError && <p className="stock-info-modal-error">{stripErrorUrl(infoError)}</p>}
+                  {!infoLoading && !infoError && infoData && (
+                    <>
+                      <section className="stock-info-section">
+                        <h4>Company profile</h4>
+                        <p className="stock-info-prose">{infoData.profile.description}</p>
+                      </section>
+                      <section className="stock-info-section stock-info-meta-grid">
+                        <div>
+                          <span className="stock-info-k">CEO / leadership</span>
+                          <span className="stock-info-v">{infoData.profile.ceo || '—'}</span>
+                        </div>
+                        <div>
+                          <span className="stock-info-k">Sector</span>
+                          <span className="stock-info-v">{infoData.profile.sector}</span>
+                        </div>
+                        <div>
+                          <span className="stock-info-k">Industry</span>
+                          <span className="stock-info-v">{infoData.profile.industry}</span>
+                        </div>
+                        <div>
+                          <span className="stock-info-k">Ownership (heuristic)</span>
+                          <span className="stock-info-v">{infoData.profile.ownershipLabel}</span>
+                        </div>
+                        {infoData.profile.website ? (
+                          <div className="stock-info-full-row">
+                            <span className="stock-info-k">Website</span>
+                            <a
+                              className="stock-info-link"
+                              href={infoData.profile.website.startsWith('http') ? infoData.profile.website : `https://${infoData.profile.website}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {infoData.profile.website}
+                            </a>
+                          </div>
+                        ) : null}
+                      </section>
+                      <section className="stock-info-section">
+                        <h4>3-year price fundamentals</h4>
+                        {infoData.threeYear ? (
+                          <ul className="stock-info-metric-list">
+                            <li>
+                              Data points: {infoData.threeYear.dataPoints} daily closes (~3Y window)
+                            </li>
+                            <li>
+                              Start → end price: {currency}
+                              {infoData.threeYear.startClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })} →{' '}
+                              {currency}
+                              {infoData.threeYear.endClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </li>
+                            <li>
+                              Total return (approx.):{' '}
+                              {infoData.threeYear.totalReturnPct != null
+                                ? `${infoData.threeYear.totalReturnPct.toFixed(1)}%`
+                                : '—'}
+                            </li>
+                            <li>Estimated CAGR (3Y): {infoData.threeYear.cagr != null ? `${infoData.threeYear.cagr.toFixed(1)}%` : '—'}</li>
+                            <li>Max drawdown from peak in window: {infoData.threeYear.maxDrawdownPct.toFixed(1)}%</li>
+                          </ul>
+                        ) : (
+                          <p className="stock-info-muted">3-year history not available for this symbol.</p>
+                        )}
+                      </section>
+                      <section className="stock-info-section">
+                        <h4>Investment context (not advice)</h4>
+                        <p className="stock-info-muted stock-info-footnote">
+                          Uses 3-year prices and current fundamentals tab figures (P/E, etc.) when loaded. Heuristic only.
+                        </p>
+                        <ul className="stock-info-perspective-list">
+                          {infoData.perspective.map((line, i) => (
+                            <li key={i}>{line}</li>
+                          ))}
+                        </ul>
+                      </section>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -836,6 +1005,9 @@ export default function App() {
   }>>([]);
   const [kiteHoldingsLoading, setKiteHoldingsLoading] = useState(false);
   const [kiteHoldingsError, setKiteHoldingsError] = useState<string | null>(null);
+  /** Portfolio tab: which Kite holdings count toward Invested / Current / P&L summary (default all). */
+  const [portfolioSelectionIds, setPortfolioSelectionIds] = useState<Set<string>>(() => new Set());
+  const portfolioSelectAllRef = useRef<HTMLInputElement>(null);
   const [bestSaleBySymbol, setBestSaleBySymbol] = useState<Record<string, BestSaleSignal>>({});
   const [kiteOrders, setKiteOrders] = useState<Array<{
     order_id: string;
@@ -1145,6 +1317,29 @@ export default function App() {
   }, [historyModalOpen, ordersModalTab, kiteForm.apiKey, kiteForm.accessToken]);
 
   useEffect(() => {
+    if (kiteHoldings.length === 0) {
+      setPortfolioSelectionIds(new Set());
+      return;
+    }
+    setPortfolioSelectionIds(new Set(kiteHoldings.map(kiteHoldingKey)));
+  }, [kiteHoldings]);
+
+  useEffect(() => {
+    const el = portfolioSelectAllRef.current;
+    if (!el) return;
+    const n = kiteHoldings.length;
+    if (n === 0) {
+      el.indeterminate = false;
+      return;
+    }
+    let sel = 0;
+    for (const h of kiteHoldings) {
+      if (portfolioSelectionIds.has(kiteHoldingKey(h))) sel += 1;
+    }
+    el.indeterminate = sel > 0 && sel < n;
+  }, [kiteHoldings, portfolioSelectionIds]);
+
+  useEffect(() => {
     if (!historyModalOpen || ordersModalTab !== 'portfolio') return;
     if (kiteHoldingsLoading || kiteHoldingsError || kiteHoldings.length === 0) return;
     let cancelled = false;
@@ -1172,6 +1367,21 @@ export default function App() {
     run();
     return () => { cancelled = true; };
   }, [historyModalOpen, ordersModalTab, kiteHoldingsLoading, kiteHoldingsError, kiteHoldings]);
+
+  const portfolioKiteSelectedHoldings = useMemo(
+    () => kiteHoldings.filter((h) => portfolioSelectionIds.has(kiteHoldingKey(h))),
+    [kiteHoldings, portfolioSelectionIds],
+  );
+  const portfolioKiteSummary = useMemo(() => {
+    const rows = portfolioKiteSelectedHoldings;
+    const invested = rows.reduce((s, h) => s + h.quantity * (h.average_price ?? 0), 0);
+    const value = rows.reduce((s, h) => s + h.quantity * (h.last_price ?? 0), 0);
+    const pnl = rows.reduce(
+      (s, h) => s + (h.pnl ?? h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0))),
+      0,
+    );
+    return { invested, value, pnl, selectedCount: rows.length };
+  }, [portfolioKiteSelectedHoldings]);
 
   const kiteConfigured = !!(kiteForm.apiKey && kiteForm.accessToken);
   const holdingsForAnalysis = analyseSource === 'xlsx' && xlsxHoldings.length > 0 ? xlsxHoldings : kiteHoldings;
@@ -2273,27 +2483,33 @@ export default function App() {
                 </div>
               ) : ordersModalTab === 'portfolio' ? (
                 <div className="portfolio-tab-wrapper">
-                  {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (() => {
-                    const invested = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.average_price ?? 0)), 0);
-                    const value = kiteHoldings.reduce((s, h) => s + (h.quantity * (h.last_price ?? 0)), 0);
-                    const pnl = kiteHoldings.reduce((s, h) => s + (h.pnl ?? (h.quantity * ((h.last_price ?? 0) - (h.average_price ?? 0)))), 0);
-                    return (
+                  {!kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0 && (
+                    <>
                       <div className="analyse-summary-bar">
                         <span className="analyse-summary-item">
                           <span className="analyse-summary-label">Invested</span>
-                          <span className="analyse-summary-value">₹{invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                          <span className="analyse-summary-value">
+                            ₹{portfolioKiteSummary.invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          </span>
                         </span>
                         <span className="analyse-summary-item">
                           <span className="analyse-summary-label">Current</span>
-                          <span className="analyse-summary-value">₹{value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                          <span className="analyse-summary-value">
+                            ₹{portfolioKiteSummary.value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          </span>
                         </span>
-                        <span className={`analyse-summary-item analyse-summary-pnl ${pnl >= 0 ? 'pnl-up' : 'pnl-down'}`}>
+                        <span
+                          className={`analyse-summary-item analyse-summary-pnl ${portfolioKiteSummary.pnl >= 0 ? 'pnl-up' : 'pnl-down'}`}
+                        >
                           <span className="analyse-summary-label">P&L</span>
-                          <span className="analyse-summary-value">{pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                          <span className="analyse-summary-value">
+                            {portfolioKiteSummary.pnl >= 0 ? '+' : ''}
+                            ₹{portfolioKiteSummary.pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          </span>
                         </span>
                       </div>
-                    );
-                  })()}
+                    </>
+                  )}
                   <div className="portfolio-scroll">
                   {kiteHoldingsLoading && !kiteHoldingsError ? (
                     <p className="orders-empty-msg">Loading portfolio...</p>
@@ -2311,9 +2527,48 @@ export default function App() {
                   ) : kiteHoldings.length === 0 ? (
                     <p className="orders-empty-msg">No holdings in your Kite portfolio.</p>
                   ) : (
-                    <ul className="proceed-history-list kite-holdings-list">
-                      {kiteHoldings.map((h, i) => (
-                        <li key={`${h.tradingsymbol}-${i}`} className="holding-item">
+                    <>
+                      <div className="portfolio-select-all-toolbar">
+                        <label className="portfolio-select-all-label">
+                          <input
+                            ref={portfolioSelectAllRef}
+                            type="checkbox"
+                            className="stock-select-cb"
+                            checked={
+                              kiteHoldings.length > 0 &&
+                              portfolioKiteSummary.selectedCount === kiteHoldings.length
+                            }
+                            onChange={(e) => {
+                              const on = e.target.checked;
+                              setPortfolioSelectionIds(on ? new Set(kiteHoldings.map(kiteHoldingKey)) : new Set());
+                            }}
+                          />
+                          <span>
+                            Select all ({portfolioKiteSummary.selectedCount} of {kiteHoldings.length})
+                          </span>
+                        </label>
+                      </div>
+                      <ul className="proceed-history-list kite-holdings-list">
+                      {kiteHoldings.map((h) => {
+                        const hk = kiteHoldingKey(h);
+                        return (
+                        <li key={hk} className="holding-item">
+                          <input
+                            type="checkbox"
+                            className="stock-select-cb"
+                            checked={portfolioSelectionIds.has(hk)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setPortfolioSelectionIds((prev) => {
+                                const next = new Set(prev);
+                                if (checked) next.add(hk);
+                                else next.delete(hk);
+                                return next;
+                              });
+                            }}
+                            aria-label={`Include ${h.tradingsymbol} in portfolio totals`}
+                          />
+                          <div className="holding-item-text">
                           <div className="holding-line1">
                             <span className="symbol">{h.tradingsymbol}</span>
                             <span className="exchange">{h.exchange}</span>
@@ -2341,9 +2596,12 @@ export default function App() {
                               </span>
                             )}
                           </div>
+                          </div>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>
+                    </>
                   )}
                   </div>
                 </div>
