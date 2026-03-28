@@ -34,5 +34,8 @@ export function textOverlayDefaults() {
     color: DEFAULT_TEXT_COLOR,
     animDirection: DEFAULT_ANIM_DIRECTION,
     fontWeight: "bold" as const,
+    posX: 50,
+    posY: 50,
+    widthPct: 92,
   };
 }

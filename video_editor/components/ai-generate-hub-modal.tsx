@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ChevronLeft,
   Loader2,
   MessageSquare,
   Mic2,
@@ -22,10 +23,14 @@ type ChatMsg = {
 };
 
 type Props = {
+  /** `modal` = centered overlay (legacy). `inline` = embedded editor page (no backdrop). */
+  layout?: "modal" | "inline";
   isOpen: boolean;
-  onClose: () => void;
+  onClose?: () => void;
+  /** Inline layout: return to preview / timeline */
+  onBackToPreview?: () => void;
   initialTab: AiHubTab;
-  onVideoGenerated: (videoUrl: string, prompt: string) => void;
+  onVideoGenerated: (videoUrl: string) => void;
   onAudioGenerated: (audioUrl: string, label: string, durationSec?: number) => void;
   /** Applies generated copy to the selected text layer or adds a new one */
   onTextApply: (text: string) => void;
@@ -87,8 +92,10 @@ function uid() {
 }
 
 export function AiGenerateHubModal({
+  layout = "modal",
   isOpen,
   onClose,
+  onBackToPreview,
   initialTab,
   onVideoGenerated,
   onAudioGenerated,
@@ -129,11 +136,14 @@ export function AiGenerateHubModal({
   const seededRef = useRef({ audio: false, video: false, text: false });
 
   useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen && layout === "modal") {
       seededRef.current = { audio: false, video: false, text: false };
       setAudioMessages([]);
       setVideoMessages([]);
       setTextMessages([]);
+      return;
+    }
+    if (!isOpen) {
       return;
     }
     if (tab === "audio" && !seededRef.current.audio) {
@@ -169,7 +179,7 @@ export function AiGenerateHubModal({
         },
       ]);
     }
-  }, [isOpen, tab]);
+  }, [isOpen, tab, layout]);
 
   const append = (
     setter: React.Dispatch<React.SetStateAction<ChatMsg[]>>,
@@ -341,7 +351,7 @@ export function AiGenerateHubModal({
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error ?? `Failed (${res.status})`);
         if (!data.videoUrl) throw new Error("No video URL");
-        onVideoGenerated(data.videoUrl, trimmed);
+        onVideoGenerated(data.videoUrl);
       } else {
         const res = await fetch("/api/ai/veo", {
           method: "POST",
@@ -357,7 +367,7 @@ export function AiGenerateHubModal({
           throw new Error((data?.error || `Veo failed (${res.status})`) + extra);
         }
         if (!data.videoUrl) throw new Error("No video URL from Veo");
-        onVideoGenerated(data.videoUrl, trimmed);
+        onVideoGenerated(data.videoUrl);
       }
       append(setVideoMessages, {
         id: uid(),
@@ -387,23 +397,42 @@ export function AiGenerateHubModal({
   const messages =
     tab === "audio" ? audioMessages : tab === "video" ? videoMessages : textMessages;
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-      <div className="flex h-[min(640px,90vh)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-5 w-5 text-slate-700" />
-            <h2 className="text-base font-semibold text-slate-900">AI studio</h2>
+  const shellClassName =
+    layout === "inline"
+      ? "flex h-full min-h-[min(560px,70vh)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+      : "flex h-[min(640px,90vh)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl";
+
+  const card = (
+    <div className={shellClassName}>
+        <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {layout === "inline" && onBackToPreview ? (
+              <button
+                type="button"
+                onClick={onBackToPreview}
+                disabled={busy !== null}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden />
+                Preview
+              </button>
+            ) : null}
+            <MessageSquare className="h-5 w-5 shrink-0 text-slate-700" />
+            <h2 className="truncate text-base font-semibold text-slate-900">
+              AI studio
+            </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy !== null}
-            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          {layout === "modal" && onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy !== null}
+              className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          ) : null}
         </div>
 
         <div className="flex border-b border-slate-200 px-2 pt-2">
@@ -687,6 +716,19 @@ export function AiGenerateHubModal({
           </div>
         </div>
       </div>
+  );
+
+  if (layout === "inline") {
+    return (
+      <div className="flex h-full min-h-0 w-full justify-center">
+        {card}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+      {card}
     </div>
   );
 }

@@ -2,34 +2,38 @@
 
 import {
   Clapperboard,
+  FileUp,
+  Images,
   LayoutTemplate,
-  MessageSquare,
-  Music2,
+  Monitor,
   Sparkles,
-  Type,
-  Upload,
 } from "lucide-react";
 
+export type EditorNavPanel =
+  | "canvas"
+  | "templates"
+  | "videos"
+  | "ai-studio"
+  | "gif-images"
+  | "files";
+
 type Props = {
-  onAddClip: () => void;
-  onAddText: () => void;
-  onOpenAiVideo: () => void;
-  onOpenAiMusic: () => void;
-  onOpenAiText: () => void;
-  onUploadAudio: () => void;
+  navPanel: EditorNavPanel;
+  onNavigate: (panel: EditorNavPanel) => void;
 };
 
+function navBtnClass(active: boolean) {
+  return `flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition ${
+    active
+      ? "border-violet-300 bg-violet-50 text-slate-900 ring-1 ring-violet-200"
+      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+  }`;
+}
+
 /**
- * Left rail inspired by Canva’s editor: grouped “Elements” with clear icons and soft cards.
+ * Each item opens its own full page in the main workspace (Preview = timeline player).
  */
-export function EditorSidebar({
-  onAddClip,
-  onAddText,
-  onOpenAiVideo,
-  onOpenAiMusic,
-  onOpenAiText,
-  onUploadAudio,
-}: Props) {
+export function EditorSidebar({ navPanel, onNavigate }: Props) {
   return (
     <aside className="flex w-[220px] shrink-0 flex-col border-r border-slate-200 bg-white">
       <div className="border-b border-slate-100 px-4 py-3">
@@ -40,122 +44,98 @@ export function EditorSidebar({
       <nav className="flex flex-col gap-2 p-3">
         <button
           type="button"
-          className="flex w-full cursor-not-allowed items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5 text-left text-sm text-slate-400"
-          title="Coming soon"
-          disabled
+          onClick={() => onNavigate("canvas")}
+          className={navBtnClass(navPanel === "canvas")}
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-200/60 text-slate-400">
-            <LayoutTemplate className="h-4 w-4" aria-hidden />
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-slate-600 to-slate-800 text-white shadow-sm">
+            <Monitor className="h-4 w-4" aria-hidden />
           </span>
           <span>
-            <span className="block font-medium text-slate-500">Templates</span>
-            <span className="text-xs text-slate-400">Soon</span>
+            <span className="block font-semibold text-slate-800">Preview</span>
+            <span className="text-xs text-slate-500">
+              Home (opens timeline if a video is open)
+            </span>
           </span>
         </button>
 
         <button
           type="button"
-          onClick={onAddClip}
-          className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+          onClick={() => onNavigate("templates")}
+          className={navBtnClass(navPanel === "templates")}
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-slate-400 to-slate-600 text-white shadow-sm">
+            <LayoutTemplate className="h-4 w-4" aria-hidden />
+          </span>
+          <span>
+            <span className="block font-semibold text-slate-800">Templates</span>
+            <span className="text-xs text-slate-500">Layouts (soon)</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onNavigate("videos")}
+          className={navBtnClass(navPanel === "videos")}
         >
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-sm">
             <Clapperboard className="h-4 w-4" aria-hidden />
           </span>
           <span>
-            <span className="block font-semibold text-slate-800">Video</span>
-            <span className="text-xs text-slate-500">Add clip to timeline</span>
+            <span className="block font-semibold text-slate-800">Videos</span>
+            <span className="text-xs text-slate-500">Your timeline clips</span>
           </span>
         </button>
 
         <button
           type="button"
-          onClick={onAddText}
-          className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+          onClick={() => onNavigate("ai-studio")}
+          className={navBtnClass(navPanel === "ai-studio")}
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-pink-500 to-rose-500 text-white shadow-sm">
-            <Type className="h-4 w-4" aria-hidden />
-          </span>
-          <span>
-            <span className="block font-semibold text-slate-800">Text</span>
-            <span className="text-xs text-slate-500">Labels &amp; titles</span>
-          </span>
-        </button>
-
-        <div className="px-0.5 pt-1">
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            AI studio
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={onOpenAiVideo}
-          className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-slate-50"
-        >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white shadow-md">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm">
             <Sparkles className="h-4 w-4" aria-hidden />
           </span>
           <span>
-            <span className="block font-semibold">AI video</span>
+            <span className="block font-semibold text-slate-800">AI studio</span>
             <span className="text-xs text-slate-500">
-              Chat + Replicate / Veo
+              Video, music &amp; text
             </span>
           </span>
         </button>
 
         <button
           type="button"
-          onClick={onUploadAudio}
-          className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+          onClick={() => onNavigate("gif-images")}
+          className={navBtnClass(navPanel === "gif-images")}
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
-            <Upload className="h-4 w-4" aria-hidden />
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-500 to-teal-600 text-white shadow-sm">
+            <Images className="h-4 w-4" aria-hidden />
           </span>
           <span>
-            <span className="block font-semibold text-slate-800">
-              Upload audio
-            </span>
-            <span className="text-xs text-slate-500">MP3, WAV…</span>
+            <span className="block font-semibold text-slate-800">GIF images</span>
+            <span className="text-xs text-slate-500">Giphy + Pexels</span>
           </span>
         </button>
 
         <button
           type="button"
-          onClick={onOpenAiMusic}
-          className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-slate-50"
+          onClick={() => onNavigate("files")}
+          className={navBtnClass(navPanel === "files")}
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-md">
-            <Music2 className="h-4 w-4" aria-hidden />
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
+            <FileUp className="h-4 w-4" aria-hidden />
           </span>
           <span>
-            <span className="block font-semibold">AI music</span>
-            <span className="text-xs text-slate-500">
-              Suno · vocals &amp; genre
-            </span>
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenAiText}
-          className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-800 transition hover:bg-slate-50"
-        >
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-800 text-white shadow-md">
-            <MessageSquare className="h-4 w-4" aria-hidden />
-          </span>
-          <span>
-            <span className="block font-semibold">AI text</span>
-            <span className="text-xs text-slate-500">
-              Chat copy · Groq
-            </span>
+            <span className="block font-semibold text-slate-800">Files</span>
+            <span className="text-xs text-slate-500">Upload audio &amp; video</span>
           </span>
         </button>
       </nav>
 
       <div className="mt-auto border-t border-slate-100 p-3">
         <p className="text-[10px] leading-relaxed text-slate-500">
-          AI studio uses a chat box for music (Suno), video, and text. Groq
-          key optional for text. Drag timeline blocks to move in time.
+          Open or create a video under Videos, then use AI studio, GIF images,
+          or Files to add layers — the timeline stays visible while a project is
+          open.
         </p>
       </div>
     </aside>

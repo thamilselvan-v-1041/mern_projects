@@ -1,30 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
-import { readFileSync } from "fs";
-import { join } from "path";
 
 function getReplicateToken(): string | undefined {
-  if (process.env.REPLICATE_API_TOKEN) {
-    return process.env.REPLICATE_API_TOKEN;
-  }
-  const possibleDirs = [
-    process.cwd(),
-    join(process.cwd(), ".."),
-    join(process.cwd(), "../.."),
-  ];
-  for (const dir of possibleDirs) {
-    for (const name of [".env", ".env.local"]) {
-      try {
-        const envPath = join(dir, name);
-        const content = readFileSync(envPath, "utf-8");
-        const match = content.match(/REPLICATE_API_TOKEN=([^\s#]+)/);
-        if (match) return match[1].trim();
-      } catch {
-        /* try next */
-      }
-    }
-  }
-  return undefined;
+  const t = process.env.REPLICATE_API_TOKEN?.trim();
+  return t || undefined;
 }
 
 /**

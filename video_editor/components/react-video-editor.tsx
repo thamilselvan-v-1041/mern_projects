@@ -23,36 +23,37 @@ import React, {
   useCallback,
   useMemo,
   useEffect,
+  useLayoutEffect,
 } from "react";
 import { Player, PlayerRef } from "@remotion/player";
+import { AbsoluteFill, Sequence } from "remotion";
+import { Copy, Link2, Pause, Play, Scissors, Trash2 } from "lucide-react";
+import { AiGenerateHubModal } from "./ai-generate-hub-modal";
 import {
-  AbsoluteFill,
-  Sequence,
-  Video,
-  Audio as RemotionAudio,
-} from "remotion";
-import {
-  Code2,
-  Copy,
-  Link2,
-  Scissors,
-  Trash2,
-} from "lucide-react";
-import {
-  AiGenerateHubModal,
-  type AiHubTab,
-} from "./ai-generate-hub-modal";
-import { EditorSidebar } from "./editor-sidebar";
+  EditorWorkspaceSidebar,
+  type WorkspaceNavPanel,
+} from "./editor-workspace-sidebar";
+import { VideosLibraryPanel } from "./videos-library-panel";
+import { MediaExplorerModal } from "./media-explorer-modal";
+import { FilesUploadPage } from "./files-upload-page";
+import { ToolsWorkspacePanel } from "./tools-workspace-panel";
+import { TextWorkspacePanel } from "./text-workspace-panel";
 import { TextOverlayLayer } from "./text-overlay-layer";
-import { TextDesignPanel } from "./text-design-panel";
 import { textOverlayDefaults } from "./text-animation-presets";
+import { ClipSequenceContent } from "./clip-sequence-content";
+import { AudioWithFades } from "./audio-with-fades";
+import { LayerPropertiesPanel } from "./layer-properties-panel";
+import { PreviewInteractionLayer } from "./preview-interaction-layer";
+import { computeVideoClipStackLayout } from "./timeline-video-stack-layout";
+import { getStoredProjectById, upsertStoredProject } from "@/lib/video-project-storage";
 
-import { Clip, TextOverlay, TimelineAudio } from "@/types/types";
+import { Clip, TextOverlay, TimelineAudio, type TextAnimationPreset } from "@/types/types";
 
 /** Pixels per frame — timeline scroll width scales with project length (KineMaster-style ruler). */
 const PX_PER_FRAME = 4;
-const TRACK_ROW_H = 48;
-const RULER_H = 28;
+/** Video/audio/text lane height (~33% shorter than original 48px). */
+const TRACK_ROW_H = Math.round(48 * (1 - 0.33));
+const RULER_H = Math.round(28 * (1 - 0.33));
 const VIDEO_TRACK_ROW = 0;
 /** Middle lane — mixed uploads + Suno (Remotion `<Audio />`). */
 const AUDIO_TRACK_ROW = 1;
@@ -61,8 +62,62 @@ const TEXT_TRACK_ROW = 2;
 const TIMELINE_GAP_PX = 2;
 const FPS = 30;
 const DEFAULT_UPLOAD_AUDIO_FRAMES = 30 * 15;
-const RESIZE_HANDLE_W = 8;
+const RESIZE_HANDLE_W = 6;
 const MAX_STRETCH_FRAMES = 30 * 120;
+
+const INSPECTOR_SECTION_LABEL: Record<WorkspaceNavPanel, string> = {
+  videos: "Videos & AI video",
+  audios: "Audios & AI music",
+  giffy: "GIF & stock media",
+  text: "Text layers",
+  tools: "Shapes & motion",
+  files: "File uploads",
+};
+
+function selectionInspectorTitle(
+  selected: { kind: "clip" | "text" | "audio"; id: string },
+  clip: Clip | null,
+  audio: TimelineAudio | null,
+): string {
+  if (selected.kind === "clip") {
+    if (!clip) return "Video clip";
+    if (clip.overlayClip)
+      return clip.mediaType === "image" ? "Image layer" : "GIF / stock";
+    if (clip.fromAI) return "AI video";
+    return "Video clip";
+  }
+  if (selected.kind === "text") return "Text layer";
+  if (selected.kind === "audio")
+    return audio?.label?.trim() || "Audio track";
+  return "Layer";
+}
+
+const MAX_UNDO = 80;
+
+type TimelineSnapshot = {
+  clips: Clip[];
+  textOverlays: TextOverlay[];
+  audioTracks: TimelineAudio[];
+};
+
+type ClipboardEntry =
+  | { kind: "clip"; data: Clip }
+  | { kind: "text"; data: TextOverlay }
+  | { kind: "audio"; data: TimelineAudio };
+
+function deepCloneSnapshot(s: TimelineSnapshot): TimelineSnapshot {
+  if (typeof structuredClone === "function") {
+    return structuredClone(s);
+  }
+  return JSON.parse(JSON.stringify(s)) as TimelineSnapshot;
+}
+
+function deepCloneLayer<T extends Clip | TextOverlay | TimelineAudio>(x: T): T {
+  if (typeof structuredClone === "function") {
+    return structuredClone(x);
+  }
+  return JSON.parse(JSON.stringify(x)) as T;
+}
 
 type TrackContextMenuState = {
   kind: "clip" | "audio" | "text";
@@ -153,15 +208,16 @@ TimelineMarker.displayName = "TimelineMarker";
  * - currentFrame: Current playback position
  * - isMobile: Mobile device detection
  */
-const ReactVideoEditor: React.FC = () => {
+const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   // State management
   const [clips, setClips] = useState<Clip[]>([]);
   const [textOverlays, setTextOverlays] = useState<TextOverlay[]>([]);
   const [totalDuration, setTotalDuration] = useState(1);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
-  const [aiHubOpen, setAiHubOpen] = useState(false);
-  const [aiHubTab, setAiHubTab] = useState<AiHubTab>("video");
+  const [navPanel, setNavPanel] = useState<WorkspaceNavPanel>("videos");
+  const [projectName, setProjectName] = useState("Untitled video");
+  const [loadError, setLoadError] = useState(false);
   const [audioTracks, setAudioTracks] = useState<TimelineAudio[]>([]);
   const [selected, setSelected] = useState<{
     kind: "clip" | "text" | "audio";
@@ -181,11 +237,81 @@ const ReactVideoEditor: React.FC = () => {
 
   // Refs
   const playerRef = useRef<PlayerRef>(null);
+  const previewWrapRef = useRef<HTMLDivElement>(null);
   const timelineScrollRef = useRef<HTMLDivElement>(null);
-  const audioFileInputRef = useRef<HTMLInputElement>(null);
+  const videoUploadInputRef = useRef<HTMLInputElement>(null);
+  const audioUploadInputRef = useRef<HTMLInputElement>(null);
   const trackMenuRef = useRef<HTMLDivElement | null>(null);
   /** Monotonic stack for AI clips so newer AI layers draw above older when overlapping. */
   const aiClipStackRef = useRef(0);
+  const mediaOverlayStackRef = useRef(0);
+
+  const undoStackRef = useRef<TimelineSnapshot[]>([]);
+  const redoStackRef = useRef<TimelineSnapshot[]>([]);
+  const clipboardRef = useRef<ClipboardEntry | null>(null);
+  const editorStateRef = useRef<TimelineSnapshot>({
+    clips: [],
+    textOverlays: [],
+    audioTracks: [],
+  });
+  const currentFrameRef = useRef(0);
+  const selectedRef = useRef<{
+    kind: "clip" | "text" | "audio";
+    id: string;
+  } | null>(null);
+  const keyActionsRef = useRef<{
+    pushUndo: () => void;
+    undo: () => void;
+    redo: () => void;
+    copySelected: () => void;
+    pasteAtPlayhead: () => void;
+    deleteSelected: () => void;
+  } | null>(null);
+
+  /** Avoid mounting Remotion Player before the preview box has real size (prevents NaN width in Player internals). */
+  const [previewPlayerReady, setPreviewPlayerReady] = useState(false);
+  const [previewIsPlaying, setPreviewIsPlaying] = useState(false);
+
+  editorStateRef.current = { clips, textOverlays, audioTracks };
+  currentFrameRef.current = currentFrame;
+  selectedRef.current = selected;
+
+  useLayoutEffect(() => {
+    const el = previewWrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const evaluate = () => {
+      const r = el.getBoundingClientRect();
+      const w = r.width;
+      const h = r.height;
+      const ok =
+        Number.isFinite(w) && Number.isFinite(h) && w >= 2 && h >= 2;
+      setPreviewPlayerReady(ok);
+    };
+
+    evaluate();
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(evaluate);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+    };
+  }, [navPanel, projectId]);
+
+  useEffect(() => {
+    const p = playerRef.current;
+    if (!p || !previewPlayerReady) return;
+    const onPlay = () => setPreviewIsPlaying(true);
+    const onPause = () => setPreviewIsPlaying(false);
+    p.addEventListener("play", onPlay);
+    p.addEventListener("pause", onPause);
+    setPreviewIsPlaying(p.isPlaying());
+    return () => {
+      p.removeEventListener("play", onPlay);
+      p.removeEventListener("pause", onPause);
+    };
+  }, [previewPlayerReady, totalDuration]);
 
   const trackWidthPx = useMemo(
     () => Math.max(960, totalDuration * PX_PER_FRAME + 240),
@@ -194,6 +320,11 @@ const ReactVideoEditor: React.FC = () => {
 
   const tracksBodyHeightPx = TRACK_ROW_H * 3;
   const playheadFullHeight = RULER_H + tracksBodyHeightPx;
+
+  const videoStackLayout = useMemo(
+    () => computeVideoClipStackLayout(clips, AUDIO_TRACK_ROW, TEXT_TRACK_ROW),
+    [clips]
+  );
 
   const timelineEnd = useCallback(() => {
     const items = [...clips, ...textOverlays, ...audioTracks];
@@ -205,8 +336,98 @@ const ReactVideoEditor: React.FC = () => {
     );
   }, [clips, textOverlays, audioTracks]);
 
+  const syncRefsFromClips = useCallback((loaded: Clip[]) => {
+    const ai = loaded.filter((c) => c.fromAI).map((c) => c.aiStackOrder ?? 0);
+    const ov = loaded
+      .filter((c) => c.overlayClip)
+      .map((c) => c.overlayOrder ?? 0);
+    aiClipStackRef.current = ai.length ? Math.max(...ai, 0) : 0;
+    mediaOverlayStackRef.current = ov.length ? Math.max(...ov, 0) : 0;
+  }, []);
+
+  const applySnapshot = useCallback(
+    (s: TimelineSnapshot) => {
+      setClips(s.clips);
+      setTextOverlays(s.textOverlays);
+      setAudioTracks(s.audioTracks);
+      syncRefsFromClips(s.clips);
+    },
+    [syncRefsFromClips]
+  );
+
+  const pushUndo = useCallback(() => {
+    const cur = editorStateRef.current;
+    undoStackRef.current.push(deepCloneSnapshot(cur));
+    if (undoStackRef.current.length > MAX_UNDO) {
+      undoStackRef.current.shift();
+    }
+    redoStackRef.current = [];
+  }, []);
+
+  const undo = useCallback(() => {
+    const past = undoStackRef.current.pop();
+    if (!past) return;
+    const cur = editorStateRef.current;
+    redoStackRef.current.push(deepCloneSnapshot(cur));
+    applySnapshot(past);
+    setSelected(null);
+    setTrackContextMenu(null);
+  }, [applySnapshot]);
+
+  const redo = useCallback(() => {
+    const future = redoStackRef.current.pop();
+    if (!future) return;
+    const cur = editorStateRef.current;
+    undoStackRef.current.push(deepCloneSnapshot(cur));
+    applySnapshot(future);
+    setSelected(null);
+    setTrackContextMenu(null);
+  }, [applySnapshot]);
+
+  const saveCurrentProjectToStorage = useCallback(() => {
+    upsertStoredProject({
+      id: projectId,
+      name: projectName.trim() || "Untitled video",
+      updatedAt: new Date().toISOString(),
+      clips,
+      textOverlays,
+      audioTracks,
+    });
+  }, [projectId, projectName, clips, textOverlays, audioTracks]);
+
+  useEffect(() => {
+    const p = getStoredProjectById(projectId);
+    if (!p) {
+      setLoadError(true);
+      return;
+    }
+    setLoadError(false);
+    setClips(p.clips);
+    setTextOverlays(p.textOverlays);
+    setAudioTracks(p.audioTracks);
+    setProjectName(p.name);
+    setCurrentFrame(0);
+    setSelected(null);
+    syncRefsFromClips(p.clips);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    clipboardRef.current = null;
+  }, [projectId, syncRefsFromClips]);
+
+  const exitToHub = useCallback(() => {
+    saveCurrentProjectToStorage();
+    window.location.href = "/";
+  }, [saveCurrentProjectToStorage]);
+
+  const goBackFromAuxPanel = useCallback(() => {
+    setNavPanel("videos");
+  }, []);
+
+  const ensureActiveProject = useCallback(() => {}, []);
+
   const insertAudioAtPlayhead = useCallback(
     (src: string, label: string, durationFrames: number) => {
+      ensureActiveProject();
       const insertFrame = currentFrame;
       const d = Math.max(1, durationFrames);
       const newAudio: TimelineAudio = {
@@ -231,7 +452,7 @@ const ReactVideoEditor: React.FC = () => {
       );
       setSelected({ kind: "audio", id: newAudio.id });
     },
-    [currentFrame]
+    [currentFrame, ensureActiveProject]
   );
 
   const onSunoGenerated = useCallback(
@@ -245,30 +466,69 @@ const ReactVideoEditor: React.FC = () => {
     [insertAudioAtPlayhead]
   );
 
-  const onAudioFileChange = useCallback(
+  const insertVideoFileAtPlayhead = useCallback(
+    (src: string, durationFrames: number) => {
+      ensureActiveProject();
+      const insertFrame = currentFrame;
+      const d = Math.max(1, durationFrames);
+      const newClip: Clip = {
+        id: `clip-file-${Date.now()}`,
+        start: insertFrame,
+        duration: d,
+        src,
+        row: VIDEO_TRACK_ROW,
+      };
+      setClips((prev) => [...prev, newClip]);
+      setSelected({ kind: "clip", id: newClip.id });
+    },
+    [currentFrame, ensureActiveProject]
+  );
+
+  const onMediaFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       e.target.value = "";
       if (!file) return;
       const url = URL.createObjectURL(file);
-      const label =
-        file.name.replace(/\.[^/.]+$/, "").slice(0, 48) || "Audio";
-      const el = document.createElement("audio");
-      el.preload = "metadata";
-      el.src = url;
-      el.onloadedmetadata = () => {
-        const sec = el.duration;
-        const frames =
-          Number.isFinite(sec) && sec > 0
-            ? Math.max(1, Math.round(sec * FPS))
-            : DEFAULT_UPLOAD_AUDIO_FRAMES;
-        insertAudioAtPlayhead(url, label, frames);
-      };
-      el.onerror = () => {
-        insertAudioAtPlayhead(url, label, DEFAULT_UPLOAD_AUDIO_FRAMES);
-      };
+
+      if (file.type.startsWith("video/")) {
+        const el = document.createElement("video");
+        el.preload = "metadata";
+        el.src = url;
+        el.onloadedmetadata = () => {
+          const sec = el.duration;
+          const frames =
+            Number.isFinite(sec) && sec > 0
+              ? Math.max(1, Math.round(sec * FPS))
+              : 200;
+          insertVideoFileAtPlayhead(url, frames);
+        };
+        el.onerror = () => {
+          insertVideoFileAtPlayhead(url, 200);
+        };
+        return;
+      }
+
+      if (file.type.startsWith("audio/")) {
+        const label =
+          file.name.replace(/\.[^/.]+$/, "").slice(0, 48) || "Audio";
+        const el = document.createElement("audio");
+        el.preload = "metadata";
+        el.src = url;
+        el.onloadedmetadata = () => {
+          const sec = el.duration;
+          const frames =
+            Number.isFinite(sec) && sec > 0
+              ? Math.max(1, Math.round(sec * FPS))
+              : DEFAULT_UPLOAD_AUDIO_FRAMES;
+          insertAudioAtPlayhead(url, label, frames);
+        };
+        el.onerror = () => {
+          insertAudioAtPlayhead(url, label, DEFAULT_UPLOAD_AUDIO_FRAMES);
+        };
+      }
     },
-    [insertAudioAtPlayhead]
+    [insertAudioAtPlayhead, insertVideoFileAtPlayhead]
   );
 
   /**
@@ -276,26 +536,37 @@ const ReactVideoEditor: React.FC = () => {
    * Automatically positions it after the last item
    * @function
    */
-  const addClip = () => {
-    const lastItem = timelineEnd();
-
-    const newClip: Clip = {
-      id: `clip-${clips.length + 1}`,
-      start: lastItem.start + lastItem.duration,
-      duration: 200,
-      src: "https://rwxrdxvxndclnqvznxfj.supabase.co/storage/v1/object/public/react-video-editor/open-source-video.mp4?t=2024-12-04T03%3A16%3A12.359Z",
-      row: VIDEO_TRACK_ROW,
-    };
-
-    setClips([...clips, newClip]);
-    setSelected({ kind: "clip", id: newClip.id });
-  };
+  const addClip = useCallback(() => {
+    ensureActiveProject();
+    const newId = `clip-${Date.now()}`;
+    setClips((prev) => {
+      const items = [...prev, ...textOverlays, ...audioTracks];
+      const lastItem =
+        items.length === 0
+          ? { start: 0, duration: 0 }
+          : items.reduce((latest, item) =>
+              item.start + item.duration > latest.start + latest.duration
+                ? item
+                : latest
+            );
+      const newClip: Clip = {
+        id: newId,
+        start: lastItem.start + lastItem.duration,
+        duration: 200,
+        src: "https://rwxrdxvxndclnqvznxfj.supabase.co/storage/v1/object/public/react-video-editor/open-source-video.mp4?t=2024-12-04T03%3A16%3A12.359Z",
+        row: VIDEO_TRACK_ROW,
+      };
+      return [...prev, newClip];
+    });
+    setSelected({ kind: "clip", id: newId });
+  }, [audioTracks, ensureActiveProject, textOverlays]);
 
   /**
    * Inserts an AI-generated video at the playhead. Does not shift other layers — overlaps allowed.
    * `fromAI` + `aiStackOrder` place AI above regular video in the preview stack.
    */
-  const insertAIClip = (videoUrl: string, _prompt: string) => {
+  const insertAIClip = useCallback((videoUrl: string) => {
+    ensureActiveProject();
     const insertFrame = currentFrame;
     const aiClipDuration = 90; // ~3 sec at 30fps (CogVideoX outputs ~2s, buffer for variance)
     aiClipStackRef.current += 1;
@@ -312,28 +583,108 @@ const ReactVideoEditor: React.FC = () => {
 
     setClips((prev) => [...prev, newClip]);
     setSelected({ kind: "clip", id: newClip.id });
-  };
+  }, [currentFrame, ensureActiveProject]);
+
+  /**
+   * Giphy / Pexels layer at playhead — stacks above base video like AI clips.
+   */
+  const insertExplorerClip = useCallback(
+    (src: string, opts: { label: string; mediaType: "video" | "image" }) => {
+      ensureActiveProject();
+      const insertFrame = currentFrame;
+      mediaOverlayStackRef.current += 1;
+      const durationFrames =
+        opts.mediaType === "image" ? 120 : 90;
+
+      const newClip: Clip = {
+        id: `clip-media-${Date.now()}`,
+        start: insertFrame,
+        duration: durationFrames,
+        src,
+        row: VIDEO_TRACK_ROW,
+        mediaType: opts.mediaType,
+        overlayClip: true,
+        overlayOrder: mediaOverlayStackRef.current,
+      };
+
+      setClips((prev) => [...prev, newClip]);
+      setSelected({ kind: "clip", id: newClip.id });
+    },
+    [currentFrame, ensureActiveProject]
+  );
 
   /**
    * Adds a new text overlay to the timeline
    * Automatically positions it after the last item
    * @function
    */
-  const addTextOverlay = () => {
-    const lastItem = timelineEnd();
+  const addTextOverlay = useCallback(() => {
+    ensureActiveProject();
+    const newId = `text-${Date.now()}`;
+    setTextOverlays((prev) => {
+      const items = [...clips, ...prev, ...audioTracks];
+      const lastItem =
+        items.length === 0
+          ? { start: 0, duration: 0 }
+          : items.reduce((latest, item) =>
+              item.start + item.duration > latest.start + latest.duration
+                ? item
+                : latest
+            );
+      const newOverlay: TextOverlay = {
+        id: newId,
+        start: lastItem.start + lastItem.duration,
+        duration: 100,
+        text: `Welcome to Video Editor`,
+        row: TEXT_TRACK_ROW,
+        ...textOverlayDefaults(),
+      };
+      return [...prev, newOverlay];
+    });
+    setSelected({ kind: "text", id: newId });
+  }, [audioTracks, clips, ensureActiveProject]);
 
-    const newOverlay: TextOverlay = {
-      id: `text-${textOverlays.length + 1}`,
-      start: lastItem.start + lastItem.duration,
-      duration: 100,
-      text: `Welcome to Video Editor`,
-      row: TEXT_TRACK_ROW,
-      ...textOverlayDefaults(),
-    };
-
-    setTextOverlays([...textOverlays, newOverlay]);
-    setSelected({ kind: "text", id: newOverlay.id });
-  };
+  const addShapeTextFromTools = useCallback(
+    (opts: {
+      shape: "rect" | "circle" | "pill";
+      fill: string;
+      stroke: string;
+      animation: TextAnimationPreset;
+      label: string;
+    }) => {
+      const newId = `text-${Date.now()}`;
+      setTextOverlays((prev) => {
+        const items = [...clips, ...prev, ...audioTracks];
+        const lastItem =
+          items.length === 0
+            ? { start: 0, duration: 0 }
+            : items.reduce((latest, item) =>
+                item.start + item.duration > latest.start + latest.duration
+                  ? item
+                  : latest
+              );
+        const newOverlay: TextOverlay = {
+          id: newId,
+          start: lastItem.start + lastItem.duration,
+          duration: 120,
+          text: opts.label,
+          row: TEXT_TRACK_ROW,
+          ...textOverlayDefaults(),
+          animation: opts.animation,
+          shapeBackground: opts.shape,
+          shapeFill: opts.fill,
+          shapeStroke: opts.stroke,
+          shapeStrokeWidthPx: 3,
+          shapePaddingRem: 0.85,
+          color: "#0f172a",
+        };
+        return [...prev, newOverlay];
+      });
+      setSelected({ kind: "text", id: newId });
+      setNavPanel("videos");
+    },
+    [audioTracks, clips]
+  );
 
   /**
    * Composition component for Remotion Player
@@ -348,29 +699,31 @@ const ReactVideoEditor: React.FC = () => {
         {[...clips]
           .sort((a, b) => {
             if (a.start !== b.start) return a.start - b.start;
-            if (!!a.fromAI !== !!b.fromAI) return a.fromAI ? 1 : -1;
-            return (a.aiStackOrder ?? 0) - (b.aiStackOrder ?? 0);
+            const za = a.fromAI
+              ? 200 + (a.aiStackOrder ?? 0)
+              : a.overlayClip
+                ? 200 + (a.overlayOrder ?? 0)
+                : 20;
+            const zb = b.fromAI
+              ? 200 + (b.aiStackOrder ?? 0)
+              : b.overlayClip
+                ? 200 + (b.overlayOrder ?? 0)
+                : 20;
+            return za - zb;
           })
           .map((item) => {
-            const zVideo =
-              (item.fromAI ? 200 : 20) + (item.aiStackOrder ?? 0);
+            const zVideo = item.fromAI
+              ? 200 + (item.aiStackOrder ?? 0)
+              : item.overlayClip
+                ? 200 + (item.overlayOrder ?? 0)
+                : 20;
             return (
               <Sequence
                 key={item.id}
                 from={item.start}
                 durationInFrames={item.duration}
               >
-                <AbsoluteFill style={{ zIndex: zVideo }}>
-                  <Video
-                    src={item.src}
-                    startFrom={item.trimStart ?? 0}
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                    }}
-                  />
-                </AbsoluteFill>
+                <ClipSequenceContent clip={item} zIndex={zVideo} />
               </Sequence>
             );
           })}
@@ -382,7 +735,7 @@ const ReactVideoEditor: React.FC = () => {
               from={item.start}
               durationInFrames={item.duration}
             >
-              <RemotionAudio src={item.src} startFrom={item.trimStart ?? 0} />
+              <AudioWithFades track={item} />
             </Sequence>
           ))}
         {[...textOverlays]
@@ -395,14 +748,22 @@ const ReactVideoEditor: React.FC = () => {
             >
               <AbsoluteFill style={{ zIndex: 5000, pointerEvents: "none" }}>
                 <TextOverlayLayer
-                text={item.text}
-                animation={item.animation}
-                animInFrames={item.animInFrames}
-                fontSizeRem={item.fontSizeRem}
-                color={item.color}
-                animDirection={item.animDirection}
-                fontWeight={item.fontWeight}
-              />
+                  text={item.text}
+                  animation={item.animation}
+                  animInFrames={item.animInFrames}
+                  fontSizeRem={item.fontSizeRem}
+                  color={item.color}
+                  animDirection={item.animDirection}
+                  fontWeight={item.fontWeight}
+                  posX={item.posX}
+                  posY={item.posY}
+                  widthPct={item.widthPct}
+                  shapeBackground={item.shapeBackground}
+                  shapeFill={item.shapeFill}
+                  shapeStroke={item.shapeStroke}
+                  shapeStrokeWidthPx={item.shapeStrokeWidthPx}
+                  shapePaddingRem={item.shapePaddingRem}
+                />
               </AbsoluteFill>
             </Sequence>
           ))}
@@ -500,15 +861,25 @@ const ReactVideoEditor: React.FC = () => {
     [currentFrame, clips, textOverlays, audioTracks]
   );
 
-  const splitAtPlayhead = useCallback(() => {
-    if (!selected) return;
-    splitLayerAtPlayhead(selected.kind, selected.id);
-  }, [selected, splitLayerAtPlayhead]);
-
   const updateTextOverlay = useCallback(
     (id: string, patch: Partial<TextOverlay>) => {
       setTextOverlays((prev) =>
         prev.map((t) => (t.id === id ? { ...t, ...patch } : t))
+      );
+    },
+    []
+  );
+
+  const updateClip = useCallback((id: string, patch: Partial<Clip>) => {
+    setClips((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    );
+  }, []);
+
+  const updateAudioTrack = useCallback(
+    (id: string, patch: Partial<TimelineAudio>) => {
+      setAudioTracks((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, ...patch } : a))
       );
     },
     []
@@ -522,6 +893,7 @@ const ReactVideoEditor: React.FC = () => {
         updateTextOverlay(selected.id, { text: trimmed });
         return;
       }
+      ensureActiveProject();
       const lastItem = timelineEnd();
       const newOverlay: TextOverlay = {
         id: `text-${Date.now()}`,
@@ -534,20 +906,8 @@ const ReactVideoEditor: React.FC = () => {
       setTextOverlays((prev) => [...prev, newOverlay]);
       setSelected({ kind: "text", id: newOverlay.id });
     },
-    [selected, timelineEnd, updateTextOverlay]
+    [ensureActiveProject, selected, timelineEnd, updateTextOverlay]
   );
-
-  const deleteSelected = useCallback(() => {
-    if (!selected) return;
-    if (selected.kind === "clip") {
-      setClips((prev) => prev.filter((c) => c.id !== selected.id));
-    } else if (selected.kind === "audio") {
-      setAudioTracks((prev) => prev.filter((a) => a.id !== selected.id));
-    } else {
-      setTextOverlays((prev) => prev.filter((o) => o.id !== selected.id));
-    }
-    setSelected(null);
-  }, [selected]);
 
   const deleteLayerById = useCallback(
     (kind: "clip" | "audio" | "text", id: string) => {
@@ -575,12 +935,20 @@ const ReactVideoEditor: React.FC = () => {
           aiClipStackRef.current += 1;
           nextStack = aiClipStackRef.current;
         }
+        let nextOverlay = c.overlayOrder;
+        if (c.overlayClip) {
+          mediaOverlayStackRef.current += 1;
+          nextOverlay = mediaOverlayStackRef.current;
+        }
         const copy: Clip = {
           ...c,
           id: `clip-${Date.now()}`,
           start: c.start + c.duration + gap,
           ...(c.fromAI && nextStack !== undefined
             ? { aiStackOrder: nextStack }
+            : {}),
+          ...(c.overlayClip && nextOverlay !== undefined
+            ? { overlayOrder: nextOverlay }
             : {}),
         };
         setClips((prev) => [...prev, copy].sort((a, b) => a.start - b.start));
@@ -614,6 +982,183 @@ const ReactVideoEditor: React.FC = () => {
     },
     [clips, audioTracks, textOverlays]
   );
+
+  const copySelected = useCallback(() => {
+    const sel = selectedRef.current;
+    const { clips: cList, textOverlays: tList, audioTracks: aList } =
+      editorStateRef.current;
+    if (!sel) return;
+    if (sel.kind === "clip") {
+      const item = cList.find((x) => x.id === sel.id);
+      if (item) clipboardRef.current = { kind: "clip", data: deepCloneLayer(item) };
+      return;
+    }
+    if (sel.kind === "text") {
+      const item = tList.find((x) => x.id === sel.id);
+      if (item) clipboardRef.current = { kind: "text", data: deepCloneLayer(item) };
+      return;
+    }
+    const item = aList.find((x) => x.id === sel.id);
+    if (item) clipboardRef.current = { kind: "audio", data: deepCloneLayer(item) };
+  }, []);
+
+  const pasteAtPlayhead = useCallback(() => {
+    const entry = clipboardRef.current;
+    if (!entry) return;
+    pushUndo();
+    const at = Math.max(0, Math.floor(currentFrameRef.current));
+    if (entry.kind === "clip") {
+      const base = deepCloneLayer(entry.data);
+      const id = `clip-${Date.now()}`;
+      let next: Clip = { ...base, id, start: at };
+      if (next.fromAI) {
+        aiClipStackRef.current += 1;
+        next = { ...next, aiStackOrder: aiClipStackRef.current };
+      }
+      if (next.overlayClip) {
+        mediaOverlayStackRef.current += 1;
+        next = { ...next, overlayOrder: mediaOverlayStackRef.current };
+      }
+      setClips((prev) => [...prev, next].sort((a, b) => a.start - b.start));
+      setSelected({ kind: "clip", id });
+      return;
+    }
+    if (entry.kind === "text") {
+      const base = deepCloneLayer(entry.data);
+      const id = `text-${Date.now()}`;
+      const next: TextOverlay = { ...base, id, start: at };
+      setTextOverlays((prev) =>
+        [...prev, next].sort((a, b) => a.start - b.start)
+      );
+      setSelected({ kind: "text", id });
+      return;
+    }
+    const base = deepCloneLayer(entry.data);
+    const id = `audio-${Date.now()}`;
+    const next: TimelineAudio = { ...base, id, start: at };
+    setAudioTracks((prev) =>
+      [...prev, next].sort((a, b) => a.start - b.start)
+    );
+    setSelected({ kind: "audio", id });
+  }, [pushUndo]);
+
+  const deleteSelected = useCallback(() => {
+    const sel = selectedRef.current;
+    if (!sel) return;
+    pushUndo();
+    deleteLayerById(sel.kind, sel.id);
+  }, [pushUndo, deleteLayerById]);
+
+  keyActionsRef.current = {
+    pushUndo,
+    undo,
+    redo,
+    copySelected,
+    pasteAtPlayhead,
+    deleteSelected,
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const el = e.target;
+      if (
+        el instanceof HTMLElement &&
+        el.closest(
+          "input, textarea, select, [contenteditable=true], [contenteditable='']"
+        )
+      ) {
+        return;
+      }
+      const a = keyActionsRef.current;
+      if (!a) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        a.undo();
+        return;
+      }
+      if (mod && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        a.redo();
+        return;
+      }
+      if (mod && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        a.copySelected();
+        return;
+      }
+      if (mod && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        a.pasteAtPlayhead();
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedRef.current) {
+          e.preventDefault();
+          a.deleteSelected();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  /** Stop playback and jump the playhead to the selected layer’s start (preview + timeline cursor). */
+  useEffect(() => {
+    if (!selected) return;
+    let startFrame = 0;
+    if (selected.kind === "clip") {
+      const c = clips.find((x) => x.id === selected.id);
+      if (!c) return;
+      startFrame = c.start;
+    } else if (selected.kind === "text") {
+      const t = textOverlays.find((x) => x.id === selected.id);
+      if (!t) return;
+      startFrame = t.start;
+    } else {
+      const a = audioTracks.find((x) => x.id === selected.id);
+      if (!a) return;
+      startFrame = a.start;
+    }
+    const player = playerRef.current;
+    if (player) {
+      player.pause();
+      player.seekTo(startFrame);
+    }
+    setCurrentFrame(startFrame);
+  }, [selected, clips, textOverlays, audioTracks]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const sc = timelineScrollRef.current;
+    if (!sc || sc.clientWidth < 8) return;
+    let start = 0;
+    let durationFrames = 30;
+    if (selected.kind === "clip") {
+      const c = clips.find((x) => x.id === selected.id);
+      if (!c) return;
+      start = c.start;
+      durationFrames = c.duration;
+    } else if (selected.kind === "text") {
+      const t = textOverlays.find((x) => x.id === selected.id);
+      if (!t) return;
+      start = t.start;
+      durationFrames = t.duration;
+    } else {
+      const au = audioTracks.find((x) => x.id === selected.id);
+      if (!au) return;
+      start = au.start;
+      durationFrames = au.duration;
+    }
+    const leftPx = start * PX_PER_FRAME;
+    const barW = Math.max(durationFrames * PX_PER_FRAME - TIMELINE_GAP_PX, 48);
+    const center = leftPx + barW / 2;
+    const targetLeft = Math.max(0, center - sc.clientWidth / 2);
+    const raf = requestAnimationFrame(() => {
+      sc.scrollTo({ left: targetLeft, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [selected, clips, textOverlays, audioTracks]);
 
   const trimHeadAtPlayhead = useCallback(
     (kind: "clip" | "audio" | "text", id: string) => {
@@ -994,48 +1539,6 @@ const ReactVideoEditor: React.FC = () => {
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  // Effect to add initial clip and text overlay
-  useEffect(() => {
-    if (clips.length === 0 && textOverlays.length === 0) {
-      const initialClip: Clip = {
-        id: "clip-1",
-        start: 0,
-        duration: 200,
-        src: "https://rwxrdxvxndclnqvznxfj.supabase.co/storage/v1/object/public/react-video-editor/open-source-video.mp4?t=2024-12-04T03%3A16%3A12.359Z",
-        row: VIDEO_TRACK_ROW,
-      };
-
-      const initialTextOverlay: TextOverlay = {
-        id: "text-1",
-        start: 200,
-        duration: 100,
-        text: "Welcome to Video Editor",
-        row: TEXT_TRACK_ROW,
-        ...textOverlayDefaults(),
-      };
-
-      setClips([initialClip]);
-      setTextOverlays([initialTextOverlay]);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only demo seed
-  }, []);
-
-  const splitDisabled =
-    !selected ||
-    (() => {
-      const f = Math.floor(currentFrame);
-      if (selected.kind === "clip") {
-        const c = clips.find((x) => x.id === selected.id);
-        return !c || f <= c.start || f >= c.start + c.duration;
-      }
-      if (selected.kind === "audio") {
-        const a = audioTracks.find((x) => x.id === selected.id);
-        return !a || f <= a.start || f >= a.start + a.duration;
-      }
-      const t = textOverlays.find((x) => x.id === selected.id);
-      return !t || f <= t.start || f >= t.start + t.duration;
-    })();
-
   const contextActionFlags = useMemo(() => {
     const empty = {
       canSplit: false,
@@ -1156,132 +1659,318 @@ const ReactVideoEditor: React.FC = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-8 text-center text-slate-800">
+        <p className="max-w-sm text-sm text-slate-600">
+          This project is missing or the link is invalid. It may have been
+          deleted or opened from another browser profile.
+        </p>
+        <a
+          href="/"
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+        >
+          Back to projects
+        </a>
+      </div>
+    );
+  }
+
+  const selectedClip =
+    selected?.kind === "clip"
+      ? clips.find((c) => c.id === selected.id) ?? null
+      : null;
   const selectedTextOverlay =
     selected?.kind === "text"
       ? textOverlays.find((t) => t.id === selected.id) ?? null
       : null;
+  const selectedAudioTrack =
+    selected?.kind === "audio"
+      ? audioTracks.find((a) => a.id === selected.id) ?? null
+      : null;
 
   return (
-    <div className="flex min-h-screen w-full bg-white text-slate-800">
+    <div className="flex h-[100dvh] min-h-0 w-full overflow-hidden bg-white text-slate-800">
       <input
-        ref={audioFileInputRef}
+        ref={videoUploadInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        aria-hidden
+        onChange={onMediaFileChange}
+      />
+      <input
+        ref={audioUploadInputRef}
         type="file"
         accept="audio/*"
         className="hidden"
         aria-hidden
-        onChange={onAudioFileChange}
+        onChange={onMediaFileChange}
       />
-      <EditorSidebar
-        onAddClip={addClip}
-        onAddText={addTextOverlay}
-        onOpenAiVideo={() => {
-          setAiHubTab("video");
-          setAiHubOpen(true);
-        }}
-        onOpenAiMusic={() => {
-          setAiHubTab("audio");
-          setAiHubOpen(true);
-        }}
-        onOpenAiText={() => {
-          setAiHubTab("text");
-          setAiHubOpen(true);
-        }}
-        onUploadAudio={() => audioFileInputRef.current?.click()}
-      />
+      <EditorWorkspaceSidebar navPanel={navPanel} onNavigate={setNavPanel} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-1 items-center justify-center bg-white px-4 py-6">
-          <div className="w-full max-w-4xl rounded-xl border border-slate-200 bg-white p-5">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Canvas
-                </p>
-                <p className="text-sm text-slate-600">
-                  Select a text block to edit animations and typography on the
-                  right. AI video stacks above base layers when overlapping.
+      {/* Column 2: tool/source UI + timeline layer properties */}
+      <div className="flex w-[min(100%,380px)] shrink-0 flex-col border-r border-slate-200 bg-white min-h-0">
+        <div className="shrink-0 border-b border-slate-200 bg-white px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Inspector
+          </p>
+          <p className="truncate text-sm font-semibold text-slate-900">
+            {selected
+              ? selectionInspectorTitle(
+                  selected,
+                  selectedClip,
+                  selectedAudioTrack,
+                )
+              : INSPECTOR_SECTION_LABEL[navPanel]}
+          </p>
+          {selected ? (
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">
+              {INSPECTOR_SECTION_LABEL[navPanel]}
+            </p>
+          ) : null}
+        </div>
+
+        {navPanel !== "videos" ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-violet-50/50 px-3 py-2">
+            <span
+              className="min-w-0 max-w-[10rem] truncate text-xs font-semibold text-slate-800"
+              title={projectName.trim() || "Untitled video"}
+            >
+              {projectName.trim() || "Untitled"}
+            </span>
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setNavPanel("videos")}
+                className="inline-flex items-center rounded-md border border-violet-200 bg-white px-2 py-1 text-[11px] font-semibold text-violet-800 hover:bg-violet-50"
+              >
+                Videos
+              </button>
+              <button
+                type="button"
+                onClick={saveCurrentProjectToStorage}
+                className="inline-flex items-center rounded-md bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white hover:bg-slate-800"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/60">
+            {selected ? (
+              <div className="shrink-0 border-b border-violet-200 bg-white">
+                <div className="min-h-0 max-h-[min(52vh,520px)] overflow-y-auto">
+                  <LayerPropertiesPanel
+                    variant="embedded"
+                    shellClassName="border-t-0"
+                    selected={selected}
+                    clip={selectedClip}
+                    textOverlay={selectedTextOverlay}
+                    audioTrack={selectedAudioTrack}
+                    onUpdateClip={updateClip}
+                    onUpdateText={updateTextOverlay}
+                    onUpdateAudio={updateAudioTrack}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="shrink-0 border-b border-dashed border-slate-200 bg-slate-50/80 px-3 py-3">
+                <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                  Select a clip, text, or audio on the timeline or in the preview
+                  to edit it here.
                 </p>
               </div>
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
-                16:9
-              </span>
-            </div>
+            )}
+            {navPanel === "videos" ? (
+              <div className="flex min-h-0 flex-col">
+                <VideosLibraryPanel
+                  clips={clips}
+                  selectedClipId={
+                    selected?.kind === "clip" ? selected.id : null
+                  }
+                  fps={FPS}
+                  onSelectClip={(id) => setSelected({ kind: "clip", id })}
+                  onSeekToFrame={(frame) =>
+                    playerRef.current?.seekTo(frame)
+                  }
+                  onAddSampleVideo={addClip}
+                  onBackToPreview={exitToHub}
+                  backLabel="All projects"
+                />
+                <div className="shrink-0 border-t border-slate-200 bg-white px-3 py-3">
+                  <p className="mb-2 text-[11px] font-semibold text-slate-800">
+                    AI video
+                  </p>
+                  <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/80">
+                    <AiGenerateHubModal
+                      layout="inline"
+                      isOpen
+                      initialTab="video"
+                      onBackToPreview={goBackFromAuxPanel}
+                      onVideoGenerated={insertAIClip}
+                      onAudioGenerated={onSunoGenerated}
+                      onTextApply={applyAiTextToLayer}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {navPanel === "audios" ? (
+              <div className="min-h-0 bg-slate-50/60">
+                <AiGenerateHubModal
+                  layout="inline"
+                  isOpen
+                  initialTab="audio"
+                  onBackToPreview={goBackFromAuxPanel}
+                  onVideoGenerated={insertAIClip}
+                  onAudioGenerated={onSunoGenerated}
+                  onTextApply={applyAiTextToLayer}
+                />
+              </div>
+            ) : null}
+            {navPanel === "giffy" ? (
+              <div className="min-h-[min(50vh,400px)] overflow-hidden">
+                <MediaExplorerModal
+                  layout="page"
+                  isOpen
+                  onPick={insertExplorerClip}
+                  onBackToPreview={goBackFromAuxPanel}
+                />
+              </div>
+            ) : null}
+            {navPanel === "text" ? (
+              <TextWorkspacePanel onAddText={addTextOverlay} />
+            ) : null}
+            {navPanel === "tools" ? (
+              <ToolsWorkspacePanel
+                onAddToTimeline={addShapeTextFromTools}
+              />
+            ) : null}
+            {navPanel === "files" ? (
+              <FilesUploadPage
+                onBackToPreview={goBackFromAuxPanel}
+                onPickVideo={() => videoUploadInputRef.current?.click()}
+                onPickAudio={() => audioUploadInputRef.current?.click()}
+              />
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {/* Column 3: preview + timeline */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
+          <a
+            href="/"
+            className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            ← All projects
+          </a>
+          <input
+            type="text"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            className="min-w-[8rem] flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-900"
+            aria-label="Project name"
+          />
+          <button
+            type="button"
+            onClick={saveCurrentProjectToStorage}
+            className="inline-flex items-center rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+          >
+            Save
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col justify-center overflow-auto px-4 py-5">
+          <div className="mx-auto w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div
-              className="overflow-hidden rounded-lg border border-slate-200 bg-slate-100"
+              ref={previewWrapRef}
+              className="relative w-full min-w-px overflow-hidden rounded-lg border border-slate-200 bg-slate-100"
               style={{
-                aspectRatio: "16/9",
-                maxHeight: "min(52vh, 440px)",
+                aspectRatio: "16 / 9",
+                maxHeight: "min(56vh, 520px)",
+                minHeight: 200,
+                width: "100%",
               }}
             >
-              <Player
-                ref={playerRef}
-                component={Composition}
-                durationInFrames={Math.max(1, totalDuration)}
-                compositionWidth={1920}
-                compositionHeight={1080}
-                controls
-                fps={30}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                }}
-                renderLoading={() => (
-                  <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                    Loading preview…
-                  </div>
-                )}
-                inputProps={{}}
+              {previewPlayerReady ? (
+                <Player
+                  ref={playerRef}
+                  component={Composition}
+                  durationInFrames={Math.max(1, totalDuration)}
+                  compositionWidth={1920}
+                  compositionHeight={1080}
+                  controls={false}
+                  fps={30}
+                  acknowledgeRemotionLicense
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    minWidth: 0,
+                    minHeight: 0,
+                  }}
+                  renderLoading={() => (
+                    <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                      Loading preview…
+                    </div>
+                  )}
+                  inputProps={{}}
+                />
+              ) : (
+                <div className="flex min-h-[200px] w-full flex-1 items-center justify-center text-sm text-slate-500">
+                  Loading preview…
+                </div>
+              )}
+              <PreviewInteractionLayer
+                wrapRef={previewWrapRef}
+                currentFrame={currentFrame}
+                clips={clips}
+                textOverlays={textOverlays}
+                selected={selected}
+                onSelect={setSelected}
+                onPatchClip={(id, patch) => updateClip(id, patch)}
+                onPatchText={(id, patch) => updateTextOverlay(id, patch)}
               />
+              {selected?.kind === "audio" ? (
+                <div className="pointer-events-none absolute bottom-3 left-2 right-2 z-[35] rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-2 py-1.5 text-center text-[11px] font-medium text-emerald-900 shadow-sm">
+                  Audio selected — use the inspector column for volume and
+                  fades.
+                </div>
+              ) : null}
             </div>
-
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={splitAtPlayhead}
-                  disabled={splitDisabled}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Split selected layer at playhead"
-                >
-                  <Scissors className="h-4 w-4 text-violet-600" />
-                  Split
-                </button>
-                <button
-                  type="button"
-                  onClick={deleteSelected}
-                  disabled={!selected}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  title="Delete selected layer"
-                >
-                  <Trash2 className="h-4 w-4 text-red-500" />
-                  Delete
-                </button>
-              </div>
-              <a
-                href="https://github.com/reactvideoeditor/free-react-video-editor"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+            <div className="mt-3 flex items-center justify-center border-t border-slate-100 pt-3">
+              <button
+                type="button"
+                disabled={!previewPlayerReady}
+                onClick={() => playerRef.current?.toggle()}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-900 text-white shadow-md transition hover:scale-[1.03] hover:bg-slate-800 disabled:pointer-events-none disabled:opacity-40"
+                aria-label={previewIsPlaying ? "Pause preview" : "Play preview"}
               >
-                <Code2 className="h-3.5 w-3.5" />
-                Open source
-              </a>
+                {previewIsPlaying ? (
+                  <Pause
+                    className="h-5 w-5 shrink-0"
+                    fill="currentColor"
+                    aria-hidden
+                  />
+                ) : (
+                  <Play
+                    className="ml-0.5 h-5 w-5 shrink-0"
+                    fill="currentColor"
+                    aria-hidden
+                  />
+                )}
+              </button>
             </div>
           </div>
         </div>
 
         <div className="border-t border-slate-200 bg-white px-3 pb-4 pt-3">
           <div className="mx-auto flex max-w-[1600px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
-              <div>
-                <p className="text-xs font-semibold text-slate-800">
-                  Timeline
-                </p>
-                <p className="text-[11px] text-slate-500">
-                  Video blocks can overlap; AI clips (amber edge) stack on top in
-                  preview
-                </p>
-              </div>
+            <div className="flex items-center border-b border-slate-200 bg-white px-4 py-2.5">
+              <p className="text-xs font-semibold text-slate-800">Timeline</p>
             </div>
 
             <div className="flex min-h-[188px] w-full">
@@ -1368,6 +2057,21 @@ const ReactVideoEditor: React.FC = () => {
                           : clip.row === AUDIO_TRACK_ROW
                             ? AUDIO_TRACK_ROW
                             : VIDEO_TRACK_ROW;
+                      const stackSlot = videoStackLayout.get(clip.id) ?? {
+                        lane: 0,
+                        lanes: 1,
+                      };
+                      const stackGap = 2;
+                      const usableH = TRACK_ROW_H - 8;
+                      const barH = Math.max(
+                        7,
+                        (usableH - stackGap * (stackSlot.lanes - 1)) /
+                          stackSlot.lanes
+                      );
+                      const topOffset =
+                        row * TRACK_ROW_H +
+                        4 +
+                        stackSlot.lane * (barH + stackGap);
                       return (
                         <div
                           key={clip.id}
@@ -1384,7 +2088,11 @@ const ReactVideoEditor: React.FC = () => {
                               y: e.clientY,
                             });
                           }}
-                          className={`absolute z-20 flex overflow-hidden rounded-xl border-2 bg-gradient-to-br from-violet-500 to-purple-600 shadow-sm ${
+                          className={`absolute z-20 flex overflow-hidden rounded-xl border-2 shadow-sm ${
+                            clip.overlayClip
+                              ? "bg-gradient-to-br from-teal-500 to-cyan-600 ring-2 ring-teal-300/80 ring-offset-1 ring-offset-white"
+                              : "bg-gradient-to-br from-violet-500 to-purple-600"
+                          } ${
                             clip.fromAI
                               ? "ring-2 ring-amber-400/80 ring-offset-1 ring-offset-white"
                               : ""
@@ -1396,8 +2104,8 @@ const ReactVideoEditor: React.FC = () => {
                           style={{
                             left: clip.start * PX_PER_FRAME,
                             width: w,
-                            top: row * TRACK_ROW_H + 4,
-                            height: TRACK_ROW_H - 8,
+                            top: topOffset,
+                            height: barH,
                           }}
                         >
                           <button
@@ -1443,7 +2151,11 @@ const ReactVideoEditor: React.FC = () => {
                             }}
                           >
                             <span className="pointer-events-none text-center text-[10px] font-bold leading-tight text-white drop-shadow-sm">
-                              V{index + 1}
+                              {clip.overlayClip
+                                ? clip.mediaType === "image"
+                                  ? `I${index + 1}`
+                                  : `G${index + 1}`
+                                : `V${index + 1}`}
                             </span>
                           </div>
                           <button
@@ -1696,22 +2408,6 @@ const ReactVideoEditor: React.FC = () => {
         </div>
       </div>
 
-      {selectedTextOverlay ? (
-        <TextDesignPanel
-          overlay={selectedTextOverlay}
-          onUpdate={updateTextOverlay}
-        />
-      ) : null}
-
-      <AiGenerateHubModal
-        isOpen={aiHubOpen}
-        onClose={() => setAiHubOpen(false)}
-        initialTab={aiHubTab}
-        onVideoGenerated={insertAIClip}
-        onAudioGenerated={onSunoGenerated}
-        onTextApply={applyAiTextToLayer}
-      />
-
       {trackContextMenu ? (
         <div
           ref={trackMenuRef}
@@ -1815,9 +2511,10 @@ const ReactVideoEditor: React.FC = () => {
             type="button"
             role="menuitem"
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-700 hover:bg-red-50"
-            onClick={() =>
-              deleteLayerById(trackContextMenu.kind, trackContextMenu.id)
-            }
+            onClick={() => {
+              pushUndo();
+              deleteLayerById(trackContextMenu.kind, trackContextMenu.id);
+            }}
           >
             <Trash2 className="h-4 w-4 shrink-0" />
             Delete

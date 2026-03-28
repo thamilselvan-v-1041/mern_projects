@@ -24,6 +24,14 @@ type Props = Pick<
   | "color"
   | "animDirection"
   | "fontWeight"
+  | "posX"
+  | "posY"
+  | "widthPct"
+  | "shapeBackground"
+  | "shapeFill"
+  | "shapeStroke"
+  | "shapeStrokeWidthPx"
+  | "shapePaddingRem"
 >;
 
 /**
@@ -37,6 +45,14 @@ export const TextOverlayLayer: React.FC<Props> = ({
   color = DEFAULT_TEXT_COLOR,
   animDirection = "left",
   fontWeight = "bold",
+  posX = 50,
+  posY = 50,
+  widthPct = 92,
+  shapeBackground = "none",
+  shapeFill = "rgba(255,255,255,0.92)",
+  shapeStroke,
+  shapeStrokeWidthPx = 2,
+  shapePaddingRem = 0.75,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -212,22 +228,64 @@ export const TextOverlayLayer: React.FC<Props> = ({
     }
   }
 
+  const shapeRadius =
+    shapeBackground === "circle"
+      ? "50%"
+      : shapeBackground === "pill"
+        ? "9999px"
+        : shapeBackground === "rect"
+          ? "12px"
+          : undefined;
+
+  const shapeBoxStyle: React.CSSProperties | undefined =
+    shapeBackground !== "none"
+      ? {
+          padding: `${shapePaddingRem}rem`,
+          borderRadius: shapeRadius,
+          background: shapeFill,
+          border: shapeStroke
+            ? `${shapeStrokeWidthPx}px solid ${shapeStroke}`
+            : undefined,
+          boxSizing: "border-box",
+          width: shapeBackground === "circle" ? "min(42%, 320px)" : undefined,
+          aspectRatio: shapeBackground === "circle" ? "1" : undefined,
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+        }
+      : undefined;
+
+  const textEl = <h1 style={inner}>{displayText}</h1>;
+
   return (
     <div
       style={{
         position: "absolute",
-        top: "50%",
-        left: "50%",
+        left: `${posX}%`,
+        top: `${posY}%`,
         transform: "translate(-50%, -50%)",
-        width: "92%",
+        width: `${widthPct}%`,
         maxWidth: "1600px",
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
-        ...wrapper,
       }}
     >
-      <h1 style={inner}>{displayText}</h1>
+      <div
+        style={{
+          width: "100%",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          ...wrapper,
+        }}
+      >
+        {shapeBoxStyle ? (
+          <div style={shapeBoxStyle}>{textEl}</div>
+        ) : (
+          textEl
+        )}
+      </div>
     </div>
   );
 };

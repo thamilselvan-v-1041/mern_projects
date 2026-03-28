@@ -1,3 +1,13 @@
+/** Clip in/out transitions (sequence-local). */
+export type LayerTransitionPreset =
+  | "none"
+  | "fade"
+  | "slideLeft"
+  | "slideRight"
+  | "slideUp"
+  | "slideDown"
+  | "zoomIn";
+
 export interface Clip {
   id: string;
   start: number;
@@ -10,6 +20,21 @@ export interface Clip {
   fromAI?: boolean;
   /** Higher draws later (on top) among overlapping AI clips. */
   aiStackOrder?: number;
+  /** Horizontal anchor % (0–100), default 50. */
+  posX?: number;
+  /** Vertical anchor % (0–100), default 50. */
+  posY?: number;
+  /** Uniform scale around anchor, default 1. */
+  scale?: number;
+  transitionIn?: LayerTransitionPreset;
+  transitionOut?: LayerTransitionPreset;
+  /** Frames used for in and out transitions (each side), default 15. */
+  transitionFrames?: number;
+  /** `video` (default) = Remotion `Video`; `image` = `Img` (photos, GIF URL). */
+  mediaType?: "video" | "image";
+  /** Stacks above base clips (Giphy / stock photos), like AI overlays. */
+  overlayClip?: boolean;
+  overlayOrder?: number;
 }
 
 /** Preset intro animations (Canva-style). */
@@ -41,6 +66,19 @@ export interface TextOverlay {
   /** For pan / wipe. */
   animDirection?: "left" | "right" | "up" | "down";
   fontWeight?: "normal" | "bold" | "light";
+  /** Position % from left, default 50. */
+  posX?: number;
+  /** Position % from top, default 50. */
+  posY?: number;
+  /** Text box width % of frame, default 92. */
+  widthPct?: number;
+  /** Whiteboard-style fill behind text (Tools panel). */
+  shapeBackground?: "none" | "rect" | "circle" | "pill";
+  shapeFill?: string;
+  shapeStroke?: string;
+  shapeStrokeWidthPx?: number;
+  /** Inner padding around text inside the shape (rem). */
+  shapePaddingRem?: number;
 }
 
 /** @deprecated Use TimelineAudio for the editor timeline */
@@ -63,6 +101,10 @@ export interface TimelineAudio {
   row: number;
   /** Frames skipped at the start of the source (Remotion `startFrom`). */
   trimStart?: number;
+  /** Linear gain 0–1, default 1. */
+  volume?: number;
+  fadeInFrames?: number;
+  fadeOutFrames?: number;
 }
 
 export interface PexelsMedia {
