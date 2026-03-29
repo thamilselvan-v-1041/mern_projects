@@ -34,6 +34,7 @@ import {
   type WorkspaceNavPanel,
 } from "./editor-workspace-sidebar";
 import { VideosLibraryPanel } from "./videos-library-panel";
+import { AudiosLibraryPanel } from "./audios-library-panel";
 import { MediaExplorerModal } from "./media-explorer-modal";
 import { FilesUploadPage } from "./files-upload-page";
 import { ToolsWorkspacePanel } from "./tools-workspace-panel";
@@ -466,6 +467,32 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     [insertAudioAtPlayhead]
   );
 
+  const addSampleAudioToTimeline = useCallback(
+    (src: string, label: string, fallbackDurationSec: number) => {
+      const fallbackFrames = Math.max(
+        1,
+        Math.round(fallbackDurationSec * FPS)
+      );
+      const el = document.createElement("audio");
+      el.preload = "metadata";
+      el.crossOrigin = "anonymous";
+      el.src = src;
+      el.onloadedmetadata = () => {
+        const sec = el.duration;
+        const frames =
+          Number.isFinite(sec) && sec > 0
+            ? Math.max(1, Math.round(sec * FPS))
+            : fallbackFrames;
+        insertAudioAtPlayhead(src, label, frames);
+      };
+      el.onerror = () => {
+        insertAudioAtPlayhead(src, label, fallbackFrames);
+      };
+      el.load();
+    },
+    [FPS, insertAudioAtPlayhead]
+  );
+
   const insertVideoFileAtPlayhead = useCallback(
     (src: string, durationFrames: number) => {
       ensureActiveProject();
@@ -545,15 +572,15 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         items.length === 0
           ? { start: 0, duration: 0 }
           : items.reduce((latest, item) =>
-              item.start + item.duration > latest.start + latest.duration
-                ? item
+        item.start + item.duration > latest.start + latest.duration
+          ? item
                 : latest
-            );
-      const newClip: Clip = {
+    );
+    const newClip: Clip = {
         id: newId,
-        start: lastItem.start + lastItem.duration,
-        duration: 200,
-        src: "https://rwxrdxvxndclnqvznxfj.supabase.co/storage/v1/object/public/react-video-editor/open-source-video.mp4?t=2024-12-04T03%3A16%3A12.359Z",
+      start: lastItem.start + lastItem.duration,
+      duration: 200,
+      src: "https://rwxrdxvxndclnqvznxfj.supabase.co/storage/v1/object/public/react-video-editor/open-source-video.mp4?t=2024-12-04T03%3A16%3A12.359Z",
         row: VIDEO_TRACK_ROW,
       };
       return [...prev, newClip];
@@ -627,14 +654,14 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         items.length === 0
           ? { start: 0, duration: 0 }
           : items.reduce((latest, item) =>
-              item.start + item.duration > latest.start + latest.duration
-                ? item
+        item.start + item.duration > latest.start + latest.duration
+          ? item
                 : latest
-            );
-      const newOverlay: TextOverlay = {
+    );
+    const newOverlay: TextOverlay = {
         id: newId,
-        start: lastItem.start + lastItem.duration,
-        duration: 100,
+      start: lastItem.start + lastItem.duration,
+      duration: 100,
         text: `Welcome to Video Editor`,
         row: TEXT_TRACK_ROW,
         ...textOverlayDefaults(),
@@ -1660,7 +1687,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   }
 
   if (loadError) {
-    return (
+  return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-8 text-center text-slate-800">
         <p className="max-w-sm text-sm text-slate-600">
           This project is missing or the link is invalid. It may have been
@@ -1776,14 +1803,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                   />
                 </div>
               </div>
-            ) : (
-              <div className="shrink-0 border-b border-dashed border-slate-200 bg-slate-50/80 px-3 py-3">
-                <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                  Select a clip, text, or audio on the timeline or in the preview
-                  to edit it here.
-                </p>
-              </div>
-            )}
+            ) : null}
             {navPanel === "videos" ? (
               <div className="flex min-h-0 flex-col">
                 <VideosLibraryPanel
@@ -1819,16 +1839,37 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
               </div>
             ) : null}
             {navPanel === "audios" ? (
-              <div className="min-h-0 bg-slate-50/60">
-                <AiGenerateHubModal
-                  layout="inline"
-                  isOpen
-                  initialTab="audio"
-                  onBackToPreview={goBackFromAuxPanel}
-                  onVideoGenerated={insertAIClip}
-                  onAudioGenerated={onSunoGenerated}
-                  onTextApply={applyAiTextToLayer}
+              <div className="flex min-h-0 flex-col">
+                <AudiosLibraryPanel
+                  audioTracks={audioTracks}
+                  selectedAudioId={
+                    selected?.kind === "audio" ? selected.id : null
+                  }
+                  fps={FPS}
+                  onSelectAudio={(id) => setSelected({ kind: "audio", id })}
+                  onSeekToFrame={(frame) =>
+                    playerRef.current?.seekTo(frame)
+                  }
+                  onAddSampleAudio={addSampleAudioToTimeline}
+                  onBackToPreview={exitToHub}
+                  backLabel="All projects"
                 />
+                <div className="shrink-0 border-t border-slate-200 bg-white px-3 py-3">
+                  <p className="mb-2 text-[11px] font-semibold text-slate-800">
+                    AI music
+                  </p>
+                  <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/80">
+                    <AiGenerateHubModal
+                      layout="inline"
+                      isOpen
+                      initialTab="audio"
+                      onBackToPreview={goBackFromAuxPanel}
+                      onVideoGenerated={insertAIClip}
+                      onAudioGenerated={onSunoGenerated}
+                      onTextApply={applyAiTextToLayer}
+                    />
+                  </div>
+                </div>
               </div>
             ) : null}
             {navPanel === "giffy" ? (
@@ -1897,18 +1938,18 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
               }}
             >
               {previewPlayerReady ? (
-                <Player
-                  ref={playerRef}
-                  component={Composition}
-                  durationInFrames={Math.max(1, totalDuration)}
-                  compositionWidth={1920}
-                  compositionHeight={1080}
+              <Player
+                ref={playerRef}
+                component={Composition}
+                durationInFrames={Math.max(1, totalDuration)}
+                compositionWidth={1920}
+                compositionHeight={1080}
                   controls={false}
-                  fps={30}
+                fps={30}
                   acknowledgeRemotionLicense
-                  style={{
-                    width: "100%",
-                    height: "100%",
+                style={{
+                  width: "100%",
+                  height: "100%",
                     minWidth: 0,
                     minHeight: 0,
                   }}
@@ -1917,12 +1958,12 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                       Loading preview…
                     </div>
                   )}
-                  inputProps={{}}
-                />
+                inputProps={{}}
+              />
               ) : (
                 <div className="flex min-h-[200px] w-full flex-1 items-center justify-center text-sm text-slate-500">
                   Loading preview…
-                </div>
+            </div>
               )}
               <PreviewInteractionLayer
                 wrapRef={previewWrapRef}
@@ -1938,11 +1979,11 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                 <div className="pointer-events-none absolute bottom-3 left-2 right-2 z-[35] rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-2 py-1.5 text-center text-[11px] font-medium text-emerald-900 shadow-sm">
                   Audio selected — use the inspector column for volume and
                   fades.
-                </div>
+          </div>
               ) : null}
-            </div>
+        </div>
             <div className="mt-3 flex items-center justify-center border-t border-slate-100 pt-3">
-              <button
+            <button
                 type="button"
                 disabled={!previewPlayerReady}
                 onClick={() => playerRef.current?.toggle()}
@@ -1962,7 +2003,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                     aria-hidden
                   />
                 )}
-              </button>
+            </button>
             </div>
           </div>
         </div>
@@ -1998,8 +2039,8 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                   style={{ height: TRACK_ROW_H }}
                 >
                   Text
-                </div>
-              </div>
+          </div>
+        </div>
 
               <div
                 ref={timelineScrollRef}
@@ -2037,7 +2078,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                   >
                     <div
                       className="pointer-events-none absolute inset-0 z-0"
-                      style={{
+                style={{
                         backgroundImage: [
                           `linear-gradient(to bottom, transparent ${TRACK_ROW_H - 1}px, rgba(226,232,240,0.9) ${TRACK_ROW_H - 1}px, rgba(226,232,240,0.9) ${TRACK_ROW_H}px, transparent ${TRACK_ROW_H}px)`,
                           `linear-gradient(to bottom, transparent ${TRACK_ROW_H * 2 - 1}px, rgba(226,232,240,0.9) ${TRACK_ROW_H * 2 - 1}px, rgba(226,232,240,0.9) ${TRACK_ROW_H * 2}px, transparent ${TRACK_ROW_H * 2}px)`,
@@ -2157,7 +2198,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                                   : `G${index + 1}`
                                 : `V${index + 1}`}
                             </span>
-                          </div>
+                  </div>
                           <button
                             type="button"
                             aria-label="Resize clip end"
@@ -2177,7 +2218,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               });
                             }}
                           />
-                        </div>
+                </div>
                       );
                     })}
                     {audioTracks.map((track, index) => {
@@ -2300,7 +2341,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             : TEXT_TRACK_ROW;
                       return (
                         <div
-                          key={overlay.id}
+                    key={overlay.id}
                           role="group"
                           aria-label={`Text ${index + 1}`}
                           onContextMenu={(e) => {
@@ -2371,7 +2412,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             <span className="pointer-events-none text-center text-[10px] font-bold leading-tight text-white drop-shadow-sm">
                               T{index + 1}
                             </span>
-                          </div>
+              </div>
                           <button
                             type="button"
                             aria-label="Resize text end"
@@ -2391,20 +2432,20 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               });
                             }}
                           />
-                        </div>
+            </div>
                       );
                     })}
-                  </div>
+          </div>
 
-                  <TimelineMarker
-                    currentFrame={currentFrame}
+          <TimelineMarker
+            currentFrame={currentFrame}
                     pxPerFrame={PX_PER_FRAME}
                     heightPx={playheadFullHeight}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
+          />
+        </div>
+      </div>
+      </div>
+    </div>
         </div>
       </div>
 
@@ -2414,7 +2455,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
           role="menu"
           aria-label="Track actions"
           className="fixed z-[200] min-w-[12.5rem] overflow-hidden rounded-xl border border-slate-200/90 bg-white py-1 text-sm shadow-[0_16px_48px_rgba(15,23,42,0.15)] ring-1 ring-slate-900/5"
-          style={{
+      style={{
             left: Math.min(
               trackContextMenu.x,
               typeof window !== "undefined"

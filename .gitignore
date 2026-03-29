@@ -2,7 +2,15 @@
 Llama_local/
 new-live-stock/
 
+# Environment variables & secrets (monorepo-wide; allow only root .env.example templates)
+.env
+.env.local
+.env.local.example
+.env.*
+!.env.example
+.envrc
+.direnv/
+
 daily-trends/node_modules/
 daily-trends/dist/
 daily-trends/vite.config.js
-daily-trends/.env.local
