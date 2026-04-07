@@ -1367,6 +1367,292 @@
   min-width: 0;
 }
 
+.financials-merged-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.stock-detail-content .financials-accordion {
+  border: 1px solid #e8eaef;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.stock-detail-content .financials-accordion--open {
+  border-color: #dce0e8;
+  box-shadow: none;
+}
+
+.financials-accordion-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #18181b;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.financials-accordion--open .financials-accordion-header {
+  border-bottom-color: #e8eaef;
+  background: #fafafa;
+}
+
+.financials-accordion-header:hover {
+  background: #e4e4e7;
+}
+
+.financials-accordion-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.financials-accordion-chevron {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: 0.65rem;
+  line-height: 1;
+  color: #52525b;
+  transform: rotate(0deg);
+  transition: transform 0.2s ease;
+}
+
+.financials-accordion-chevron--open {
+  transform: rotate(90deg);
+}
+
+.financials-accordion-body {
+  padding: 0.65rem 0.65rem 0.75rem;
+  background: #fff;
+  border-top: 1px solid #eceef3;
+}
+
+/* Info popup: lighter table / card outlines */
+.history-modal-content.gold-modal-content .quarterly-profit-table-wrap {
+  border-color: #e8eaef;
+}
+
+.history-modal-content.gold-modal-content .quarterly-profit-table th,
+.history-modal-content.gold-modal-content .quarterly-profit-table td {
+  border-bottom-color: #eceef3;
+}
+
+.history-modal-content.gold-modal-content .quarterly-profit-table thead th {
+  background: #fafbfc;
+  border-bottom-color: #e8eaef;
+}
+
+.company-profile-table .profile-description-cell {
+  line-height: 1.45;
+  font-size: 0.82rem;
+  word-break: break-word;
+  max-width: none;
+}
+
+/* Profile uses quarterly-profit-table styles (numbers = right); override to left-aligned prose */
+.company-profile-wrap {
+  text-align: left;
+}
+
+.company-profile-wrap .company-profile-table th,
+.company-profile-wrap .company-profile-table td {
+  text-align: left;
+}
+
+.company-profile-wrap .company-profile-source {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  color: #71717a;
+}
+
+.company-profile-enrichment-summary {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #3f3f46;
+  background: #fafafa;
+  border: 1px solid #e8eaef;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.company-profile-enrichment-summary p {
+  margin: 0 0 0.45em;
+}
+
+.company-profile-enrichment-summary p:last-child {
+  margin-bottom: 0;
+}
+
+.company-profile-psu-note {
+  font-weight: 400;
+  color: #52525b;
+  font-size: 0.85em;
+}
+
+.company-profile-enrichment-md {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: #3f3f46;
+  vertical-align: top;
+  text-align: left;
+}
+
+.company-profile-enrichment-md ul {
+  margin: 0.25em 0 0;
+  padding-left: 1.1em;
+}
+
+.company-profile-enrichment-md li {
+  margin-bottom: 0.25em;
+}
+
+.financials-accordion-loading {
+  padding: 0.75rem 0 !important;
+  text-align: left !important;
+}
+
+.financials-report-md {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #3f3f46;
+}
+
+.financials-report-md h1,
+.financials-report-md h2,
+.financials-report-md h3,
+.financials-report-md h4 {
+  margin: 0.35rem 0 0.2rem;
+  padding: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #18181b;
+}
+
+.financials-report-md h1:first-child,
+.financials-report-md h2:first-child,
+.financials-report-md h3:first-child,
+.financials-report-md h4:first-child {
+  margin-top: 0;
+}
+
+.financials-report-md p {
+  margin: 0 0 0.5em;
+}
+
+.financials-report-md p:last-child {
+  margin-bottom: 0;
+}
+
+.financials-report-md ul,
+.financials-report-md ol {
+  margin: 0.35em 0 0.5em;
+  padding-left: 1.2em;
+}
+
+.financials-report-md strong {
+  font-weight: 600;
+  color: #18181b;
+}
+
+.quarterly-profit-panel {
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.quarterly-profit-heading {
+  margin: 0 0 0.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.quarterly-profit-heading--second {
+  margin-top: 1rem;
+}
+
+.quarterly-profit-sub {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  color: #71717a;
+}
+
+.quarterly-profit-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.quarterly-profit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.quarterly-profit-table th,
+.quarterly-profit-table td {
+  padding: 0.45rem 0.6rem;
+  text-align: right;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.quarterly-profit-table th:first-child,
+.quarterly-profit-table td:first-child {
+  text-align: left;
+}
+
+.quarterly-profit-table thead th {
+  font-weight: 600;
+  color: #52525b;
+  background: #f4f4f5;
+}
+
+.quarterly-profit-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.three-year-fundamentals-wrap,
+.three-year-fundamentals-table,
+.three-year-fundamentals-table th,
+.three-year-fundamentals-table td {
+  text-align: left;
+}
+
+.quarterly-profit-footnote {
+  margin: 0.75rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.quarterly-profit-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
+
 .fundamentals-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1415,7 +1701,7 @@
   min-height: 140px;
   width: 100%;
   max-width: 100%;
-  overflow: visible;
+  overflow-x: hidden;
 }
 
 .chart-period-btns {
@@ -1457,7 +1743,7 @@
   margin-bottom: 0.5rem;
   width: 100%;
   max-width: 100%;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .chart-tooltip {
@@ -1485,17 +1771,18 @@
 .mini-chart {
   display: flex;
   align-items: flex-end;
-  gap: 2px;
+  gap: 1px;
   height: 100px;
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .chart-bar {
   position: relative;
   flex: 1 1 0;
-  min-width: 1px;
+  min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
   background: linear-gradient(to top, #3b82f6, #60a5fa);
@@ -1552,7 +1839,7 @@
 .stock-info-modal-root {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: 500;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1571,6 +1858,11 @@
   border-radius: 12px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
   border: 1px solid #e4e4e7;
+}
+
+.stock-info-modal-inner--wide {
+  max-width: min(640px, 100vw - 2rem);
+  max-height: min(90vh, 720px);
 }
 
 .stock-info-modal-header {
@@ -3228,6 +3520,15 @@ table.gold-table {
   .chart-tooltip {
     font-size: 0.75rem;
     padding: 0.3rem 0.5rem;
+  }
+
+  .mini-chart {
+    gap: 0;
+  }
+
+  .chart-bar {
+    min-width: 0;
+    border-radius: 1px 1px 0 0;
   }
 
   .select-category-placeholder {

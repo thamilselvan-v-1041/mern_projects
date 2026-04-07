@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import * as XLSX from 'xlsx';
 import StockSearchPanel from './components/StockSearchPanel';
@@ -260,6 +261,8 @@ type Stock = {
   market?: string;
   /** Yahoo assetProfile sector when available */
   sector?: string;
+  /** India: public-sector heuristic from server (sector filter "PSU") */
+  isPSU?: boolean;
   weekChange?: number;
   monthChange?: number;
   history?: { date: string; close: number }[];
@@ -284,6 +287,29 @@ type Analysis = {
 
 type TabType = 'fundamentals' | 'chart' | 'proscons';
 
+type QuarterlyProfitRow = {
+  periodEnd: string;
+  label: string;
+  netIncome: number | null;
+  totalRevenue: number | null;
+  netIncomeDisplay: string;
+  totalRevenueDisplay: string;
+};
+
+type QuarterlyProfitPayload = {
+  symbol: string;
+  market: string;
+  quarters: QuarterlyProfitRow[];
+  annual: {
+    fiscalYearEnd: string;
+    label: string;
+    netIncome: number | null;
+    netIncomeDisplay: string;
+  }[];
+  disclaimer?: string;
+  error?: string;
+};
+
 type StockInfoResponse = {
   symbol?: string;
   profile: {
@@ -293,6 +319,12 @@ type StockInfoResponse = {
     ceo: string;
     website: string;
     ownershipLabel: string;
+    /** Groq (+ optional DuckDuckGo web search) */
+    psuStatus?: string;
+    psuNote?: string;
+    enrichmentSummary?: string;
+    enrichmentDetailsMarkdown?: string;
+    enrichmentSource?: string;
   };
   threeYear: {
     totalReturnPct: number | null;
@@ -428,6 +460,332 @@ function deriveBestSaleSignal(args: {
   };
 }
 
+type FinancialsSectionId =
+  | 'analysis'
+  | 'companyProfile'
+  | 'threeYear'
+  | 'quarterlyAnnual'
+  | 'fiscalYear';
+
+function FinancialsCollapsible({
+  title,
+  isOpen,
+  onToggle,
+  children,
+}: {
+  title: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`financials-accordion${isOpen ? ' financials-accordion--open' : ''}`}>
+      <button
+        type="button"
+        className="financials-accordion-header"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+      >
+        <span className="financials-accordion-title">{title}</span>
+        <span className={`financials-accordion-chevron${isOpen ? ' financials-accordion-chevron--open' : ''}`} aria-hidden>
+          ▸
+        </span>
+      </button>
+      {isOpen ? <div className="financials-accordion-body">{children}</div> : null}
+    </div>
+  );
+}
+
+function profileFieldDisplay(value: string | null | undefined, emptyLabel = 'Not available'): string {
+  const t = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!t || t === '—') return emptyLabel;
+  return t;
+}
+
+function profileDescriptionClamped(text: string, maxLen: number): { display: string; title: string } {
+  const full = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!full) return { display: 'Not available', title: '' };
+  if (full.length <= maxLen) return { display: full, title: full };
+  return {
+    display: `${full.slice(0, maxLen - 1).trim()}…`,
+    title: full,
+  };
+}
+
+function profileWebsiteLinkLabel(url: string): string {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    const host = u.hostname.replace(/^www\./i, '');
+    const path = u.pathname && u.pathname !== '/' ? u.pathname : '';
+    const s = path ? `${host}${path}` : host;
+    return s.length > 52 ? `${s.slice(0, 50)}…` : s;
+  } catch {
+    const s = raw.replace(/^https?:\/\//i, '');
+    return s.length > 52 ? `${s.slice(0, 50)}…` : s;
+  }
+}
+
+function StockFinancialsAccordionsPanel({
+  currency,
+  financialsOpenId,
+  toggleFinancials,
+  loadingFinancialsReport,
+  financialsReport,
+  loadingStockInfo,
+  stockInfo,
+  loadingQuarterlyProfit,
+  quarterlyProfit,
+}: {
+  currency: string;
+  financialsOpenId: FinancialsSectionId | null;
+  toggleFinancials: (id: FinancialsSectionId) => void;
+  loadingFinancialsReport: boolean;
+  financialsReport: string | null;
+  loadingStockInfo: boolean;
+  stockInfo: StockInfoResponse | null;
+  loadingQuarterlyProfit: boolean;
+  quarterlyProfit: QuarterlyProfitPayload | null;
+}) {
+  return (
+    <div className="financials-merged-panel">
+      <FinancialsCollapsible
+        title="Analysis"
+        isOpen={financialsOpenId === 'analysis'}
+        onToggle={() => toggleFinancials('analysis')}
+      >
+        {loadingFinancialsReport ? (
+          <div className="loading financials-accordion-loading">Generating analysis…</div>
+        ) : financialsReport ? (
+          <div className="financials-report-md">
+            <ReactMarkdown>{financialsReport}</ReactMarkdown>
+          </div>
+        ) : (
+          <p className="stock-info-muted">Report will appear after data loads.</p>
+        )}
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
+        title="Company profile"
+        isOpen={financialsOpenId === 'companyProfile'}
+        onToggle={() => toggleFinancials('companyProfile')}
+      >
+        {loadingStockInfo && !stockInfo ? (
+          <div className="loading financials-accordion-loading">Loading profile…</div>
+        ) : stockInfo ? (
+          <div className="quarterly-profit-table-wrap company-profile-wrap">
+            {stockInfo.profile.enrichmentSummary ? (
+              <div className="company-profile-enrichment-summary">
+                <ReactMarkdown>{stockInfo.profile.enrichmentSummary}</ReactMarkdown>
+              </div>
+            ) : null}
+            <table className="quarterly-profit-table company-profile-table">
+              <tbody>
+                <tr>
+                  <th scope="row">Description</th>
+                  <td className="profile-description-cell">
+                    {(() => {
+                      const { display, title } = profileDescriptionClamped(stockInfo.profile.description, 520);
+                      return (
+                        <span title={title || undefined}>{display}</span>
+                      );
+                    })()}
+                  </td>
+                </tr>
+                {stockInfo.profile.psuStatus ? (
+                  <tr>
+                    <th scope="row">PSU / public sector</th>
+                    <td title={stockInfo.profile.psuNote || undefined}>
+                      {stockInfo.profile.psuStatus}
+                      {stockInfo.profile.psuNote ? (
+                        <span className="company-profile-psu-note"> — {stockInfo.profile.psuNote}</span>
+                      ) : null}
+                    </td>
+                  </tr>
+                ) : null}
+                <tr>
+                  <th scope="row">CEO / leadership</th>
+                  <td>{profileFieldDisplay(stockInfo.profile.ceo)}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Sector</th>
+                  <td>{profileFieldDisplay(stockInfo.profile.sector)}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Industry</th>
+                  <td>{profileFieldDisplay(stockInfo.profile.industry)}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Ownership</th>
+                  <td>{profileFieldDisplay(stockInfo.profile.ownershipLabel)}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Website</th>
+                  <td>
+                    {stockInfo.profile.website ? (
+                      <a
+                        className="stock-info-link"
+                        href={
+                          stockInfo.profile.website.startsWith('http')
+                            ? stockInfo.profile.website
+                            : `https://${stockInfo.profile.website}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={stockInfo.profile.website}
+                      >
+                        {profileWebsiteLinkLabel(stockInfo.profile.website)}
+                      </a>
+                    ) : (
+                      <span className="stock-info-muted">Not available</span>
+                    )}
+                  </td>
+                </tr>
+                {stockInfo.profile.enrichmentDetailsMarkdown ? (
+                  <tr>
+                    <th scope="row">Other details</th>
+                    <td className="company-profile-enrichment-md">
+                      <ReactMarkdown>{stockInfo.profile.enrichmentDetailsMarkdown}</ReactMarkdown>
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="stock-info-muted">—</p>
+        )}
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
+        title="Quarterly & annual profit"
+        isOpen={financialsOpenId === 'quarterlyAnnual'}
+        onToggle={() => toggleFinancials('quarterlyAnnual')}
+      >
+        <div className="quarterly-profit-panel quarterly-profit-panel--embedded">
+          {loadingQuarterlyProfit ? (
+            <div className="loading financials-accordion-loading">Loading quarterly profit…</div>
+          ) : quarterlyProfit?.error ? (
+            <p className="quarterly-profit-error">{quarterlyProfit.error}</p>
+          ) : quarterlyProfit && quarterlyProfit.quarters.length === 0 && quarterlyProfit.annual.length === 0 ? (
+            <p className="stock-info-muted">No profit history returned for this symbol.</p>
+          ) : quarterlyProfit ? (
+            quarterlyProfit.quarters.length > 0 ? (
+              <div className="quarterly-profit-table-wrap">
+                <table className="quarterly-profit-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Quarter</th>
+                      <th scope="col">Revenue</th>
+                      <th scope="col">Net profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {quarterlyProfit.quarters.map((q) => (
+                      <tr key={q.periodEnd}>
+                        <td>{q.label}</td>
+                        <td>{q.totalRevenueDisplay}</td>
+                        <td>{q.netIncomeDisplay}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="stock-info-muted">No quarterly rows in the current data feed.</p>
+            )
+          ) : (
+            <p className="stock-info-muted">No profit data loaded.</p>
+          )}
+        </div>
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
+        title="Fiscal-year net profit (last 5 years)"
+        isOpen={financialsOpenId === 'fiscalYear'}
+        onToggle={() => toggleFinancials('fiscalYear')}
+      >
+        <div className="quarterly-profit-panel quarterly-profit-panel--embedded">
+          {loadingQuarterlyProfit ? (
+            <div className="loading financials-accordion-loading">Loading fiscal-year profit…</div>
+          ) : quarterlyProfit?.error ? (
+            <p className="quarterly-profit-error">{quarterlyProfit.error}</p>
+          ) : quarterlyProfit && quarterlyProfit.annual.length > 0 ? (
+            <div className="quarterly-profit-table-wrap">
+              <table className="quarterly-profit-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Year end</th>
+                    <th scope="col">Net profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quarterlyProfit.annual.map((a) => (
+                    <tr key={a.fiscalYearEnd}>
+                      <td>{a.label}</td>
+                      <td>{a.netIncomeDisplay}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : quarterlyProfit ? (
+            <p className="stock-info-muted">No annual net-profit rows in the current data feed.</p>
+          ) : (
+            <p className="stock-info-muted">No profit data loaded.</p>
+          )}
+        </div>
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
+        title="3 years price fundamentals"
+        isOpen={financialsOpenId === 'threeYear'}
+        onToggle={() => toggleFinancials('threeYear')}
+      >
+        {loadingStockInfo && !stockInfo ? (
+          <div className="loading financials-accordion-loading">Loading 3-year context…</div>
+        ) : stockInfo?.threeYear ? (
+          <div className="quarterly-profit-table-wrap three-year-fundamentals-wrap">
+            <table className="quarterly-profit-table three-year-fundamentals-table">
+              <tbody>
+                <tr>
+                  <th scope="row">Data points</th>
+                  <td>{stockInfo.threeYear.dataPoints} daily closes (~3Y window)</td>
+                </tr>
+                <tr>
+                  <th scope="row">Start → end price</th>
+                  <td>
+                    {currency}
+                    {stockInfo.threeYear.startClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })} → {currency}
+                    {stockInfo.threeYear.endClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Total return (approx.)</th>
+                  <td>{stockInfo.threeYear.totalReturnPct != null ? `${stockInfo.threeYear.totalReturnPct.toFixed(1)}%` : '—'}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Estimated CAGR (3Y)</th>
+                  <td>{stockInfo.threeYear.cagr != null ? `${stockInfo.threeYear.cagr.toFixed(1)}%` : '—'}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Max drawdown</th>
+                  <td>{stockInfo.threeYear.maxDrawdownPct.toFixed(1)}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : stockInfo ? (
+          <p className="stock-info-muted">3-year history not available for this symbol.</p>
+        ) : (
+          <p className="stock-info-muted">—</p>
+        )}
+      </FinancialsCollapsible>
+    </div>
+  );
+}
+
 function StockItem({
   stock,
   expanded,
@@ -447,16 +805,30 @@ function StockItem({
   showSelect,
   onClearSearchItem,
   highlightedSearchId,
+  quarterlyProfit,
+  loadingQuarterlyProfit,
+  stockInfo,
+  loadingStockInfo,
+  financialsReport,
+  loadingFinancialsReport,
+  onRequestFinancialsLoad,
 }: {
   stock: Stock;
   expanded: boolean;
   activeTab: TabType | null;
   onStockTap: () => void;
   onTabClick: (tab: TabType) => void;
+  onRequestFinancialsLoad: () => void;
   analysis: Analysis | null;
   loadingAnalysis: boolean;
   fundamentals: Record<string, string> | null;
   loadingFundamentals: boolean;
+  quarterlyProfit: QuarterlyProfitPayload | null;
+  loadingQuarterlyProfit: boolean;
+  stockInfo: StockInfoResponse | null;
+  loadingStockInfo: boolean;
+  financialsReport: string | null;
+  loadingFinancialsReport: boolean;
   chartData: { date: string; close: number }[] | null;
   chartPeriod: ChartPeriod;
   onChartPeriodChange: (period: ChartPeriod) => void;
@@ -471,39 +843,33 @@ function StockItem({
   const currency = stock.market === 'us' ? '$' : '₹';
   const history = chartData ?? stock.history ?? [];
   const [hoveredPoint, setHoveredPoint] = useState<{ date: string; close: number } | null>(null);
-  const [infoOpen, setInfoOpen] = useState(false);
-  const [infoLoading, setInfoLoading] = useState(false);
-  const [infoError, setInfoError] = useState<string | null>(null);
-  const [infoData, setInfoData] = useState<StockInfoResponse | null>(null);
+  const [financialsOpenId, setFinancialsOpenId] = useState<FinancialsSectionId | null>('analysis');
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
+  const toggleFinancials = (id: FinancialsSectionId) => {
+    setFinancialsOpenId((prev) => (prev === id ? null : id));
+  };
 
   useEffect(() => {
-    if (!expanded) {
-      setInfoOpen(false);
-      setInfoError(null);
-      setInfoData(null);
-    }
+    if (!infoModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setInfoModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [infoModalOpen]);
+
+  useEffect(() => {
+    if (!expanded) setInfoModalOpen(false);
   }, [expanded]);
 
-  const openStockInfo = (e: MouseEvent) => {
-    e.stopPropagation();
-    setInfoOpen(true);
-    setInfoLoading(true);
-    setInfoError(null);
-    setInfoData(null);
-    fetch(`${API}/stock-info`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stock, fundamentals: fundamentals ?? {} }),
-    })
-      .then(async (r) => {
-        const d = (await r.json().catch(() => ({}))) as StockInfoResponse & { error?: string };
-        if (!r.ok) throw new Error(d.error || 'Failed to load info');
-        if (d.error) throw new Error(d.error);
-        setInfoData(d);
-      })
-      .catch((err: Error) => setInfoError(err.message))
-      .finally(() => setInfoLoading(false));
-  };
+  useEffect(() => {
+    if (!infoModalOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [infoModalOpen]);
 
   const isSearchPinned = stock.rank === 0 || String(stock.segment || '').startsWith('search-');
   const isSearchHighlighted = isSearchPinned && highlightedSearchId === `${stock.symbol}-${stock.segment}`;
@@ -583,7 +949,7 @@ function StockItem({
             <button
               className={`icon-btn ${activeTab === 'chart' ? 'active' : ''}`}
               onClick={() => onTabClick('chart')}
-              title="Today & recent progress"
+              title="Chart"
               aria-label="Chart"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -604,10 +970,14 @@ function StockItem({
             </button>
             <button
               type="button"
-              className={`icon-btn stock-info-icon-btn ${infoOpen ? 'active' : ''}`}
-              onClick={openStockInfo}
-              title="Company profile, CEO, ownership, 3Y context"
-              aria-label="Stock info"
+              className={`icon-btn ${infoModalOpen ? 'active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRequestFinancialsLoad();
+                setInfoModalOpen(true);
+              }}
+              title="Info: profile, profit, AI analysis (opens in a window)"
+              aria-label="Info"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
@@ -618,44 +988,44 @@ function StockItem({
           </div>
           <div className="stock-detail-content">
             {activeTab === 'fundamentals' && (
-            fundamentals ? (
-              <div className="fundamentals-grid">
-                {[
-                  ['Price', fundamentals.price ?? '—', null],
-                  ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
-                  ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? inferCapType(stock, fundamentals) : stock.segmentName?.replace(/\s+Cap$/, '')],
-                  ['Volume', fundamentals.volume, null],
-                  ['Avg Volume', fundamentals.avgVolume, null],
-                  ['P/E', fundamentals.pe, null],
-                  ['Forward P/E', fundamentals.forwardPE, null],
-                  ['EPS', fundamentals.eps, null],
-                  ['Dividend Yield', fundamentals.dividendYield, null],
-                  ['Open', fundamentals.open, null],
-                ].map(([label, val, cap]) => (
-                  <div key={label} className="fund-row">
-                    <span className="fund-label">{label}</span>
-                    <span className="fund-value">
-                      {val}
-                      {cap && <span className="fund-cap-type"> ({cap})</span>}
-                    </span>
-                  </div>
-                ))}
-                <div className="fund-row-pair">
-                  <div className="fund-row fund-row-stack">
-                    <span className="fund-label">52W Low</span>
-                    <span className="fund-value">{fundamentals.fiftyTwoWeekLow ?? '—'}</span>
-                    <span className="fund-label">Day Range</span>
-                    <span className="fund-value">{fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—'}</span>
-                  </div>
-                  <div className="fund-row">
-                    <span className="fund-label">52W High</span>
-                    <span className="fund-value">{fundamentals.fiftyTwoWeekHigh ?? '—'}</span>
+              fundamentals ? (
+                <div className="fundamentals-grid">
+                  {[
+                    ['Price', fundamentals.price ?? '—', null],
+                    ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
+                    ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? inferCapType(stock, fundamentals) : stock.segmentName?.replace(/\s+Cap$/, '')],
+                    ['Volume', fundamentals.volume, null],
+                    ['Avg Volume', fundamentals.avgVolume, null],
+                    ['P/E', fundamentals.pe, null],
+                    ['Forward P/E', fundamentals.forwardPE, null],
+                    ['EPS', fundamentals.eps, null],
+                    ['Dividend Yield', fundamentals.dividendYield, null],
+                    ['Open', fundamentals.open, null],
+                  ].map(([label, val, cap]) => (
+                    <div key={label} className="fund-row">
+                      <span className="fund-label">{label}</span>
+                      <span className="fund-value">
+                        {val}
+                        {cap && <span className="fund-cap-type"> ({cap})</span>}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="fund-row-pair">
+                    <div className="fund-row fund-row-stack">
+                      <span className="fund-label">52W Low</span>
+                      <span className="fund-value">{fundamentals.fiftyTwoWeekLow ?? '—'}</span>
+                      <span className="fund-label">Day Range</span>
+                      <span className="fund-value">{fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—'}</span>
+                    </div>
+                    <div className="fund-row">
+                      <span className="fund-label">52W High</span>
+                      <span className="fund-value">{fundamentals.fiftyTwoWeekHigh ?? '—'}</span>
+                    </div>
                   </div>
                 </div>
-              </div>
               ) : loadingFundamentals ? (
-              <div className="loading">Loading fundamentals...</div>
-            ) : null
+                <div className="loading">Loading fundamentals...</div>
+              ) : null
             )}
             {activeTab === 'chart' && (
               <div className="chart-panel">
@@ -744,106 +1114,44 @@ function StockItem({
             ) : null
           )}
           </div>
-          {infoOpen && (
-            <div
-              className="stock-info-modal-root"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Stock information"
-              onClick={() => setInfoOpen(false)}
-            >
-              <div className="stock-info-modal-inner" onClick={(e) => e.stopPropagation()}>
-                <div className="stock-info-modal-header">
-                  <h3 className="stock-info-modal-title">{displayName || stock.symbol}</h3>
-                  <button type="button" className="stock-info-modal-close" onClick={() => setInfoOpen(false)} aria-label="Close">
-                    ×
-                  </button>
-                </div>
-                <div className="stock-info-modal-body">
-                  {infoLoading && <p className="loading">Loading profile &amp; 3-year context…</p>}
-                  {infoError && <p className="stock-info-modal-error">{stripErrorUrl(infoError)}</p>}
-                  {!infoLoading && !infoError && infoData && (
-                    <>
-                      <section className="stock-info-section">
-                        <h4>Company profile</h4>
-                        <p className="stock-info-prose">{infoData.profile.description}</p>
-                      </section>
-                      <section className="stock-info-section stock-info-meta-grid">
-                        <div>
-                          <span className="stock-info-k">CEO / leadership</span>
-                          <span className="stock-info-v">{infoData.profile.ceo || '—'}</span>
-                        </div>
-                        <div>
-                          <span className="stock-info-k">Sector</span>
-                          <span className="stock-info-v">{infoData.profile.sector}</span>
-                        </div>
-                        <div>
-                          <span className="stock-info-k">Industry</span>
-                          <span className="stock-info-v">{infoData.profile.industry}</span>
-                        </div>
-                        <div>
-                          <span className="stock-info-k">Ownership (heuristic)</span>
-                          <span className="stock-info-v">{infoData.profile.ownershipLabel}</span>
-                        </div>
-                        {infoData.profile.website ? (
-                          <div className="stock-info-full-row">
-                            <span className="stock-info-k">Website</span>
-                            <a
-                              className="stock-info-link"
-                              href={infoData.profile.website.startsWith('http') ? infoData.profile.website : `https://${infoData.profile.website}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {infoData.profile.website}
-                            </a>
-                          </div>
-                        ) : null}
-                      </section>
-                      <section className="stock-info-section">
-                        <h4>3-year price fundamentals</h4>
-                        {infoData.threeYear ? (
-                          <ul className="stock-info-metric-list">
-                            <li>
-                              Data points: {infoData.threeYear.dataPoints} daily closes (~3Y window)
-                            </li>
-                            <li>
-                              Start → end price: {currency}
-                              {infoData.threeYear.startClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })} →{' '}
-                              {currency}
-                              {infoData.threeYear.endClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                            </li>
-                            <li>
-                              Total return (approx.):{' '}
-                              {infoData.threeYear.totalReturnPct != null
-                                ? `${infoData.threeYear.totalReturnPct.toFixed(1)}%`
-                                : '—'}
-                            </li>
-                            <li>Estimated CAGR (3Y): {infoData.threeYear.cagr != null ? `${infoData.threeYear.cagr.toFixed(1)}%` : '—'}</li>
-                            <li>Max drawdown from peak in window: {infoData.threeYear.maxDrawdownPct.toFixed(1)}%</li>
-                          </ul>
-                        ) : (
-                          <p className="stock-info-muted">3-year history not available for this symbol.</p>
-                        )}
-                      </section>
-                      <section className="stock-info-section">
-                        <h4>Investment context (not advice)</h4>
-                        <p className="stock-info-muted stock-info-footnote">
-                          Uses 3-year prices and current fundamentals tab figures (P/E, etc.) when loaded. Heuristic only.
-                        </p>
-                        <ul className="stock-info-perspective-list">
-                          {infoData.perspective.map((line, i) => (
-                            <li key={i}>{line}</li>
-                          ))}
-                        </ul>
-                      </section>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
+      {infoModalOpen &&
+        createPortal(
+          <div
+            className="auto-trade-result"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Stock info: ${displaySymbol}`}
+            onClick={() => setInfoModalOpen(false)}
+          >
+            <div
+              className="auto-trade-result-inner trade-confirm-modal gold-page-modal"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="auto-trade-result-header">
+                <h3 id="stock-info-popup-title">{displayName} · {displaySymbol}</h3>
+                <button type="button" className="auto-trade-close" onClick={() => setInfoModalOpen(false)} aria-label="Close">
+                  ×
+                </button>
+              </div>
+              <div className="history-modal-content gold-modal-content stock-detail-content">
+                <StockFinancialsAccordionsPanel
+                  currency={currency}
+                  financialsOpenId={financialsOpenId}
+                  toggleFinancials={toggleFinancials}
+                  loadingFinancialsReport={loadingFinancialsReport}
+                  financialsReport={financialsReport}
+                  loadingStockInfo={loadingStockInfo}
+                  stockInfo={stockInfo}
+                  loadingQuarterlyProfit={loadingQuarterlyProfit}
+                  quarterlyProfit={quarterlyProfit}
+                />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
@@ -869,16 +1177,30 @@ function StockListSection({
   showSelect,
   onClearSearchItem,
   highlightedSearchId,
+  quarterlyProfitCache,
+  loadingQuarterlyProfitId,
+  stockInfoCache,
+  loadingStockInfoId,
+  financialsReportCache,
+  loadingFinancialsReportId,
+  onRequestFinancialsLoad,
 }: {
   stocks: Stock[];
   activeStockId: string | null;
   activeTab: TabType | null;
   onStockTap: (stock: Stock) => void;
   onTabClick: (stock: Stock, tab: TabType) => void;
+  onRequestFinancialsLoad: (stock: Stock, id: string) => void;
   analysisCache: Record<string, Analysis>;
   loadingAnalysisId: string | null;
   fundamentalsCache: Record<string, Record<string, string>>;
   loadingFundamentalsId: string | null;
+  quarterlyProfitCache: Record<string, QuarterlyProfitPayload>;
+  loadingQuarterlyProfitId: string | null;
+  stockInfoCache: Record<string, StockInfoResponse>;
+  loadingStockInfoId: string | null;
+  financialsReportCache: Record<string, string>;
+  loadingFinancialsReportId: string | null;
   chartCache: Record<string, Partial<Record<ChartPeriod, { date: string; close: number }[]>>>;
   chartPeriod: Record<string, ChartPeriod>;
   onChartPeriodChange: (stock: Stock, period: ChartPeriod) => void;
@@ -913,6 +1235,12 @@ function StockListSection({
               loadingAnalysis={loadingAnalysisId === id}
               fundamentals={fundamentalsCache[id] ?? null}
               loadingFundamentals={loadingFundamentalsId === id}
+              quarterlyProfit={quarterlyProfitCache[id] ?? null}
+              loadingQuarterlyProfit={loadingQuarterlyProfitId === id}
+              stockInfo={stockInfoCache[id] ?? null}
+              loadingStockInfo={loadingStockInfoId === id}
+              financialsReport={financialsReportCache[id] ?? null}
+              loadingFinancialsReport={loadingFinancialsReportId === id}
               chartData={chartDataForPeriod}
               chartPeriod={period}
               onChartPeriodChange={(p) => onChartPeriodChange(stock, p)}
@@ -922,6 +1250,7 @@ function StockListSection({
               showSelect={showSelect}
               onClearSearchItem={String(stock.segment || '').startsWith('search-') && onClearSearchItem ? () => onClearSearchItem(stock) : undefined}
               highlightedSearchId={highlightedSearchId}
+              onRequestFinancialsLoad={() => onRequestFinancialsLoad(stock, id)}
             />
           );
         })}
@@ -937,7 +1266,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeStockId, setActiveStockId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType | null>(null);
-  const [preferredTab, setPreferredTab] = useState<TabType>('fundamentals');
+  const [preferredTab, setPreferredTab] = useState<TabType>('chart');
   const [analysisCache, setAnalysisCache] = useState<Record<string, Analysis>>({});
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, Record<string, string>>>(() => {
@@ -949,6 +1278,12 @@ export default function App() {
     }
   });
   const [loadingFundamentalsId, setLoadingFundamentalsId] = useState<string | null>(null);
+  const [quarterlyProfitCache, setQuarterlyProfitCache] = useState<Record<string, QuarterlyProfitPayload>>({});
+  const [loadingQuarterlyProfitId, setLoadingQuarterlyProfitId] = useState<string | null>(null);
+  const [stockInfoCache, setStockInfoCache] = useState<Record<string, StockInfoResponse>>({});
+  const [loadingStockInfoId, setLoadingStockInfoId] = useState<string | null>(null);
+  const [financialsReportCache, setFinancialsReportCache] = useState<Record<string, string>>({});
+  const [loadingFinancialsReportId, setLoadingFinancialsReportId] = useState<string | null>(null);
   const [chartCache, setChartCache] = useState<Record<string, Partial<Record<ChartPeriod, { date: string; close: number }[]>>>>({});
   const [chartPeriod, setChartPeriod] = useState<Record<string, ChartPeriod>>({});
   const [loadingChartId, setLoadingChartId] = useState<string | null>(null);
@@ -1463,17 +1798,19 @@ export default function App() {
       const t = (s.sector || '').trim();
       set.add(t ? t : '__none__');
     });
-    return [...set].sort((a, b) => {
-      if (a === '__none__') return 1;
-      if (b === '__none__') return -1;
-      return a.localeCompare(b);
-    });
+    const sortKey = (x: string) => (x === '__none__' ? '\uffff' : x);
+    return [...set].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
   }, [baseMerged]);
 
   useEffect(() => {
     if (sectorFilter === 'all') return;
+    if (sectorFilter === '__psu__') {
+      if (market === 'in') return;
+      setSectorFilter('all');
+      return;
+    }
     if (!sectorOptions.includes(sectorFilter)) setSectorFilter('all');
-  }, [sectorFilter, sectorOptions]);
+  }, [sectorFilter, sectorOptions, market]);
 
   const stocks = useMemo(() => {
     if (!segmentFilter) return [];
@@ -1482,6 +1819,7 @@ export default function App() {
       merged = merged.filter((s) => {
         const t = (s.sector || '').trim();
         if (sectorFilter === '__none__') return !t;
+        if (sectorFilter === '__psu__') return Boolean(s.isPSU);
         return t === sectorFilter;
       });
     }
@@ -1548,6 +1886,102 @@ export default function App() {
     return [...pinnedForMarket, ...ranked];
   }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market]);
 
+  const loadFinancialsForStock = async (stock: Stock, id: string) => {
+    const mkt = stock.market || 'in';
+    const sym = String(stock.symbol || '').replace(/\.(NS|BO)$/i, '');
+
+    let fund: Record<string, string> | undefined = fundamentalsCache[id];
+    if (!fund) {
+      setLoadingFundamentalsId(id);
+      try {
+        const res = await fetch(`${API}/fundamentals/${encodeURIComponent(stock.symbol)}?market=${mkt}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        fund = data as Record<string, string>;
+        setFundamentalsCache((c) => ({ ...c, [id]: fund! }));
+      } catch {
+        fund = {};
+      } finally {
+        setLoadingFundamentalsId(null);
+      }
+    }
+
+    let qp: QuarterlyProfitPayload | undefined = quarterlyProfitCache[id];
+    if (!qp) {
+      setLoadingQuarterlyProfitId(id);
+      try {
+        const res = await fetch(`${API}/quarterly-profit/${encodeURIComponent(sym)}?market=${mkt}`);
+        const data = (await res.json()) as QuarterlyProfitPayload & { error?: string };
+        if (!res.ok) {
+          qp = {
+            symbol: sym,
+            market: mkt,
+            quarters: [],
+            annual: [],
+            error: data.error || 'Could not load quarterly profit',
+          };
+        } else {
+          qp = data;
+        }
+        setQuarterlyProfitCache((c) => ({ ...c, [id]: qp! }));
+      } catch {
+        qp = { symbol: sym, market: mkt, quarters: [], annual: [], error: 'Network error' };
+        setQuarterlyProfitCache((c) => ({ ...c, [id]: qp! }));
+      } finally {
+        setLoadingQuarterlyProfitId(null);
+      }
+    }
+
+    let info: StockInfoResponse | undefined = stockInfoCache[id];
+    if (!info) {
+      setLoadingStockInfoId(id);
+      try {
+        const res = await fetch(`${API}/stock-info`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stock, fundamentals: fund ?? {} }),
+        });
+        const data = (await res.json()) as StockInfoResponse & { error?: string };
+        if (!res.ok) throw new Error(data.error || 'stock-info failed');
+        info = data;
+        setStockInfoCache((c) => ({ ...c, [id]: data }));
+      } catch {
+        info = undefined;
+      } finally {
+        setLoadingStockInfoId(null);
+      }
+    }
+
+    if (!financialsReportCache[id]) {
+      setLoadingFinancialsReportId(id);
+      try {
+        const res = await fetch(`${API}/stock-financials-report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stock,
+            fundamentals: fund,
+            quarterlyProfit: qp,
+            stockInfo: info,
+          }),
+        });
+        const data = (await res.json()) as { markdown?: string; error?: string };
+        const md =
+          !res.ok && !data.markdown
+            ? `**Error:** ${data.error || 'Report failed'}`
+            : data.markdown || '_Empty report._';
+        setFinancialsReportCache((c) => ({ ...c, [id]: md }));
+      } catch (e) {
+        setFinancialsReportCache((c) => ({
+          ...c,
+          [id]: `**Error:** ${e instanceof Error ? e.message : 'Network error'}`,
+        }));
+      } finally {
+        setLoadingFinancialsReportId(null);
+      }
+    }
+  };
+
   const handleStockTap = (stock: Stock) => {
     const id = `${stock.symbol}-${stock.segment}`;
     if (activeStockId === id) {
@@ -1555,7 +1989,7 @@ export default function App() {
       setActiveTab(null);
       return;
     }
-    const openTab = preferredTab || 'fundamentals';
+    const openTab = preferredTab || 'chart';
     setActiveStockId(id);
     setActiveTab(openTab);
     setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
@@ -1618,6 +2052,7 @@ export default function App() {
           .finally(() => setLoadingChartId(null));
       }
     }
+
   };
 
   const handleSearchSelect = (picked: { symbol: string; name: string; market?: string; segment?: string }) => {
@@ -1642,7 +2077,7 @@ export default function App() {
     setMarket(mkt);
     setSegmentFilter('all');
     setSectorFilter('all');
-    setPreferredTab('fundamentals');
+    setPreferredTab('chart');
     const id = `${match.symbol}-${match.segment}`;
     setHighlightedSearchId(id);
     setTimeout(() => {
@@ -1677,6 +2112,7 @@ export default function App() {
             change: liveChange != null ? liveChange : row.change,
             volume: Number.isFinite(Number(q?.volume)) ? Number(q.volume) : row.volume,
             marketCap: Number.isFinite(Number(q?.marketCap)) ? Number(q.marketCap) : row.marketCap,
+            ...(q?.isPSU ? { isPSU: true } : {}),
           };
         }));
       })
@@ -2089,9 +2525,12 @@ export default function App() {
               className="sector-picker"
               value={sectorFilter}
               onChange={(e) => setSectorFilter(e.target.value)}
-              title="Filter by sector (from listed stocks)"
+              title="Filter by sector (India: PSU = public-sector heuristic)"
             >
               <option value="all">All sectors</option>
+              {market === 'in' ? (
+                <option value="__psu__">PSU</option>
+              ) : null}
               {sectorOptions.map((opt) => (
                 <option key={opt} value={opt}>
                   {opt === '__none__' ? 'Others' : opt}
@@ -3012,6 +3451,13 @@ export default function App() {
             loadingAnalysisId={loadingAnalysisId}
             fundamentalsCache={fundamentalsCache}
             loadingFundamentalsId={loadingFundamentalsId}
+            quarterlyProfitCache={quarterlyProfitCache}
+            loadingQuarterlyProfitId={loadingQuarterlyProfitId}
+            stockInfoCache={stockInfoCache}
+            loadingStockInfoId={loadingStockInfoId}
+            financialsReportCache={financialsReportCache}
+            loadingFinancialsReportId={loadingFinancialsReportId}
+            onRequestFinancialsLoad={(stock, id) => void loadFinancialsForStock(stock, id)}
             chartCache={chartCache}
             chartPeriod={chartPeriod}
             onChartPeriodChange={handleChartPeriodChange}

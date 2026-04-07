@@ -658,6 +658,77 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
   return segmentData;
 }
 
+/** NSE symbols commonly classified as PSUs / CPSEs (plain symbol, no .NS). Regex + name/industry fill gaps. */
+const IN_PSU_SYMBOLS = new Set([
+  'BANKBARODA',
+  'BANKINDIA',
+  'BEL',
+  'BEML',
+  'BHEL',
+  'BPCL',
+  'CANBK',
+  'CENTRALBK',
+  'COALINDIA',
+  'CONCOR',
+  'ENGINERSIN',
+  'FACT',
+  'GAIL',
+  'HAL',
+  'HINDCOPPER',
+  'HUDCO',
+  'IOC',
+  'IOB',
+  'IRCON',
+  'IRCTC',
+  'IRFC',
+  'ITI',
+  'LICI',
+  'MAHABANK',
+  'MMTC',
+  'MOIL',
+  'NALCO',
+  'NBCC',
+  'NFL',
+  'NHPC',
+  'NLCINDIA',
+  'NMDC',
+  'NTPC',
+  'OIL',
+  'ONGC',
+  'PFC',
+  'PNB',
+  'POWERGRID',
+  'RECLTD',
+  'RITES',
+  'RVNL',
+  'SAIL',
+  'SBIN',
+  'SCI',
+  'SJVN',
+  'UCOBANK',
+  'UNIONBANK',
+  'INDIANB',
+  'NATIONALUM',
+  'KIOCL',
+]);
+
+/**
+ * Heuristic PSU flag for India listings (name / industry text + symbol set).
+ * @param {string} symbolPlain Uppercase NSE symbol without exchange suffix
+ */
+function inferIsPSU(symbolPlain, name, sectorRaw, industryRaw) {
+  const sym = String(symbolPlain || '')
+    .replace(/\.(NS|BO)$/i, '')
+    .trim()
+    .toUpperCase();
+  if (sym && IN_PSU_SYMBOLS.has(sym)) return true;
+  const t = `${name || ''} ${sectorRaw || ''} ${industryRaw || ''}`.toLowerCase();
+  if (!t.replace(/\s/g, '').length) return false;
+  return /\b(psu|public sector undertaking|public sector|government company|govt\.?\s*company|state-owned|government of india|ministry of|department of|central public sector|cpse|navratna|maharatna|miniratna|bharat petroleum|indian oil|oil and natural|coal india|steel authority|national thermal|power finance|container corporation|indian railway|railway catering)\b/i.test(
+    t,
+  );
+}
+
 /**
  * Normalize raw sector/industry into a small set of major groups for UI filters.
  * Major groups:
@@ -751,7 +822,8 @@ async function fetchSectorFromNse(symbol) {
     if (!ii || typeof ii !== 'object') return null;
     const sectorRaw = [ii.macro, ii.sector].find((x) => typeof x === 'string' && x.trim())?.trim() || '';
     const industryRaw = [ii.industry, ii.basicIndustry].find((x) => typeof x === 'string' && x.trim())?.trim() || '';
-    return normalizeSectorForDisplay(sectorRaw, industryRaw);
+    const sector = normalizeSectorForDisplay(sectorRaw, industryRaw);
+    return { sector, sectorRaw, industryRaw };
   } catch {
     return null;
   }
@@ -769,7 +841,8 @@ async function fetchSectorFromYahoo(yfSymbol) {
     const industryRaw =
       (typeof sp.industry === 'string' && sp.industry.trim() ? sp.industry.trim() : '') ||
       (typeof ap.industry === 'string' && ap.industry.trim() ? ap.industry.trim() : '');
-    return normalizeSectorForDisplay(sectorRaw, industryRaw);
+    const sector = normalizeSectorForDisplay(sectorRaw, industryRaw);
+    return { sector, sectorRaw, industryRaw };
   } catch {
     return null;
   }
@@ -787,11 +860,13 @@ async function fetchSectorForStock(symbol, market, yfSymbol) {
       .toUpperCase();
     const raw = US_STATIC_SECTOR_BY_SYMBOL[sym];
     if (raw) {
-      const n = normalizeSectorForDisplay(raw, '');
-      if (n) return n;
+      const sector = normalizeSectorForDisplay(raw, '');
+      if (sector) return { sector, sectorRaw: raw, industryRaw: '' };
     }
   }
-  return fetchSectorFromYahoo(yfSymbol);
+  const y = await fetchSectorFromYahoo(yfSymbol);
+  if (y) return y;
+  return { sector: null, sectorRaw: '', industryRaw: '' };
 }
 
 async function fetchSymbolData(symbol, market) {
@@ -799,7 +874,16 @@ async function fetchSymbolData(symbol, market) {
   const [quote, history] = await Promise.all([fetchQuote(yfSymbol), fetchHistorical(yfSymbol)]);
   if (!quote) return null;
   /** India: NSE quote-equity (reliable). US: Yahoo quoteSummary (best-effort). */
-  const sector = await fetchSectorForStock(symbol, market, yfSymbol);
+  const sectorInfo = await fetchSectorForStock(symbol, market, yfSymbol);
+  const sector = sectorInfo?.sector ?? null;
+  const plainSym = String(symbol || '')
+    .replace(/\.(NS|BO)$/i, '')
+    .trim()
+    .toUpperCase();
+  const displayName = quote.shortName || quote.longName || symbol;
+  const isPSU =
+    market === 'in' &&
+    inferIsPSU(plainSym, displayName, sectorInfo?.sectorRaw || '', sectorInfo?.industryRaw || '');
   const weeklyChange = history.length >= 5
     ? ((history[history.length - 1]?.close - history[0]?.close) / (history[0]?.close || 1)) * 100
     : null;
@@ -823,6 +907,7 @@ async function fetchSymbolData(symbol, market) {
     fiftyTwoWeekLow: quote.fiftyTwoWeekLow,
     history: history.slice(-14).map((q) => ({ date: q.date, close: q.close })),
     ...(sector ? { sector } : {}),
+    ...(isPSU ? { isPSU: true } : {}),
   };
 }
 
@@ -846,11 +931,13 @@ async function getStocksViaScreener(market, count = 50) {
         market === 'us' && sym && US_STATIC_SECTOR_BY_SYMBOL[sym]
           ? normalizeSectorForDisplay(US_STATIC_SECTOR_BY_SYMBOL[sym], '')
           : null;
+      const sectorRawS = q.sector ? String(q.sector).trim() : '';
+      const industryRawS = q.industry ? String(q.industry).trim() : '';
       const sectorNorm =
-        normalizeSectorForDisplay(
-          q.sector ? String(q.sector).trim() : '',
-          q.industry ? String(q.industry).trim() : '',
-        ) || fromStatic;
+        normalizeSectorForDisplay(sectorRawS, industryRawS) || fromStatic;
+      const qName = q.shortName || q.longName || q.symbol || '';
+      const isPSU =
+        market === 'in' && inferIsPSU(sym, qName, sectorRawS, industryRawS);
       return {
         symbol: q.symbol || '',
         market,
@@ -867,6 +954,7 @@ async function getStocksViaScreener(market, count = 50) {
         segmentName: 'Flexi Cap',
         rank,
         ...(sectorNorm ? { sector: sectorNorm } : {}),
+        ...(isPSU ? { isPSU: true } : {}),
       };
     };
     const gainers = (gainersRes?.quotes || []).map((q, i) => mapScreenerQuote(q, i + 1)).filter((s) => s.symbol && s.price != null);
@@ -926,7 +1014,7 @@ async function getAIProsCons(stock) {
       cons: ['Add GROQ_API_KEY to enable AI-powered pros and cons'],
     };
   }
-  const prompt = `You are an Indian stock market analyst. Analyze this stock for today (March 9, 2026):
+  const prompt = `You are an Indian stock market analyst. Analyze this stock for today's market session:
 
 Stock: ${stock.name} (${stock.symbol})
 Segment: ${stock.segment}
@@ -934,9 +1022,12 @@ Current Price: ₹${stock.price}
 Today's Change: ${stock.changePercent}%
 ${stock.weekChange != null ? `Week Change: ${stock.weekChange.toFixed(2)}%` : ''}
 
-Provide a brief analysis (2-3 sentences max for context), then list exactly:
-- 3 PROS (short bullet points, specific to this stock)
-- 3 CONS (short bullet points, specific to this stock)
+Provide a brief analysis (1-2 short sentences max), then list exactly:
+- 3 PROS (very short bullet points, specific to this stock)
+- 3 CONS (very short bullet points, specific to this stock)
+
+Each bullet must be <= 7 words.
+Avoid filler words and long explanations.
 
 Format your response as JSON only:
 {"pros": ["pro1", "pro2", "pro3"], "cons": ["con1", "con2", "con3"]}`;
@@ -950,12 +1041,28 @@ Format your response as JSON only:
     const text = completion.choices[0]?.message?.content || '{}';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]);
+      const tighten = (arr) =>
+        (Array.isArray(arr) ? arr : [])
+          .map((x) => String(x || '').replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+          .map((line) => line.split(' ').slice(0, 7).join(' '))
+          .slice(0, 3);
+      const pros = tighten(parsed.pros);
+      const cons = tighten(parsed.cons);
+      while (pros.length < 3) pros.push('Limited positive visibility');
+      while (cons.length < 3) cons.push('Limited negative visibility');
+      return { pros, cons };
     }
   } catch (err) {
     console.error('Groq error:', err.message);
   }
   return { pros: ['Analysis unavailable'], cons: ['Check server logs'] };
+}
+
+function isGroqRateLimitError(err) {
+  const msg = String(err?.message || '');
+  return /rate limit/i.test(msg) || /429/.test(msg) || err?.status === 429 || err?.code === 'rate_limit_exceeded';
 }
 
 function inferOwnershipLabel(description, sector, industry, companyName) {
@@ -970,31 +1077,97 @@ function inferOwnershipLabel(description, sector, industry, companyName) {
   if (/\bprivate\b/.test(t) && /\b(limited|ltd|inc|corp)\b/i.test(String(companyName || ''))) {
     return 'Typically private-sector listed company';
   }
-  if (!t.replace(/\s/g, '').length) return '— (profile unavailable)';
+  if (!t.replace(/\s/g, '').length) return 'Use shareholding / annual report for ownership detail';
   return 'Listed company — confirm ownership via latest shareholding / annual report';
+}
+
+function clipProfileText(s, maxLen = 1800) {
+  if (!s || typeof s !== 'string') return '';
+  const t = s.replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  return t.length <= maxLen ? t : `${t.slice(0, maxLen - 1).trim()}…`;
+}
+
+function sanitizeWebsiteUrl(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  const t = raw.trim();
+  if (!t) return '';
+  if (/^https?:\/\//i.test(t)) return t;
+  if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}/i.test(t)) return `https://${t}`;
+  return '';
+}
+
+function pickLeadershipFromOfficers(officers) {
+  if (!Array.isArray(officers) || officers.length === 0) return '';
+  const titleOf = (o) => String(o?.title || '').trim();
+  const nameOf = (o) => String(o?.name || '').trim();
+  const patterns = [
+    /chief executive|chief exec\.?|^ceo\b/i,
+    /managing director|^md\b/i,
+    /chairman\s+(and|&)?\s*managing|chairman\s*&\s*managing/i,
+    /chairman(?!ship)/i,
+    /whole[- ]?time\s*director/i,
+    /president\b/i,
+    /director\s*\(?\s*operations/i,
+  ];
+  for (const re of patterns) {
+    const row = officers.find((o) => re.test(titleOf(o)) && nameOf(o));
+    if (row) return `${nameOf(row)} — ${titleOf(row)}`;
+  }
+  const first = officers.find((o) => nameOf(o));
+  if (first) return `${nameOf(first)} — ${titleOf(first) || 'Leadership'}`;
+  return '';
+}
+
+function buildDescriptionFallback({ longName, shortName, sector, industry, exchangeName, symbol }) {
+  const name = (longName || shortName || symbol || 'This company').trim();
+  const sec = sector && sector !== '—' ? sector.trim() : '';
+  const ind = industry && industry !== '—' ? industry.trim() : '';
+  const bits = [sec, ind].filter(Boolean);
+  const seg = bits.length ? bits.join(' · ') : '';
+  const ex = exchangeName ? `Listed on ${exchangeName}` : 'Listed equity';
+  if (seg) {
+    return `${name} — ${seg}. Full business summary is not available from the quote feed; check the company website or annual report.`;
+  }
+  return `${name} — ${ex}. Business summary not available from the data feed; use filings or the company site for background.`;
 }
 
 async function fetchStockProfileForInfo(yfSymbol) {
   try {
-    const r = await yahooFinance.quoteSummary(yfSymbol, { modules: ['summaryProfile', 'assetProfile'] });
+    const r = await yahooFinance.quoteSummary(yfSymbol, { modules: ['summaryProfile', 'assetProfile', 'price'] });
     const sp = r?.summaryProfile || {};
     const ap = r?.assetProfile || {};
+    const pr = r?.price || {};
+    const longName = String(pr.longName || '').trim();
+    const shortName = String(pr.shortName || '').trim();
+    const exchangeName = String(pr.exchangeName || pr.exchange || '').trim();
     const descRaw = sp.longBusinessSummary || ap.longBusinessSummary || '';
-    const desc = typeof descRaw === 'string' ? descRaw.replace(/\s+/g, ' ').trim() : '';
-    const sector = String(sp.sector || ap.sector || '').trim();
-    const industry = String(sp.industry || ap.industry || '').trim();
+    let desc = typeof descRaw === 'string' ? descRaw.replace(/\s+/g, ' ').trim() : '';
+    const sectorY = String(sp.sector || ap.sector || '').trim();
+    const industryY = String(sp.industry || ap.industry || '').trim();
+    if (!desc) {
+      desc = buildDescriptionFallback({
+        longName,
+        shortName,
+        sector: sectorY,
+        industry: industryY,
+        exchangeName,
+        symbol: yfSymbol,
+      });
+    }
+    desc = clipProfileText(desc, 2000);
     const officers = Array.isArray(ap.companyOfficers) ? ap.companyOfficers : [];
-    const ceoRow = officers.find((o) => /chief executive|^ceo\b/i.test(String(o?.title || '')));
-    const ceo = ceoRow?.name
-      ? `${String(ceoRow.name).trim()}${ceoRow.title ? ` — ${String(ceoRow.title).trim()}` : ''}`
-      : '';
-    const website = sp.website || ap.website || '';
+    const ceo = pickLeadershipFromOfficers(officers);
+    const website = sanitizeWebsiteUrl(sp.website || ap.website || '');
     return {
-      description: desc.slice(0, 2000),
-      sector: sector || '—',
-      industry: industry || '—',
+      description: desc,
+      sector: sectorY,
+      industry: industryY,
       ceo,
-      website: website ? String(website) : '',
+      website,
+      longName,
+      shortName,
+      exchangeName,
     };
   } catch (err) {
     console.warn('[stock-info] quoteSummary failed:', err.message);
@@ -1412,6 +1585,154 @@ async function getFundamentalsViaChart(symbol) {
   return null;
 }
 
+function formatProfitAmountForMarket(v, market) {
+  if (v == null || !Number.isFinite(Number(v))) return '—';
+  const n = Number(v);
+  if (market === 'us') {
+    const a = Math.abs(n);
+    if (a >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
+    if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+    if (a >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+    return `$${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+  }
+  const a = Math.abs(n);
+  if (a >= 1e12) return `${(n / 1e12).toFixed(2)} Lakh Cr`;
+  if (a >= 1e7) return `${(n / 1e7).toFixed(2)} Cr`;
+  if (a >= 1e5) return `${(n / 1e5).toFixed(2)} L`;
+  return n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+function pickNetIncomeFromFtsRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  const keys = [
+    'netIncome',
+    'netIncomeCommonStockholders',
+    'netIncomeFromContinuingOperationNetMinorityInterest',
+    'netIncomeContinuousOperations',
+  ];
+  for (const k of keys) {
+    const v = row[k];
+    if (v != null && Number.isFinite(Number(v))) return Number(v);
+  }
+  return null;
+}
+
+function pickRevenueFromFtsRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  for (const k of ['totalRevenue', 'operatingRevenue']) {
+    const v = row[k];
+    if (v != null && Number.isFinite(Number(v))) return Number(v);
+  }
+  return null;
+}
+
+function fundamentalsDateKeyISO(d) {
+  if (!d) return null;
+  const dt = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString().slice(0, 10);
+}
+
+function formatQuarterLabelFromISO(isoDate) {
+  const [y, m, day] = String(isoDate || '').split('-').map(Number);
+  if (!y || !m) return String(isoDate || '—');
+  const d = new Date(Date.UTC(y, m - 1, day || 1));
+  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+async function buildQuarterlyProfitPayload(yfSymbol, market, displaySymbol) {
+  const period1wide = new Date();
+  period1wide.setFullYear(period1wide.getFullYear() - 15);
+
+  const [ftsQuarterly, ftsAnnual, qsSummary] = await Promise.all([
+    yahooFinance.fundamentalsTimeSeries(yfSymbol, {
+      period1: period1wide,
+      period2: new Date(),
+      type: 'quarterly',
+      module: 'financials',
+    }).catch(() => []),
+    yahooFinance.fundamentalsTimeSeries(yfSymbol, {
+      period1: period1wide,
+      period2: new Date(),
+      type: 'annual',
+      module: 'financials',
+    }).catch(() => []),
+    yahooFinance.quoteSummary(yfSymbol, { modules: ['incomeStatementHistoryQuarterly'] }).catch(() => ({})),
+  ]);
+
+  const byDate = new Map();
+  for (const row of ftsQuarterly || []) {
+    const k = fundamentalsDateKeyISO(row.date);
+    if (!k) continue;
+    const ni = pickNetIncomeFromFtsRow(row);
+    const tr = pickRevenueFromFtsRow(row);
+    byDate.set(k, { periodEnd: k, netIncome: ni, totalRevenue: tr });
+  }
+
+  const qHist = qsSummary?.incomeStatementHistoryQuarterly?.incomeStatementHistory || [];
+  for (const row of qHist) {
+    const k = fundamentalsDateKeyISO(row.endDate);
+    if (!k) continue;
+    if (!byDate.has(k)) {
+      const ni = row.netIncome != null && Number.isFinite(Number(row.netIncome)) ? Number(row.netIncome) : null;
+      const tr =
+        row.totalRevenue != null && Number.isFinite(Number(row.totalRevenue)) ? Number(row.totalRevenue) : null;
+      byDate.set(k, { periodEnd: k, netIncome: ni, totalRevenue: tr });
+    }
+  }
+
+  const quarters = [...byDate.values()]
+    .sort((a, b) => b.periodEnd.localeCompare(a.periodEnd))
+    .slice(0, 15)
+    .map((q) => ({
+      periodEnd: q.periodEnd,
+      label: formatQuarterLabelFromISO(q.periodEnd),
+      netIncome: q.netIncome,
+      totalRevenue: q.totalRevenue,
+      netIncomeDisplay: formatProfitAmountForMarket(q.netIncome, market),
+      totalRevenueDisplay: formatProfitAmountForMarket(q.totalRevenue, market),
+    }));
+
+  const annual = (ftsAnnual || [])
+    .map((row) => ({
+      fiscalYearEnd: fundamentalsDateKeyISO(row.date),
+      netIncome: pickNetIncomeFromFtsRow(row),
+    }))
+    .filter((x) => x.fiscalYearEnd && x.netIncome != null)
+    .sort((a, b) => b.fiscalYearEnd.localeCompare(a.fiscalYearEnd))
+    .slice(0, 5)
+    .map((x) => ({
+      fiscalYearEnd: x.fiscalYearEnd,
+      label: formatQuarterLabelFromISO(x.fiscalYearEnd),
+      netIncome: x.netIncome,
+      netIncomeDisplay: formatProfitAmountForMarket(x.netIncome, market),
+    }));
+
+  return {
+    symbol: displaySymbol,
+    market,
+    quarters,
+    annual,
+    disclaimer:
+      'Net profit (net income) and revenue from Yahoo Finance, in the company’s reporting currency. Recent Yahoo feeds often include a limited number of quarters; fiscal-year totals below cover up to the last five reported years.',
+  };
+}
+
+app.get('/api/quarterly-profit/:symbol', async (req, res) => {
+  try {
+    let symbol = (req.params.symbol || '').trim().toUpperCase();
+    if (!symbol) return res.status(400).json({ error: 'Symbol required' });
+    symbol = symbol.replace(/\.(NS|BO)$/i, '');
+    const market = ALLOWED_MARKETS.includes(req.query.market) ? req.query.market : 'in';
+    const yfSymbol = toYahooSymbol(symbol, market);
+    const payload = await buildQuarterlyProfitPayload(yfSymbol, market, symbol);
+    res.json(payload);
+  } catch (err) {
+    console.warn('[quarterly-profit]', err.message);
+    res.status(500).json({ error: err.message || 'quarterly_profit_failed' });
+  }
+});
+
 app.get('/api/fundamentals/:symbol', async (req, res) => {
   try {
     const symbol = (req.params.symbol || '').toUpperCase();
@@ -1468,6 +1789,12 @@ app.get('/api/quote/:symbol', async (req, res) => {
     if (!q) return res.status(404).json({ error: 'Quote not found' });
     const price = q.regularMarketPrice ?? q.preMarketPrice ?? null;
     const changePercent = q.regularMarketChangePercent ?? q.regularMarketChange ?? null;
+    const plainSym = String(q.symbol || symbol)
+      .replace(/\.(NS|BO)$/i, '')
+      .trim()
+      .toUpperCase();
+    const qName = q.shortName || q.longName || symbol;
+    const isPSU = market === 'in' && inferIsPSU(plainSym, qName, '', '');
     return res.json({
       symbol: (q.symbol || symbol).replace(/\.(NS|BO)$/i, ''),
       name: q.shortName || q.longName || symbol,
@@ -1477,6 +1804,7 @@ app.get('/api/quote/:symbol', async (req, res) => {
       changePercent,
       volume: q.regularMarketVolume ?? null,
       marketCap: q.marketCap ?? null,
+      ...(isPSU ? { isPSU: true } : {}),
     });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'quote_failed' });
@@ -1527,6 +1855,183 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+const DDG_FETCH_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+function stripHtmlEntitiesLoose(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#\d+;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function collectDdgRelatedTopics(topics, out, depth = 0) {
+  if (!Array.isArray(topics) || depth > 5 || out.length > 24) return;
+  for (const t of topics) {
+    if (t && typeof t === 'object' && t.Text) out.push(String(t.Text));
+    if (t && typeof t === 'object' && Array.isArray(t.Topics)) collectDdgRelatedTopics(t.Topics, out, depth + 1);
+  }
+}
+
+/**
+ * DuckDuckGo web context — no API key (Instant Answer JSON + HTML result snippets).
+ * Tavily is not required: DDG is free and public; quality varies vs paid search APIs.
+ */
+async function fetchDuckDuckGoContextForCompany(query) {
+  const q = String(query).slice(0, 400);
+  const parts = [];
+
+  try {
+    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`;
+    const res = await fetch(url, { headers: { 'User-Agent': DDG_FETCH_UA } });
+    if (res.ok) {
+      const j = await res.json();
+      if (j.AbstractText) parts.push(`Summary: ${stripHtmlEntitiesLoose(j.AbstractText)}`);
+      if (j.Answer) parts.push(`Answer: ${stripHtmlEntitiesLoose(String(j.Answer))}`);
+      if (j.Definition) parts.push(`Definition: ${stripHtmlEntitiesLoose(String(j.Definition))}`);
+      const rel = [];
+      collectDdgRelatedTopics(j.RelatedTopics, rel);
+      rel.slice(0, 12).forEach((line) => parts.push(line));
+    }
+  } catch (e) {
+    console.warn('[ddg-instant]', e.message);
+  }
+
+  try {
+    const res = await fetch('https://html.duckduckgo.com/html/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': DDG_FETCH_UA,
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      body: new URLSearchParams({ q: q }).toString(),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const seen = new Set();
+      const snippetRe = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+      let sm;
+      while ((sm = snippetRe.exec(html)) !== null) {
+        const s = stripHtmlEntitiesLoose(sm[1]);
+        if (s.length > 35 && !seen.has(s)) {
+          seen.add(s);
+          parts.push(`Search snippet: ${s}`);
+          if (seen.size >= 8) break;
+        }
+      }
+      const titleRe = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let tm;
+      let n = 0;
+      while ((tm = titleRe.exec(html)) !== null && n < 6) {
+        const href = tm[1];
+        const title = stripHtmlEntitiesLoose(tm[2]);
+        if (href && !href.includes('duckduckgo.com') && title.length > 5) {
+          parts.push(`Result: ${title}\n${href}`);
+          n++;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[ddg-html]', e.message);
+  }
+
+  const text = parts.join('\n\n').slice(0, 12000);
+  return { used: text.length > 0, text };
+}
+
+async function enrichCompanyProfileWithGroq({
+  stock,
+  market,
+  companyName,
+  yahooSnapshot,
+  profile,
+  fundamentals,
+  webContext,
+  webUsed,
+}) {
+  if (!groq) return null;
+  const sys = `You are a concise equity research assistant. Output a single JSON object only (no markdown fences).
+Required keys:
+- isPSU: boolean|null — true if the company is a PSU / central or state public sector undertaking / material government-controlled listed entity (India), or a clearly government-linked US listing; false if clearly private-sector; null if unclear from data.
+- psuRationale: string — one short sentence explaining isPSU.
+- sector: string — best sector label; use empty string "" to keep the provider default unchanged.
+- industry: string — best industry; "" to keep provider default.
+- ownership: string — who owns: government, promoters, public float, MNC parent, etc.
+- website: string — official company website URL only, or "" if unknown.
+- ceo: string — chair / MD / CEO line, or "".
+- otherDetails: string — markdown bullet list (headquarters, listing, subsidiaries, business lines, notable facts). Max 8 bullets; each line starts with "- ".
+- summaryMarkdown: string — 2 short paragraphs for investors (plain text, no headings).
+
+If webContext says there is no web search, rely on providerData and fundamentals; state uncertainty. Do not invent precise financial figures; say "not verified" when needed.`;
+
+  const compactFundamentals = {
+    pe: fundamentals?.pe ?? null,
+    forwardPE: fundamentals?.forwardPE ?? null,
+    marketCap: fundamentals?.marketCap ?? null,
+    eps: fundamentals?.eps ?? null,
+    dividendYield: fundamentals?.dividendYield ?? null,
+    sector: fundamentals?.sector ?? null,
+    industry: fundamentals?.industry ?? null,
+  };
+  const userPayload = {
+    companyName,
+    market,
+    listHintSymbol: stock.symbol,
+    listHintIsPSU: stock.isPSU === true,
+    providerYahoo: yahooSnapshot,
+    mergedProfileBeforeAI: profile,
+    fundamentalsSnapshot: compactFundamentals,
+    webSearchUsed: webUsed,
+    webContext: webContext ? webContext.slice(0, 3000) : '(no web search text returned — DuckDuckGo may have no instant answer or HTML parse failed)',
+  };
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: JSON.stringify(userPayload) },
+      ],
+      temperature: 0.25,
+      max_tokens: 520,
+      response_format: { type: 'json_object' },
+    });
+    const raw = completion.choices[0]?.message?.content || '{}';
+    if (!raw.trim()) return null;
+    return { ...JSON.parse(raw), _webUsed: webUsed };
+  } catch (e) {
+    console.warn('[enrichCompanyProfile]', e.message);
+    return null;
+  }
+}
+
+function applyGroqEnrichmentToProfile(profile, enriched) {
+  if (!enriched || typeof enriched !== 'object') return;
+  if (String(enriched.sector || '').trim()) profile.sector = enriched.sector.trim();
+  if (String(enriched.industry || '').trim()) profile.industry = enriched.industry.trim();
+  if (String(enriched.ownership || '').trim()) profile.ownershipLabel = enriched.ownership.trim();
+  if (String(enriched.website || '').trim()) {
+    const w = sanitizeWebsiteUrl(enriched.website);
+    if (w) profile.website = w;
+  }
+  if (String(enriched.ceo || '').trim()) profile.ceo = enriched.ceo.trim();
+  profile.psuStatus = enriched.isPSU === true ? 'Yes' : enriched.isPSU === false ? 'No' : 'Unclear';
+  const pr = String(enriched.psuRationale || '').trim();
+  if (pr) profile.psuNote = pr;
+  const sm = String(enriched.summaryMarkdown || '').trim();
+  if (sm) profile.enrichmentSummary = sm;
+  const od = String(enriched.otherDetails || '').trim();
+  if (od) profile.enrichmentDetailsMarkdown = od;
+  profile.enrichmentSource = enriched._webUsed ? 'web+duckduckgo+groq' : 'groq';
+}
+
 /** Company profile, CEO, ownership hint, 3Y price stats + rule-based investment context (uses fundamentals when sent). */
 app.post('/api/stock-info', async (req, res) => {
   try {
@@ -1535,26 +2040,87 @@ app.post('/api/stock-info', async (req, res) => {
     if (!stock || !stock.symbol) return res.status(400).json({ error: 'stock with symbol required' });
     const market = stock.market || 'in';
     const yfSymbol = toYahooSymbol(String(stock.symbol).toUpperCase(), market);
-    const [profileRaw, history] = await Promise.all([
+    const plainSym = String(stock.symbol).replace(/\.(NS|BO)$/i, '').trim();
+    const [profileRaw, history, sectorInfo] = await Promise.all([
       fetchStockProfileForInfo(yfSymbol),
       fetchHistorical(yfSymbol, 1095),
+      fetchSectorForStock(plainSym, market, yfSymbol),
     ]);
     const metrics = computeThreeYearMetrics(history);
     const fundSector = typeof fundamentals.sector === 'string' ? fundamentals.sector.trim() : '';
+    const fundIndustry = typeof fundamentals.industry === 'string' ? fundamentals.industry.trim() : '';
+    const listSector = typeof stock.sector === 'string' ? stock.sector.trim() : '';
+
+    const ySector = (profileRaw?.sector || '').trim();
+    const yIndustry = (profileRaw?.industry || '').trim();
+
+    const sectorResolved =
+      (ySector && ySector !== '—' ? ySector : '') ||
+      sectorInfo?.sector ||
+      fundSector ||
+      listSector ||
+      '';
+
+    const industryResolved =
+      (yIndustry && yIndustry !== '—' ? yIndustry : '') ||
+      (sectorInfo?.industryRaw || '').trim() ||
+      fundIndustry ||
+      '';
+
+    const companyName = String(stock.name || profileRaw?.longName || profileRaw?.shortName || plainSym).trim();
+    const descBase =
+      profileRaw?.description ||
+      buildDescriptionFallback({
+        longName: profileRaw?.longName || companyName,
+        shortName: profileRaw?.shortName || '',
+        sector: sectorResolved || ySector,
+        industry: industryResolved || yIndustry,
+        exchangeName: profileRaw?.exchangeName || '',
+        symbol: plainSym,
+      });
+
     const profile = {
-      description: profileRaw?.description
-        || 'No company description returned (some listings have limited Yahoo profile data).',
-      sector: (profileRaw?.sector && profileRaw.sector !== '—' ? profileRaw.sector : null) || fundSector || '—',
-      industry: profileRaw?.industry || '—',
-      ceo: profileRaw?.ceo || '—',
+      description: clipProfileText(descBase, 2000),
+      sector: sectorResolved || 'Not in data feed',
+      industry: industryResolved || 'Not in data feed',
+      ceo: (profileRaw?.ceo || '').trim() || 'Not disclosed in provider data',
       website: profileRaw?.website || '',
       ownershipLabel: inferOwnershipLabel(
         profileRaw?.description || '',
-        profileRaw?.sector || fundSector,
-        profileRaw?.industry,
-        stock.name,
+        sectorResolved || fundSector || listSector,
+        industryResolved || fundIndustry,
+        companyName,
       ),
     };
+
+    if (groq) {
+      const searchQuery = `${companyName} ${plainSym} ${
+        market === 'in' ? 'NSE BSE India' : 'NYSE NASDAQ US'
+      } stock company sector industry PSU public sector government ownership official website CEO managing director`;
+      const { used: webUsed, text: webText } = await fetchDuckDuckGoContextForCompany(searchQuery);
+      const yahooSnapshot = profileRaw
+        ? {
+            longName: profileRaw.longName,
+            shortName: profileRaw.shortName,
+            sector: profileRaw.sector,
+            industry: profileRaw.industry,
+            descriptionExcerpt: (profileRaw.description || '').slice(0, 800),
+            website: profileRaw.website,
+          }
+        : null;
+      const enriched = await enrichCompanyProfileWithGroq({
+        stock,
+        market,
+        companyName,
+        yahooSnapshot,
+        profile: { ...profile },
+        fundamentals,
+        webContext: webText,
+        webUsed,
+      });
+      applyGroqEnrichmentToProfile(profile, enriched);
+    }
+
     const perspective = buildInvestmentPerspective(fundamentals, metrics);
     res.json({
       symbol: yfSymbol,
@@ -1568,15 +2134,384 @@ app.post('/api/stock-info', async (req, res) => {
   }
 });
 
+/**
+ * Replace the "### Positive signs for buy" block so the label matches data (LLMs often mark "Yes" for every name).
+ */
+function replacePositiveSignsSection(markdown, verdictLine) {
+  if (typeof markdown !== 'string') return markdown;
+  const re = /###\s*Positive signs for buy\s*\r?\n[\s\S]*?(?=\r?\n###\s|\r?\n##\s|$)/i;
+  if (!re.test(markdown)) {
+    const tail = markdown.trimEnd();
+    return `${tail}\n\n### Positive signs for buy\n\n- ${verdictLine}\n`;
+  }
+  return markdown.replace(re, `### Positive signs for buy\n\n- ${verdictLine}\n`);
+}
+
+/**
+ * Rule-based verdict from P/E, 3Y price stats, and profit trends (same JSON as the report prompt).
+ * "Yes" only when growth + reasonable valuation + 3Y context align; otherwise Mixed or No.
+ */
+function computePositiveSignsForBuyLine({ screener, fundBlock, qpBlock, infoBlock }) {
+  const fund = fundBlock && typeof fundBlock === 'object' ? fundBlock : {};
+  const qp = qpBlock && typeof qpBlock === 'object' ? qpBlock : {};
+  const info = infoBlock && typeof infoBlock === 'object' ? infoBlock : {};
+
+  const pe = parseFundNumLoose(fund.pe);
+  const annual = Array.isArray(qp.annual) ? qp.annual : [];
+  const quarters = Array.isArray(qp.quarters) ? qp.quarters : [];
+  const threeY = info.threeYear || null;
+
+  let score = 0;
+  let growthSignal = false;
+
+  if (annual.length >= 2) {
+    const [a0, a1] = annual;
+    if (a0.netIncome != null && a1.netIncome != null && Math.abs(a1.netIncome) > 1e-6) {
+      const gr = (a0.netIncome - a1.netIncome) / Math.abs(a1.netIncome);
+      if (gr > 0.08) {
+        growthSignal = true;
+        score += 2;
+      } else if (gr < -0.12) {
+        score -= 2;
+      }
+    }
+  }
+
+  if (!growthSignal && quarters.length >= 2) {
+    const [q0, q1] = quarters;
+    if (q0.netIncome != null && q1.netIncome != null && Math.abs(q1.netIncome) > 1e-6) {
+      const gr = (q0.netIncome - q1.netIncome) / Math.abs(q1.netIncome);
+      if (gr > 0.08) {
+        growthSignal = true;
+        score += 1;
+      }
+    }
+  }
+
+  if (quarters.length >= 1) {
+    const q0 = quarters[0];
+    if (q0.netIncome != null && q0.netIncome < 0) score -= 2;
+  }
+
+  if (threeY) {
+    const tr = threeY.totalReturnPct;
+    const cagr = threeY.cagr;
+    if (tr != null) {
+      if (tr >= 20) score += 1;
+      else if (tr < -40) score -= 2;
+      else if (tr < -25) score -= 1;
+    }
+    if (cagr != null) {
+      if (cagr >= 12) score += 1;
+      else if (cagr < -10) score -= 2;
+    }
+  } else {
+    score -= 1;
+  }
+
+  if (pe != null) {
+    if (pe < 0 || pe > 200) score -= 2;
+    else if (pe > 90) score -= 1;
+    else if (pe >= 6 && pe <= 40) score += 1;
+  }
+
+  const ch = screener?.changePercent;
+  const wk = screener?.weekChange;
+  if (typeof ch === 'number' && ch <= -15) score -= 1;
+  if (typeof wk === 'number' && wk <= -25) score -= 1;
+
+  const hasProfit = annual.length > 0 || quarters.length > 0;
+  if (!hasProfit && !threeY) {
+    return 'Mixed — wait for confirmation';
+  }
+
+  const lossMakingTrailing =
+    quarters.length >= 1 &&
+    quarters[0].netIncome != null &&
+    quarters[0].netIncome < 0;
+
+  const hardNo =
+    (pe != null && pe < 0) ||
+    (lossMakingTrailing && score <= -1) ||
+    (threeY?.totalReturnPct != null && threeY.totalReturnPct < -50);
+
+  if (hardNo || score <= -3) return 'No — positive signs not sufficient';
+
+  const hardYes =
+    score >= 4 &&
+    growthSignal &&
+    threeY &&
+    threeY.totalReturnPct != null &&
+    threeY.totalReturnPct > -15 &&
+    pe != null &&
+    pe > 0 &&
+    pe <= 90;
+
+  if (hardYes) return 'Yes — positive signs visible';
+
+  return 'Mixed — wait for confirmation';
+}
+
+function trimForPrompt(obj, maxChars = 1200) {
+  if (obj == null) return obj;
+  const s = typeof obj === 'string' ? obj : JSON.stringify(obj);
+  if (s.length <= maxChars) return obj;
+  if (typeof obj === 'string') return `${s.slice(0, maxChars - 1)}…`;
+  return `${s.slice(0, maxChars - 1)}…`;
+}
+
+function buildLocalFinancialsReport({ screener, fundBlock, qpBlock, infoBlock, verdictLine, note }) {
+  const pointsPos = [];
+  const pointsNeg = [];
+  const annual = Array.isArray(qpBlock?.annual) ? qpBlock.annual : [];
+  const quarters = Array.isArray(qpBlock?.quarters) ? qpBlock.quarters : [];
+  const three = infoBlock?.threeYear || null;
+  const pe = parseFundNumLoose(fundBlock?.pe);
+  const fpe = parseFundNumLoose(fundBlock?.forwardPE);
+
+  if (three?.totalReturnPct != null) {
+    pointsPos.push(`3Y total return is ${three.totalReturnPct.toFixed(1)}%.`);
+  } else {
+    pointsNeg.push('3Y return data is not available in the current feed.');
+  }
+
+  if (annual.length >= 2 && annual[0]?.netIncome != null && annual[1]?.netIncome != null) {
+    const y0 = annual[0].netIncome;
+    const y1 = annual[1].netIncome;
+    if (Math.abs(y1) > 1e-6) {
+      const yoy = ((y0 - y1) / Math.abs(y1)) * 100;
+      if (yoy >= 0) pointsPos.push(`Latest annual net profit is up about ${yoy.toFixed(1)}% YoY.`);
+      else pointsNeg.push(`Latest annual net profit is down about ${Math.abs(yoy).toFixed(1)}% YoY.`);
+    }
+  } else {
+    pointsNeg.push('Annual net-profit history is limited.');
+  }
+
+  if (quarters[0]?.netIncome != null) {
+    if (quarters[0].netIncome >= 0) pointsPos.push('Latest quarter remains profitable.');
+    else pointsNeg.push('Latest quarter net profit is negative.');
+  }
+
+  if (pe != null) {
+    if (pe > 0 && pe <= 40) pointsPos.push(`Trailing P/E (${pe.toFixed(1)}) is in a moderate range.`);
+    else if (pe < 0 || pe > 90) pointsNeg.push(`Trailing P/E (${pe.toFixed(1)}) looks stretched/unusual.`);
+  } else {
+    pointsNeg.push('P/E is unavailable from the snapshot feed.');
+  }
+
+  if (fpe != null && pe != null && fpe > 0 && pe > 0) {
+    if (fpe < pe) pointsPos.push('Forward P/E is below trailing P/E (implied earnings improvement).');
+    else pointsNeg.push('Forward P/E is not below trailing P/E (limited near-term valuation comfort).');
+  }
+
+  if (typeof screener?.changePercent === 'number') {
+    if (screener.changePercent <= -8) pointsPos.push(`Price is down ${Math.abs(screener.changePercent).toFixed(1)}% today (deep dip context).`);
+    if (screener.changePercent <= -18) pointsNeg.push('Current fall is very steep; risk of catching a weak trend.');
+  }
+
+  const positives = pointsPos.slice(0, 3);
+  const negatives = pointsNeg.slice(0, 3);
+  while (positives.length < 3) positives.push('Current dataset gives mixed but usable signals.');
+  while (negatives.length < 3) negatives.push('Some signals are inconclusive with current feed depth.');
+
+  const qLabel = quarters[0]?.label || 'latest quarter';
+  const aLabel = annual[0]?.label || 'latest fiscal year';
+  const p1 = `3Y context: ${
+    three?.totalReturnPct != null ? `${three.totalReturnPct.toFixed(1)}% total return` : 'return not available'
+  }${
+    three?.cagr != null ? ` and ${three.cagr.toFixed(1)}% CAGR` : ''
+  }. Latest profitability reads from ${qLabel} and ${aLabel}.`;
+  const p2 = `Valuation and tape context: trailing P/E is ${
+    pe != null ? pe.toFixed(1) : 'n/a'
+  }, forward P/E is ${fpe != null ? fpe.toFixed(1) : 'n/a'}, and day move is ${
+    typeof screener?.changePercent === 'number' ? `${screener.changePercent.toFixed(2)}%` : 'n/a'
+  }. Use sector peers and upcoming results for confirmation.`;
+
+  const noteLine = note ? `\n> ${note}\n` : '';
+  return `### Key points
+- ${positives[0]}
+- ${positives[1]}
+- ${positives[2]}
+- ${negatives[0]}
+- ${negatives[1]}
+- ${negatives[2]}
+
+### Positive signs for buy
+- ${verdictLine}
+
+### Analysis
+${p1}
+
+${p2}${noteLine}`;
+}
+
+/**
+ * Groq: merged fundamentals + quarterly profit + profile/3Y + screener metrics → markdown report with tables + buy/hold/avoid.
+ */
+app.post('/api/stock-financials-report', async (req, res) => {
+  try {
+    const { stock, fundamentals, quarterlyProfit, stockInfo } = req.body || {};
+    if (!stock?.symbol) return res.status(400).json({ error: 'stock with symbol required' });
+    if (!groq) {
+      return res.json({
+        markdown:
+          '**AI report unavailable.** Set `GROQ_API_KEY` in the server `.env` to enable buy/hold/avoid analysis with tables.',
+        error: true,
+      });
+    }
+
+    const screener = {
+      symbol: stock.symbol,
+      name: stock.name,
+      price: stock.price,
+      changePercent: stock.changePercent,
+      change: stock.change,
+      volume: stock.volume,
+      marketCap: stock.marketCap,
+      segment: stock.segment,
+      segmentName: stock.segmentName,
+      rank: stock.rank,
+      bestRank: stock.bestRank,
+      sector: stock.sector,
+      isPSU: stock.isPSU === true,
+      weekChange: stock.weekChange,
+      monthChange: stock.monthChange,
+    };
+
+    const fundBlock = fundamentals && typeof fundamentals === 'object' ? fundamentals : {};
+    const qpBlock = quarterlyProfit && typeof quarterlyProfit === 'object' ? quarterlyProfit : { quarters: [], annual: [] };
+    const infoBlock = stockInfo && typeof stockInfo === 'object' ? stockInfo : {};
+
+    const compactFund = {
+      pe: fundBlock.pe ?? null,
+      forwardPE: fundBlock.forwardPE ?? null,
+      marketCap: fundBlock.marketCap ?? null,
+      eps: fundBlock.eps ?? null,
+      dividendYield: fundBlock.dividendYield ?? null,
+      fiftyTwoWeekHigh: fundBlock.fiftyTwoWeekHigh ?? null,
+      fiftyTwoWeekLow: fundBlock.fiftyTwoWeekLow ?? null,
+      sector: fundBlock.sector ?? null,
+      industry: fundBlock.industry ?? null,
+    };
+    const compactProfit = {
+      quarters: (qpBlock.quarters || []).slice(0, 6).map((q) => ({
+        periodEnd: q.periodEnd,
+        label: q.label,
+        netIncome: q.netIncome,
+        totalRevenue: q.totalRevenue,
+      })),
+      annual: (qpBlock.annual || []).slice(0, 5).map((a) => ({
+        fiscalYearEnd: a.fiscalYearEnd,
+        label: a.label,
+        netIncome: a.netIncome,
+      })),
+    };
+    const compactInfo = {
+      profile: {
+        sector: infoBlock?.profile?.sector || null,
+        industry: infoBlock?.profile?.industry || null,
+        ownershipLabel: infoBlock?.profile?.ownershipLabel || null,
+      },
+      threeYear: infoBlock?.threeYear || null,
+      perspective: Array.isArray(infoBlock?.perspective) ? infoBlock.perspective.slice(0, 3) : [],
+    };
+
+    const prompt = `You are a concise equity research assistant (India/US listings). You must respond in **GitHub-flavored Markdown** only.
+
+## Output rules (STRICT)
+Return only these 3 sections in this exact order:
+
+### Key points
+- Exactly 3 positive points
+- Exactly 3 negative points
+- Use bullet points only (no other text in this section)
+
+### Positive signs for buy
+- One line only, choose exactly one (the server will align this line with the numeric data after generation):
+  - "Yes — positive signs visible"
+  - "Mixed — wait for confirmation"
+  - "No — positive signs not sufficient"
+
+### Analysis
+- 2 to 4 short paragraphs
+- Must compare 3-year fundamentals trend with quarterly and annual revenue/net-profit tables
+- Include key screener context (price move, volume, valuation cues) in plain language
+
+Do not include Verdict, Risks, Disclaimer, or any extra sections.
+Do not include code blocks.
+
+## Data (JSON — use for facts only; if a field is missing say "n/a")
+
+### Screener / listing context
+${JSON.stringify(trimForPrompt(screener, 1200), null, 2)}
+
+### Fundamentals (snapshot)
+${JSON.stringify(compactFund, null, 2)}
+
+### Quarterly & annual profit (from Yahoo)
+${JSON.stringify(compactProfit, null, 2)}
+
+### Company profile & 3-year price stats (when present)
+${JSON.stringify(compactInfo, null, 2)}
+
+Formatting: Keep headings exactly as specified above and keep response concise.`;
+
+    const verdictLine = computePositiveSignsForBuyLine({
+      screener,
+      fundBlock,
+      qpBlock,
+      infoBlock,
+    });
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+      max_tokens: 700,
+    });
+    const markdown = completion.choices[0]?.message?.content || '_No content returned._';
+    const finalMarkdown = replacePositiveSignsSection(markdown, verdictLine);
+    res.json({ markdown: finalMarkdown, error: false });
+  } catch (err) {
+    const msg = String(err?.message || 'report_failed');
+    const isRateLimited =
+      /rate limit/i.test(msg) ||
+      /429/.test(msg) ||
+      err?.status === 429 ||
+      err?.code === 'rate_limit_exceeded';
+    if (isRateLimited) {
+      const { stock, fundamentals, quarterlyProfit, stockInfo } = req.body || {};
+      const screener = stock && typeof stock === 'object' ? stock : {};
+      const fundBlock = fundamentals && typeof fundamentals === 'object' ? fundamentals : {};
+      const qpBlock = quarterlyProfit && typeof quarterlyProfit === 'object' ? quarterlyProfit : { quarters: [], annual: [] };
+      const infoBlock = stockInfo && typeof stockInfo === 'object' ? stockInfo : {};
+      const verdictLine = computePositiveSignsForBuyLine({ screener, fundBlock, qpBlock, infoBlock });
+      const markdown = buildLocalFinancialsReport({
+        screener,
+        fundBlock,
+        qpBlock,
+        infoBlock,
+        verdictLine,
+        note: '',
+      });
+      return res.json({ markdown, error: false, rateLimitedFallback: true });
+    }
+    console.error('[stock-financials-report]', msg);
+    res.status(500).json({ error: msg, markdown: '' });
+  }
+});
+
 const PORTFOLIO_ANALYSIS_PROMPT = `You are an experienced equity analyst and portfolio strategist at Morgan Stanley. I am sharing my Zerodha portfolio holdings. Please perform a detailed analysis of my holdings, including sector allocation, stock concentration, risk exposure, and historical performance trends. Compare my portfolio composition with standard benchmarks such as Nifty 50 and Sensex. Identify strengths, weaknesses, and diversification gaps. Then, provide actionable insights on how much additional capital should be invested for long‑term wealth creation (10–15 years horizon), considering risk tolerance, compounding potential, and market cycles. Present your analysis in a structured format with clear recommendations, including suggested allocation percentages across equity, debt, and other asset classes.`;
 
 async function getPortfolioAnalysis(holdings) {
   if (!groq) {
     return { analysis: 'AI analysis requires GROQ_API_KEY in .env', error: true };
   }
-  const portfolioStr = holdings.length === 0
+  const ranked = [...holdings].sort((a, b) => ((b.last_price ?? 0) * (b.quantity ?? 0)) - ((a.last_price ?? 0) * (a.quantity ?? 0)));
+  const topHoldings = ranked.slice(0, 20);
+  const portfolioStr = topHoldings.length === 0
     ? 'Portfolio is empty.'
-    : holdings.map((h) => {
+    : topHoldings.map((h) => {
         const qty = h.quantity ?? 0;
         const avg = h.average_price ?? 0;
         const last = h.last_price ?? 0;
@@ -1590,23 +2525,38 @@ async function getPortfolioAnalysis(holdings) {
   const totalPnl = holdings.reduce((s, h) => s + (h.pnl ?? (h.quantity ?? 0) * ((h.last_price ?? 0) - (h.average_price ?? 0))), 0);
   const prompt = `${PORTFOLIO_ANALYSIS_PROMPT}
 
-My portfolio holdings:
+My portfolio holdings (top 20 by current value):
 ${portfolioStr}
 
 Summary: Invested ₹${invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}, Current Value ₹${currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}, P&L ₹${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}.
 
-Formatting rules: Use ## for main sections, ### for sub-sections. Keep headings concise. Use bullet points for lists. Keep paragraphs short (2–3 sentences max). Use tables for allocation percentages. Be concise and scannable.`;
+Formatting rules: Use concise markdown, <= 550 words total, short bullets, one compact allocation table only.`;
 
   try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.4,
+      temperature: 0.2,
+      max_tokens: 900,
     });
     const analysis = completion.choices[0]?.message?.content || 'Analysis unavailable.';
     return { analysis };
   } catch (err) {
     console.error('[Portfolio analysis]', err.message);
+    if (isGroqRateLimitError(err)) {
+      const top3 = ranked.slice(0, 3);
+      const lines = top3.map((h) => {
+        const qty = h.quantity ?? 0;
+        const last = h.last_price ?? 0;
+        const val = qty * last;
+        return `- ${h.tradingsymbol || h.symbol || 'N/A'}: value ₹${val.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+      });
+      return {
+        analysis: `## Portfolio snapshot (local fallback)\n- Holdings count: ${holdings.length}\n- Total invested: ₹${invested.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n- Current value: ₹${currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n- P&L: ₹${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}\n\n### Top positions\n${lines.join('\n') || '- No holdings'}\n`,
+        error: false,
+        rateLimitedFallback: true,
+      };
+    }
     return { analysis: `Analysis failed: ${err.message}`, error: true };
   }
 }
