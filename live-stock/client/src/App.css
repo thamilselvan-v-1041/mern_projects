@@ -1743,10 +1743,11 @@
   margin-bottom: 0.5rem;
   width: 100%;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .chart-tooltip {
+  --chart-tooltip-width: 168px;
   position: absolute;
   bottom: 100%;
   left: 50%;
@@ -1761,11 +1762,32 @@
   z-index: 100;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   pointer-events: none;
-  white-space: nowrap;
+  white-space: normal;
+  width: var(--chart-tooltip-width);
+  min-width: var(--chart-tooltip-width);
+  max-width: var(--chart-tooltip-width);
+  word-break: break-word;
+  box-sizing: border-box;
 }
 
 .chart-tooltip strong {
   font-weight: 600;
+}
+
+.chart-tooltip--floating {
+  margin-bottom: 6px;
+  z-index: 120;
+}
+
+.chart-tooltip--left {
+  left: 0 !important;
+  transform: none;
+}
+
+.chart-tooltip--right {
+  left: auto !important;
+  right: 0;
+  transform: none;
 }
 
 .mini-chart {
@@ -1776,7 +1798,7 @@
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .chart-bar {

@@ -567,6 +567,131 @@ function StockFinancialsAccordionsPanel({
       </FinancialsCollapsible>
 
       <FinancialsCollapsible
+        title="3 years price fundamentals"
+        isOpen={financialsOpenId === 'threeYear'}
+        onToggle={() => toggleFinancials('threeYear')}
+      >
+        {loadingStockInfo && !stockInfo ? (
+          <div className="loading financials-accordion-loading">Loading 3-year context…</div>
+        ) : stockInfo?.threeYear ? (
+          <div className="quarterly-profit-table-wrap three-year-fundamentals-wrap">
+            <table className="quarterly-profit-table three-year-fundamentals-table">
+              <tbody>
+                <tr>
+                  <th scope="row">Data points</th>
+                  <td>{stockInfo.threeYear.dataPoints} daily closes (~3Y window)</td>
+                </tr>
+                <tr>
+                  <th scope="row">Start → end price</th>
+                  <td>
+                    {currency}
+                    {stockInfo.threeYear.startClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })} → {currency}
+                    {stockInfo.threeYear.endClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Total return (approx.)</th>
+                  <td>{stockInfo.threeYear.totalReturnPct != null ? `${stockInfo.threeYear.totalReturnPct.toFixed(1)}%` : '—'}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Estimated CAGR (3Y)</th>
+                  <td>{stockInfo.threeYear.cagr != null ? `${stockInfo.threeYear.cagr.toFixed(1)}%` : '—'}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Max drawdown</th>
+                  <td>{stockInfo.threeYear.maxDrawdownPct.toFixed(1)}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : stockInfo ? (
+          <p className="stock-info-muted">3-year history not available for this symbol.</p>
+        ) : (
+          <p className="stock-info-muted">—</p>
+        )}
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
+        title="Quarterly & annual profit"
+        isOpen={financialsOpenId === 'quarterlyAnnual'}
+        onToggle={() => toggleFinancials('quarterlyAnnual')}
+      >
+        <div className="quarterly-profit-panel quarterly-profit-panel--embedded">
+          {loadingQuarterlyProfit ? (
+            <div className="loading financials-accordion-loading">Loading quarterly profit…</div>
+          ) : quarterlyProfit?.error ? (
+            <p className="quarterly-profit-error">{quarterlyProfit.error}</p>
+          ) : quarterlyProfit && quarterlyProfit.quarters.length === 0 && quarterlyProfit.annual.length === 0 ? (
+            <p className="stock-info-muted">No profit history returned for this symbol.</p>
+          ) : quarterlyProfit ? (
+            quarterlyProfit.quarters.length > 0 ? (
+              <div className="quarterly-profit-table-wrap">
+                <table className="quarterly-profit-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Quarter</th>
+                      <th scope="col">Revenue</th>
+                      <th scope="col">Net profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {quarterlyProfit.quarters.map((q) => (
+                      <tr key={q.periodEnd}>
+                        <td>{q.label}</td>
+                        <td>{q.totalRevenueDisplay}</td>
+                        <td>{q.netIncomeDisplay}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="stock-info-muted">No quarterly rows in the current data feed.</p>
+            )
+          ) : (
+            <p className="stock-info-muted">No profit data loaded.</p>
+          )}
+        </div>
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
+        title="Fiscal-year net profit (last 5 years)"
+        isOpen={financialsOpenId === 'fiscalYear'}
+        onToggle={() => toggleFinancials('fiscalYear')}
+      >
+        <div className="quarterly-profit-panel quarterly-profit-panel--embedded">
+          {loadingQuarterlyProfit ? (
+            <div className="loading financials-accordion-loading">Loading fiscal-year profit…</div>
+          ) : quarterlyProfit?.error ? (
+            <p className="quarterly-profit-error">{quarterlyProfit.error}</p>
+          ) : quarterlyProfit && quarterlyProfit.annual.length > 0 ? (
+            <div className="quarterly-profit-table-wrap">
+              <table className="quarterly-profit-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Year end</th>
+                    <th scope="col">Net profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quarterlyProfit.annual.map((a) => (
+                    <tr key={a.fiscalYearEnd}>
+                      <td>{a.label}</td>
+                      <td>{a.netIncomeDisplay}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : quarterlyProfit ? (
+            <p className="stock-info-muted">No annual net-profit rows in the current data feed.</p>
+          ) : (
+            <p className="stock-info-muted">No profit data loaded.</p>
+          )}
+        </div>
+      </FinancialsCollapsible>
+
+      <FinancialsCollapsible
         title="Company profile"
         isOpen={financialsOpenId === 'companyProfile'}
         onToggle={() => toggleFinancials('companyProfile')}
@@ -657,131 +782,6 @@ function StockFinancialsAccordionsPanel({
           <p className="stock-info-muted">—</p>
         )}
       </FinancialsCollapsible>
-
-      <FinancialsCollapsible
-        title="Quarterly & annual profit"
-        isOpen={financialsOpenId === 'quarterlyAnnual'}
-        onToggle={() => toggleFinancials('quarterlyAnnual')}
-      >
-        <div className="quarterly-profit-panel quarterly-profit-panel--embedded">
-          {loadingQuarterlyProfit ? (
-            <div className="loading financials-accordion-loading">Loading quarterly profit…</div>
-          ) : quarterlyProfit?.error ? (
-            <p className="quarterly-profit-error">{quarterlyProfit.error}</p>
-          ) : quarterlyProfit && quarterlyProfit.quarters.length === 0 && quarterlyProfit.annual.length === 0 ? (
-            <p className="stock-info-muted">No profit history returned for this symbol.</p>
-          ) : quarterlyProfit ? (
-            quarterlyProfit.quarters.length > 0 ? (
-              <div className="quarterly-profit-table-wrap">
-                <table className="quarterly-profit-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Quarter</th>
-                      <th scope="col">Revenue</th>
-                      <th scope="col">Net profit</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {quarterlyProfit.quarters.map((q) => (
-                      <tr key={q.periodEnd}>
-                        <td>{q.label}</td>
-                        <td>{q.totalRevenueDisplay}</td>
-                        <td>{q.netIncomeDisplay}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="stock-info-muted">No quarterly rows in the current data feed.</p>
-            )
-          ) : (
-            <p className="stock-info-muted">No profit data loaded.</p>
-          )}
-        </div>
-      </FinancialsCollapsible>
-
-      <FinancialsCollapsible
-        title="Fiscal-year net profit (last 5 years)"
-        isOpen={financialsOpenId === 'fiscalYear'}
-        onToggle={() => toggleFinancials('fiscalYear')}
-      >
-        <div className="quarterly-profit-panel quarterly-profit-panel--embedded">
-          {loadingQuarterlyProfit ? (
-            <div className="loading financials-accordion-loading">Loading fiscal-year profit…</div>
-          ) : quarterlyProfit?.error ? (
-            <p className="quarterly-profit-error">{quarterlyProfit.error}</p>
-          ) : quarterlyProfit && quarterlyProfit.annual.length > 0 ? (
-            <div className="quarterly-profit-table-wrap">
-              <table className="quarterly-profit-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Year end</th>
-                    <th scope="col">Net profit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {quarterlyProfit.annual.map((a) => (
-                    <tr key={a.fiscalYearEnd}>
-                      <td>{a.label}</td>
-                      <td>{a.netIncomeDisplay}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : quarterlyProfit ? (
-            <p className="stock-info-muted">No annual net-profit rows in the current data feed.</p>
-          ) : (
-            <p className="stock-info-muted">No profit data loaded.</p>
-          )}
-        </div>
-      </FinancialsCollapsible>
-
-      <FinancialsCollapsible
-        title="3 years price fundamentals"
-        isOpen={financialsOpenId === 'threeYear'}
-        onToggle={() => toggleFinancials('threeYear')}
-      >
-        {loadingStockInfo && !stockInfo ? (
-          <div className="loading financials-accordion-loading">Loading 3-year context…</div>
-        ) : stockInfo?.threeYear ? (
-          <div className="quarterly-profit-table-wrap three-year-fundamentals-wrap">
-            <table className="quarterly-profit-table three-year-fundamentals-table">
-              <tbody>
-                <tr>
-                  <th scope="row">Data points</th>
-                  <td>{stockInfo.threeYear.dataPoints} daily closes (~3Y window)</td>
-                </tr>
-                <tr>
-                  <th scope="row">Start → end price</th>
-                  <td>
-                    {currency}
-                    {stockInfo.threeYear.startClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })} → {currency}
-                    {stockInfo.threeYear.endClose.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                  </td>
-                </tr>
-                <tr>
-                  <th scope="row">Total return (approx.)</th>
-                  <td>{stockInfo.threeYear.totalReturnPct != null ? `${stockInfo.threeYear.totalReturnPct.toFixed(1)}%` : '—'}</td>
-                </tr>
-                <tr>
-                  <th scope="row">Estimated CAGR (3Y)</th>
-                  <td>{stockInfo.threeYear.cagr != null ? `${stockInfo.threeYear.cagr.toFixed(1)}%` : '—'}</td>
-                </tr>
-                <tr>
-                  <th scope="row">Max drawdown</th>
-                  <td>{stockInfo.threeYear.maxDrawdownPct.toFixed(1)}%</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        ) : stockInfo ? (
-          <p className="stock-info-muted">3-year history not available for this symbol.</p>
-        ) : (
-          <p className="stock-info-muted">—</p>
-        )}
-      </FinancialsCollapsible>
     </div>
   );
 }
@@ -812,6 +812,8 @@ function StockItem({
   financialsReport,
   loadingFinancialsReport,
   onRequestFinancialsLoad,
+  financialsOpenId,
+  onFinancialsOpenChange,
 }: {
   stock: Stock;
   expanded: boolean;
@@ -838,15 +840,16 @@ function StockItem({
   showSelect?: boolean;
   onClearSearchItem?: () => void;
   highlightedSearchId?: string | null;
+  financialsOpenId: FinancialsSectionId | null;
+  onFinancialsOpenChange: (id: FinancialsSectionId | null) => void;
 }) {
   const isUp = (stock.changePercent ?? 0) >= 0;
   const currency = stock.market === 'us' ? '$' : '₹';
   const history = chartData ?? stock.history ?? [];
-  const [hoveredPoint, setHoveredPoint] = useState<{ date: string; close: number } | null>(null);
-  const [financialsOpenId, setFinancialsOpenId] = useState<FinancialsSectionId | null>('analysis');
+  const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [infoModalOpen, setInfoModalOpen] = useState(false);
   const toggleFinancials = (id: FinancialsSectionId) => {
-    setFinancialsOpenId((prev) => (prev === id ? null : id));
+    onFinancialsOpenChange(financialsOpenId === id ? null : id);
   };
 
   useEffect(() => {
@@ -1048,34 +1051,61 @@ function StockItem({
                     const max = Math.max(...displayData.map((h) => h.close));
                     const range = max - min || 1;
                     const chartH = 100;
+                    const hoveredPoint =
+                      hoveredBarIndex != null && hoveredBarIndex >= 0 && hoveredBarIndex < displayData.length
+                        ? displayData[hoveredBarIndex]
+                        : null;
+                    const tooltipLeftPct =
+                      hoveredBarIndex != null && displayData.length > 1
+                        ? (hoveredBarIndex / (displayData.length - 1)) * 100
+                        : 0;
+                    const isLeftEdge = hoveredBarIndex != null && tooltipLeftPct <= 14;
+                    const isRightEdge = hoveredBarIndex != null && tooltipLeftPct >= 86;
                     return (
                       <>
                         <div className="mini-chart-wrapper">
-                          <div className="mini-chart">
+                          {hoveredPoint ? (
+                            <div
+                              className={`chart-tooltip chart-tooltip--floating ${
+                                isLeftEdge ? 'chart-tooltip--left' : isRightEdge ? 'chart-tooltip--right' : ''
+                              }`}
+                              style={{ left: `${tooltipLeftPct}%` }}
+                            >
+                              {new Date(hoveredPoint.date).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                              <br />
+                              <strong>
+                                {currency}
+                                {hoveredPoint.close?.toLocaleString('en-IN', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </strong>
+                            </div>
+                          ) : null}
+                          <div
+                            className="mini-chart"
+                            onMouseLeave={() => setHoveredBarIndex(null)}
+                            onTouchEnd={() => setHoveredBarIndex(null)}
+                          >
                             {displayData.map((p, i) => (
                               <div
-                                key={i}
+                                key={p.date}
                                 className="chart-bar"
                                 style={{
                                   height: `${((p.close - min) / range) * chartH}px`,
                                   minHeight: 2,
                                 }}
-                                onMouseEnter={() => setHoveredPoint(p)}
-                                onMouseLeave={() => setHoveredPoint(null)}
+                                onMouseEnter={() => setHoveredBarIndex(i)}
+                                onMouseMove={() => {
+                                  if (hoveredBarIndex !== i) setHoveredBarIndex(i);
+                                }}
+                                onTouchStart={() => setHoveredBarIndex(i)}
                                 title={`${new Date(p.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · ${currency}${p.close?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                              >
-                                {hoveredPoint === p && (
-                                  <div className="chart-tooltip">
-                                    {new Date(p.date).toLocaleDateString('en-IN', {
-                                      day: 'numeric',
-                                      month: 'short',
-                                      year: 'numeric',
-                                    })}
-                                    <br />
-                                    <strong>{currency}{p.close?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                                  </div>
-                                )}
-                              </div>
+                              />
                             ))}
                           </div>
                         </div>
@@ -1184,6 +1214,8 @@ function StockListSection({
   financialsReportCache,
   loadingFinancialsReportId,
   onRequestFinancialsLoad,
+  financialsOpenId,
+  onFinancialsOpenChange,
 }: {
   stocks: Stock[];
   activeStockId: string | null;
@@ -1210,6 +1242,8 @@ function StockListSection({
   showSelect: boolean;
   onClearSearchItem?: (stock: Stock) => void;
   highlightedSearchId?: string | null;
+  financialsOpenId: FinancialsSectionId | null;
+  onFinancialsOpenChange: (id: FinancialsSectionId | null) => void;
 }) {
   return (
     <section className="stock-list-section">
@@ -1251,6 +1285,8 @@ function StockListSection({
               onClearSearchItem={String(stock.segment || '').startsWith('search-') && onClearSearchItem ? () => onClearSearchItem(stock) : undefined}
               highlightedSearchId={highlightedSearchId}
               onRequestFinancialsLoad={() => onRequestFinancialsLoad(stock, id)}
+              financialsOpenId={financialsOpenId}
+              onFinancialsOpenChange={onFinancialsOpenChange}
             />
           );
         })}
@@ -1266,6 +1302,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [activeStockId, setActiveStockId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType | null>(null);
+  const [financialsOpenId, setFinancialsOpenId] = useState<FinancialsSectionId | null>('threeYear');
   const [preferredTab, setPreferredTab] = useState<TabType>('chart');
   const [analysisCache, setAnalysisCache] = useState<Record<string, Analysis>>({});
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
@@ -3467,6 +3504,8 @@ export default function App() {
             showSelect
             onClearSearchItem={handleClearSearchPinnedItem}
             highlightedSearchId={highlightedSearchId}
+            financialsOpenId={financialsOpenId}
+            onFinancialsOpenChange={setFinancialsOpenId}
           />
         )}
       </main>
