@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Eye,
   Image as ImageIcon,
@@ -22,6 +22,12 @@ export type MediaExplorerResult = {
 type Tab = "giphy" | "pexels";
 const RECENT_MEDIA_STORAGE_KEY = "video-editor-recent-gif-media";
 const MAX_RECENT_MEDIA = 24;
+type CachedSearchState = {
+  results: MediaExplorerResult[];
+  page: number;
+  hasMore: boolean;
+  error: string | null;
+};
 
 type Props = {
   /** `modal` = overlay. `page` = embedded editor view (no backdrop). */
@@ -50,6 +56,32 @@ export function MediaExplorerModal({
   const [hasMore, setHasMore] = useState(false);
   const [recentMedia, setRecentMedia] = useState<MediaExplorerResult[]>([]);
   const [previewItem, setPreviewItem] = useState<MediaExplorerResult | null>(null);
+  const [searchCache, setSearchCache] = useState<Record<string, CachedSearchState>>({});
+
+  const cacheKeyFor = useCallback((tabName: Tab, q: string) => {
+    const normalized = q.trim().toLowerCase();
+    return `${tabName}::${normalized || "__default__"}`;
+  }, []);
+
+  const currentCacheKey = useMemo(
+    () => cacheKeyFor(tab, query),
+    [cacheKeyFor, tab, query]
+  );
+
+  const restoreFromCache = useCallback(
+    (key: string): boolean => {
+      const cached = searchCache[key];
+      if (!cached) return false;
+      setResults(cached.results);
+      setPage(cached.page);
+      setHasMore(cached.hasMore);
+      setError(cached.error);
+      setLoading(false);
+      setLoadingMore(false);
+      return true;
+    },
+    [searchCache]
+  );
 
   const getMediaKey = useCallback(
     (item: MediaExplorerResult) => `${item.mediaType}:${item.playbackUrl || item.id}`,
@@ -131,6 +163,30 @@ export function MediaExplorerModal({
       });
       setPage(targetPage);
       setHasMore(Boolean(data?.hasMore) && incoming.length > 0);
+      const nextResults = append
+        ? (() => {
+            const existing = searchCache[cacheKeyFor("giphy", q)]?.results ?? [];
+            const seen = new Set(existing.map((r) => `${r.mediaType}:${r.id}`));
+            const merged = [...existing];
+            for (const r of incoming) {
+              const k = `${r.mediaType}:${r.id}`;
+              if (seen.has(k)) continue;
+              seen.add(k);
+              merged.push(r);
+            }
+            return merged;
+          })()
+        : incoming;
+      const nextHasMore = Boolean(data?.hasMore) && incoming.length > 0;
+      setSearchCache((prev) => ({
+        ...prev,
+        [cacheKeyFor("giphy", q)]: {
+          results: nextResults,
+          page: targetPage,
+          hasMore: nextHasMore,
+          error: null,
+        },
+      }));
     } catch {
       setError("Network error");
       if (targetPage === 1) setResults([]);
@@ -139,7 +195,7 @@ export function MediaExplorerModal({
       setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
+  }, [cacheKeyFor, searchCache]);
 
   const fetchPexels = useCallback(async (q: string, targetPage = 1) => {
     const append = targetPage > 1;
@@ -179,6 +235,30 @@ export function MediaExplorerModal({
       });
       setPage(targetPage);
       setHasMore(Boolean(data?.hasMore) && incoming.length > 0);
+      const nextResults = append
+        ? (() => {
+            const existing = searchCache[cacheKeyFor("pexels", q)]?.results ?? [];
+            const seen = new Set(existing.map((r) => `${r.mediaType}:${r.id}`));
+            const merged = [...existing];
+            for (const r of incoming) {
+              const k = `${r.mediaType}:${r.id}`;
+              if (seen.has(k)) continue;
+              seen.add(k);
+              merged.push(r);
+            }
+            return merged;
+          })()
+        : incoming;
+      const nextHasMore = Boolean(data?.hasMore) && incoming.length > 0;
+      setSearchCache((prev) => ({
+        ...prev,
+        [cacheKeyFor("pexels", q)]: {
+          results: nextResults,
+          page: targetPage,
+          hasMore: nextHasMore,
+          error: null,
+        },
+      }));
     } catch {
       setError("Network error");
       if (targetPage === 1) setResults([]);
@@ -187,20 +267,23 @@ export function MediaExplorerModal({
       setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
+  }, [cacheKeyFor, searchCache]);
 
   useEffect(() => {
     if (!isOpen) return;
+    if (restoreFromCache(currentCacheKey)) return;
     setError(null);
     setPage(1);
     setHasMore(false);
     if (tab === "giphy") void fetchGiphy(query, 1);
     else void fetchPexels(query, 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load on open / tab switch only
-  }, [isOpen, tab]);
+  }, [isOpen, tab, currentCacheKey, restoreFromCache]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
+    const key = cacheKeyFor(tab, query);
+    if (restoreFromCache(key)) return;
     setPage(1);
     setHasMore(false);
     if (tab === "giphy") void fetchGiphy(query, 1);
@@ -304,8 +387,11 @@ export function MediaExplorerModal({
               const v = e.target.value;
               setQuery(v);
               if (v.trim() === "") {
-                if (tab === "giphy") void fetchGiphy("");
-                else void fetchPexels("");
+                const key = cacheKeyFor(tab, "");
+                if (!restoreFromCache(key)) {
+                  if (tab === "giphy") void fetchGiphy("");
+                  else void fetchPexels("");
+                }
               }
             }}
             placeholder={

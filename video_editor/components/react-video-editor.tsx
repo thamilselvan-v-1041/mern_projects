@@ -3262,7 +3262,20 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         }
       } else if (dragging.kind === "audio") {
         setClipDragInsertFrame((prev) => (prev === null ? prev : null));
-        setAudioTracks((prev) => realignTrackAfterMove(prev, dragging.id, newStart));
+        setAudioTracks((prev) => {
+          let changed = false;
+          const next = prev.map((track) => {
+            if (track.id !== dragging.id) return track;
+            if (track.start === newStart) return track;
+            changed = true;
+            return { ...track, start: newStart };
+          });
+          if (!changed) return prev;
+          return [...next].sort((a, b) => {
+            if (a.start !== b.start) return a.start - b.start;
+            return a.id.localeCompare(b.id);
+          });
+        });
       } else {
         setClipDragInsertFrame((prev) => (prev === null ? prev : null));
         setTextOverlays((prev) => realignTrackAfterMove(prev, dragging.id, newStart));
@@ -3288,6 +3301,22 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
             realignTrackAfterMove(prev, dragging.id, targetInsertFrame)
           );
         }
+      } else if (dragging.kind === "audio") {
+        const requestedStart = Math.max(0, Math.floor(lastAppliedStart));
+        setAudioTracks((prev) => {
+          let changed = false;
+          const next = prev.map((track) => {
+            if (track.id !== dragging.id) return track;
+            if (track.start === requestedStart) return track;
+            changed = true;
+            return { ...track, start: requestedStart };
+          });
+          if (!changed) return prev;
+          return [...next].sort((a, b) => {
+            if (a.start !== b.start) return a.start - b.start;
+            return a.id.localeCompare(b.id);
+          });
+        });
       }
       if (rafId) {
         window.cancelAnimationFrame(rafId);
@@ -4075,33 +4104,45 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                 }
               />
             </div>
-            {navPanel === "audios" ? (
-              <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-                <AudiosLibraryPanel
-                  audioTracks={audioTracks}
-                  selectedAudioId={
-                    selected?.kind === "audio" ? selected.id : null
-                  }
-                  fps={FPS}
-                  onSelectAudio={(id) => setSelected({ kind: "audio", id })}
-                  onSeekToFrame={(frame) =>
-                    safeSeekPlayer(playerRef.current, frame)
-                  }
-                  onAddSampleAudio={addSampleAudioToTimeline}
-                  mainPreviewIsPlaying={previewIsPlaying}
-                  onPauseMainPlayback={pauseMainPreviewPlayback}
-                />
-              </div>
-            ) : null}
-            {navPanel === "giffy" ? (
-              <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <MediaExplorerModal
-                  layout="page"
-                  isOpen
-                  onPick={insertExplorerClip}
-                />
-              </div>
-            ) : null}
+            {/* Keep mounted when switching workspace tabs so loaded audio samples persist */}
+            <div
+              className={
+                navPanel === "audios"
+                  ? "flex h-full min-h-0 min-w-0 flex-1 flex-col"
+                  : "hidden"
+              }
+              aria-hidden={navPanel !== "audios"}
+            >
+              <AudiosLibraryPanel
+                audioTracks={audioTracks}
+                selectedAudioId={
+                  selected?.kind === "audio" ? selected.id : null
+                }
+                fps={FPS}
+                onSelectAudio={(id) => setSelected({ kind: "audio", id })}
+                onSeekToFrame={(frame) =>
+                  safeSeekPlayer(playerRef.current, frame)
+                }
+                onAddSampleAudio={addSampleAudioToTimeline}
+                mainPreviewIsPlaying={previewIsPlaying}
+                onPauseMainPlayback={pauseMainPreviewPlayback}
+              />
+            </div>
+            {/* Keep mounted when switching workspace tabs so loaded GIF samples persist */}
+            <div
+              className={
+                navPanel === "giffy"
+                  ? "flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                  : "hidden"
+              }
+              aria-hidden={navPanel !== "giffy"}
+            >
+              <MediaExplorerModal
+                layout="page"
+                isOpen
+                onPick={insertExplorerClip}
+              />
+            </div>
             {navPanel === "text" ? (
               <TextWorkspacePanel onAddText={addTextOverlay} />
             ) : null}
@@ -4307,14 +4348,14 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
           </div>
 
         <div className="mt-2 min-h-0 flex-1 bg-white px-1 pb-4 pt-3">
-          <div className="flex w-full flex-col overflow-hidden bg-white">
+          <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-white">
             <div
-              className="flex h-full min-h-0 w-full flex-1 overflow-y-auto"
+              className="flex min-h-0 w-full flex-1 overflow-hidden"
               style={{ minHeight: minTimelinePaneHeight }}
             >
               <div
                 ref={timelineScrollRef}
-                className="min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-white"
+                className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-white"
               >
                 <div
                   className="relative shrink-0"
@@ -4713,6 +4754,10 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             isSel
                               ? "border-emerald-300 ring-2 ring-emerald-200 ring-offset-2 ring-offset-white"
                               : "border-white/30"
+                          } ${
+                            dragging?.kind === "audio" && dragging.id !== track.id
+                              ? "opacity-45"
+                              : "opacity-100"
                           }`}
                           style={{
                             left:
