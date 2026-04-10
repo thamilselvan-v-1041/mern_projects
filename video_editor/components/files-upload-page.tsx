@@ -86,7 +86,7 @@ export function FilesUploadPage({
           <button
             type="button"
             onClick={onPickVideo}
-            className="flex flex-col items-start gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-amber-300 hover:bg-amber-50/50"
+            className="flex flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm transition hover:border-amber-300 hover:bg-amber-50/50"
           >
             <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white">
               <FileVideo className="h-6 w-6" aria-hidden />
@@ -99,7 +99,7 @@ export function FilesUploadPage({
           <button
             type="button"
             onClick={onPickAudio}
-            className="flex flex-col items-start gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/50"
+            className="flex flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50/50"
           >
             <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
               <FileAudio className="h-6 w-6" aria-hidden />

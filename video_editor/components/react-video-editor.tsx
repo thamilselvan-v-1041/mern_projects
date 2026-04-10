@@ -745,6 +745,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   const clipDragSnapshotRef = useRef<Clip[] | null>(null);
   const topMenuRef = useRef<HTMLDivElement | null>(null);
   const playbackPaneUserResizedRef = useRef(false);
+  const lastAutoFocusedSelectionRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isPlaybackResizing) return;
@@ -2857,8 +2858,14 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
 
   /** Stop playback and jump the playhead to the selected layer’s start (preview + timeline cursor). */
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) {
+      lastAutoFocusedSelectionRef.current = null;
+      return;
+    }
     if (dragging || resizeDragging) return;
+    const selectionKey = `${selected.kind}:${selected.id}`;
+    if (lastAutoFocusedSelectionRef.current === selectionKey) return;
+    lastAutoFocusedSelectionRef.current = selectionKey;
     if (preservePlayheadOnNextSelectionRef.current) {
       preservePlayheadOnNextSelectionRef.current = false;
       return;
@@ -4787,11 +4794,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               y: e.clientY,
                             });
                           }}
-                          className={`absolute z-20 flex overflow-hidden border-2 ${
-                            clip.overlayClip
-                              ? "bg-gradient-to-br from-teal-300 to-cyan-400"
-                              : "bg-gradient-to-br from-violet-300 to-purple-400"
-                          } ${
+                          className={`absolute z-20 flex overflow-hidden border-2 bg-gradient-to-br from-violet-300 to-purple-400 ${
                             clip.fromAI
                               ? "border-amber-300"
                               : ""
@@ -5167,19 +5170,9 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               e.stopPropagation();
                               e.preventDefault();
                               beginElementInteractionStack(overlay.id, isShape);
-                              const clickedFrame = frameFromClientX(e.clientX);
-                              if (previewMode === "cached") {
-                                switchToLivePlayback(clickedFrame);
-                              }
-                              const player = playerRef.current;
-                              if (player) {
-                                player.pause();
-                                safeSeekPlayer(player, clickedFrame);
-                              }
-                              playActionFrameRef.current = clickedFrame;
-                              setCurrentFrame(clickedFrame);
-                              setPlaybackFrame(clickedFrame);
-                              setHoverFrame(clickedFrame);
+                              // Dragging elements should always pause active playback.
+                              playerRef.current?.pause();
+                              // Keep current playhead/audio anchor unchanged while dragging elements.
                               preservePlayheadOnNextSelectionRef.current = true;
                               setSelected({ kind: "text", id: overlay.id });
                               setDragging({
