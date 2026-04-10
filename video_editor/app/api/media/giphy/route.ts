@@ -22,10 +22,14 @@ export async function GET(req: NextRequest) {
     50,
     Math.max(1, Number(req.nextUrl.searchParams.get("limit") || 24))
   );
+  const offset = Math.max(
+    0,
+    Number(req.nextUrl.searchParams.get("offset") || 0)
+  );
 
   const url = !qRaw.length
-    ? `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(key)}&limit=${limit}`
-    : `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(key)}&q=${encodeURIComponent(qRaw)}&limit=${limit}`;
+    ? `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(key)}&limit=${limit}&offset=${offset}`
+    : `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(key)}&q=${encodeURIComponent(qRaw)}&limit=${limit}&offset=${offset}`;
 
   try {
     const res = await fetch(url);
@@ -33,6 +37,8 @@ export async function GET(req: NextRequest) {
       data?: Array<{
         id: string;
         title?: string;
+        username?: string;
+        user?: { username?: string; display_name?: string };
         images?: {
           fixed_height_small?: { url?: string; mp4?: string };
           downsized_medium?: { url?: string };
@@ -40,6 +46,11 @@ export async function GET(req: NextRequest) {
         };
       }>;
       meta?: { msg?: string };
+      pagination?: {
+        total_count?: number;
+        count?: number;
+        offset?: number;
+      };
     };
 
     if (!res.ok) {
@@ -66,9 +77,18 @@ export async function GET(req: NextRequest) {
           im?.original?.url;
         const playback = mp4 || preview;
         if (!playback) return null;
+        const author = (
+          g.user?.display_name ||
+          g.user?.username ||
+          g.username ||
+          ""
+        )
+          .trim()
+          .slice(0, 80);
         return {
           id: g.id,
           label: (g.title || "GIF").slice(0, 80),
+          author,
           previewUrl: preview || playback,
           playbackUrl: playback,
           mediaType: mp4 ? ("video" as const) : ("image" as const),
@@ -76,7 +96,13 @@ export async function GET(req: NextRequest) {
       })
       .filter(Boolean);
 
-    return NextResponse.json({ results });
+    const totalCount = Number(data?.pagination?.total_count ?? 0);
+    const hasMore =
+      Number.isFinite(totalCount) && totalCount > 0
+        ? offset + raw.length < totalCount
+        : raw.length >= limit;
+
+    return NextResponse.json({ results, hasMore });
   } catch (e) {
     return NextResponse.json(
       {

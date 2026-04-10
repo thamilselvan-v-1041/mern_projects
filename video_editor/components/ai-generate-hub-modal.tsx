@@ -2,11 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ChevronLeft,
   Loader2,
   MessageSquare,
   Mic2,
-  Music2,
   Send,
   Sparkles,
   Type,
@@ -27,8 +25,6 @@ type Props = {
   layout?: "modal" | "inline";
   isOpen: boolean;
   onClose?: () => void;
-  /** Inline layout: return to preview / timeline */
-  onBackToPreview?: () => void;
   initialTab: AiHubTab;
   onVideoGenerated: (videoUrl: string) => void;
   onAudioGenerated: (audioUrl: string, label: string, durationSec?: number) => void;
@@ -95,7 +91,6 @@ export function AiGenerateHubModal({
   layout = "modal",
   isOpen,
   onClose,
-  onBackToPreview,
   initialTab,
   onVideoGenerated,
   onAudioGenerated,
@@ -148,36 +143,15 @@ export function AiGenerateHubModal({
     }
     if (tab === "audio" && !seededRef.current.audio) {
       seededRef.current.audio = true;
-      setAudioMessages([
-        {
-          id: uid(),
-          role: "system",
-          content:
-            "Workflow: short idea → Expand (Groq) → edit the text box into your final prompt → Generate music. Suno always receives whatever is in the box when you click Generate (not the chat history). Custom + vocals: box = sung lyrics. Simple mode: only the first ~500 characters of the box go to Suno.",
-        },
-      ]);
+      setAudioMessages([]);
     }
     if (tab === "video" && !seededRef.current.video) {
       seededRef.current.video = true;
-      setVideoMessages([
-        {
-          id: uid(),
-          role: "system",
-          content:
-            "Workflow: short idea → Expand (Groq) → edit the box into your final scene prompt → Generate video. Replicate or Veo receives exactly the current box text when you generate.",
-        },
-      ]);
+      setVideoMessages([]);
     }
     if (tab === "text" && !seededRef.current.text) {
       seededRef.current.text = true;
-      setTextMessages([
-        {
-          id: uid(),
-          role: "system",
-          content:
-            "Expand (Groq) fills the box with line options; edit to your final copy, then Apply — the text layer gets the current box contents (needs GROQ_API_KEY for Expand only).",
-        },
-      ]);
+      setTextMessages([]);
     }
   }, [isOpen, tab, layout]);
 
@@ -406,17 +380,6 @@ export function AiGenerateHubModal({
     <div className={shellClassName}>
         <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            {layout === "inline" && onBackToPreview ? (
-              <button
-                type="button"
-                onClick={onBackToPreview}
-                disabled={busy !== null}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-              >
-                <ChevronLeft className="h-4 w-4" aria-hidden />
-                Preview
-              </button>
-            ) : null}
             <MessageSquare className="h-5 w-5 shrink-0 text-slate-700" />
             <h2 className="truncate text-base font-semibold text-slate-900">
               AI studio
@@ -636,31 +599,19 @@ export function AiGenerateHubModal({
             placeholder={
               tab === "audio"
                 ? songMode === "simple"
-                  ? "Short idea — Expand for a richer prompt, or Generate from this line (first 500 chars)…"
+                  ? "Describe your track or paste lyrics…"
                   : VOCAL_OPTIONS.find((v) => v.id === vocalId)?.instrumental
-                    ? "Mood notes (optional) — genre & title drive the track; Expand for style notes"
-                    : "Short idea or draft lyrics — Expand for full lyrics, then Generate"
+                    ? "Optional mood notes (genre and title are set above)"
+                    : "Idea or draft lyrics…"
                 : tab === "video"
-                  ? "Short shot idea — Expand for camera, lighting, motion, then Generate"
-                  : "Brief idea — Expand for on-screen lines, edit, then Apply to text layer"
+                  ? "Describe the scene, lighting, motion…"
+                  : "Headline or lines for the canvas…"
             }
             rows={3}
             className="mb-2 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[10px] text-slate-400">
-              {tab === "audio" ? (
-                <>
-                  <Music2 className="mr-1 inline h-3 w-3" />
-                  Generate → Suno uses this box · Expand → Groq (GROQ_API_KEY)
-                </>
-              ) : tab === "video" ? (
-                "Generate → Replicate/Veo uses this box · Expand → Groq"
-              ) : (
-                "Apply → selected text layer gets this box"
-              )}
-            </span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"

@@ -26,6 +26,8 @@ export interface Clip {
   posY?: number;
   /** Uniform scale around anchor, default 1. */
   scale?: number;
+  /** Rotation on canvas in degrees (clockwise), default 0. */
+  rotationDeg?: number;
   transitionIn?: LayerTransitionPreset;
   transitionOut?: LayerTransitionPreset;
   /** Frames used for in and out transitions (each side), default 15. */
@@ -35,6 +37,9 @@ export interface Clip {
   /** Stacks above base clips (Giphy / stock photos), like AI overlays. */
   overlayClip?: boolean;
   overlayOrder?: number;
+  /** Timeline bar title (per clip id; not derived from track index). */
+  sourceName?: string;
+  sourceAuthor?: string;
 }
 
 /** Preset intro animations (Canva-style). */
@@ -72,6 +77,8 @@ export interface TextOverlay {
   posY?: number;
   /** Text box width % of frame, default 92. */
   widthPct?: number;
+  /** Rotation on canvas in degrees (clockwise), default 0. */
+  rotationDeg?: number;
   /** Whiteboard-style fill behind text (Tools panel). */
   shapeBackground?: "none" | "rect" | "circle" | "pill";
   shapeFill?: string;
@@ -79,6 +86,9 @@ export interface TextOverlay {
   shapeStrokeWidthPx?: number;
   /** Inner padding around text inside the shape (rem). */
   shapePaddingRem?: number;
+  /** Optional bar title; if unset, timeline uses truncated `text`. */
+  sourceName?: string;
+  sourceAuthor?: string;
 }
 
 /** @deprecated Use TimelineAudio for the editor timeline */
@@ -98,6 +108,8 @@ export interface TimelineAudio {
   duration: number;
   src: string;
   label: string;
+  /** Shown after `label` on the timeline bar as `label, sourceAuthor`. */
+  sourceAuthor?: string;
   row: number;
   /** Frames skipped at the start of the source (Remotion `startFrom`). */
   trimStart?: number;

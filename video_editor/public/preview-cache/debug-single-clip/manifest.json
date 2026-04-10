@@ -1,0 +1,20 @@
+{
+  "projectId": "debug-single-clip",
+  "timelineFingerprint": "e4035243f37f954b1d7186768e766c267ed8fd4f1507f2970e79450140964443",
+  "fps": 30,
+  "totalFrames": 90,
+  "chunkSizeFrames": 60,
+  "generatedAt": "2026-04-07T12:13:39.368Z",
+  "chunks": [
+    {
+      "chunkId": "0-90",
+      "startFrame": 0,
+      "endFrame": 90,
+      "sourceHash": "63fe46bfc6ceb0ebaa2b3229dc4c49c40472a22fa2ad5b7ecd010938b0f22c2d",
+      "outputPath": "",
+      "outputUrl": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+      "status": "ready",
+      "updatedAt": "2026-04-07T12:13:39.368Z"
+    }
+  ]
+}

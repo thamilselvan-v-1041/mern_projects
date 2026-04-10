@@ -3,21 +3,58 @@
 import React from "react";
 import type {
   Clip,
-  LayerTransitionPreset,
   TextOverlay,
   TimelineAudio,
 } from "@/types/types";
 import { TextDesignPanel } from "./text-design-panel";
 
-const TRANSITION_OPTIONS: { id: LayerTransitionPreset; label: string }[] = [
-  { id: "none", label: "None" },
-  { id: "fade", label: "Fade" },
-  { id: "slideLeft", label: "Slide left" },
-  { id: "slideRight", label: "Slide right" },
-  { id: "slideUp", label: "Slide up" },
-  { id: "slideDown", label: "Slide down" },
-  { id: "zoomIn", label: "Zoom" },
-];
+function PercentSliderRow({
+  label,
+  value,
+  onChange,
+  min = 0,
+  max = 100,
+  suffix = "%",
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+  min?: number;
+  max?: number;
+  suffix?: string;
+}) {
+  return (
+    <label className="mb-2 block text-xs text-slate-600">
+      {label}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={Math.round(value)}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 w-full accent-violet-600"
+      />
+      <div className="mt-0.5 flex items-center justify-between gap-2">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={Math.round(value)}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) {
+              onChange(Math.max(min, Math.min(max, n)));
+            }
+          }}
+          className="w-16 rounded border border-slate-200 px-1.5 py-1 text-xs tabular-nums text-slate-800"
+        />
+        <span className="text-[10px] font-medium tabular-nums text-slate-500">
+          {suffix}
+        </span>
+      </div>
+    </label>
+  );
+}
 
 type Sel =
   | { kind: "clip"; id: string }
@@ -61,206 +98,35 @@ export function LayerPropertiesPanel({
       ? "min-h-0 flex-1 space-y-4 overflow-y-auto p-3"
       : "max-h-[min(72vh,620px)] space-y-4 overflow-y-auto p-3";
 
-  if (selected.kind === "clip" && clip) {
-    return (
-      <aside className={shell}>
-        <header className="border-b border-slate-200 px-3 py-2.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Video clip
-          </p>
-          <p className="truncate text-sm font-medium text-slate-900">
-            {clip.overlayClip
-              ? clip.mediaType === "image"
-                ? "Photo layer"
-                : "GIF layer"
-              : clip.fromAI
-                ? "AI video"
-                : "Clip"}{" "}
-            · preview or timeline
-          </p>
-        </header>
-        <div className={bodyScroll}>
-          <section>
-            <p className="mb-2 text-xs font-semibold text-slate-700">
-              Position &amp; scale
-            </p>
-            <label className="mb-2 block text-xs text-slate-600">
-              X % (center)
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={clip.posX ?? 50}
-                onChange={(e) =>
-                  onUpdateClip(clip.id, { posX: Number(e.target.value) })
-                }
-                className="mt-1 w-full"
-              />
-              <span className="tabular-nums text-slate-500">
-                {Math.round(clip.posX ?? 50)}
-              </span>
-            </label>
-            <label className="mb-2 block text-xs text-slate-600">
-              Y % (center)
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={clip.posY ?? 50}
-                onChange={(e) =>
-                  onUpdateClip(clip.id, { posY: Number(e.target.value) })
-                }
-                className="mt-1 w-full"
-              />
-              <span className="tabular-nums text-slate-500">
-                {Math.round(clip.posY ?? 50)}
-              </span>
-            </label>
-            <label className="block text-xs text-slate-600">
-              Scale
-              <input
-                type="range"
-                min={20}
-                max={200}
-                value={Math.round((clip.scale ?? 1) * 100)}
-                onChange={(e) =>
-                  onUpdateClip(clip.id, {
-                    scale: Number(e.target.value) / 100,
-                  })
-                }
-                className="mt-1 w-full"
-              />
-              <span className="tabular-nums text-slate-500">
-                {((clip.scale ?? 1) * 100).toFixed(0)}%
-              </span>
-            </label>
-          </section>
-          <section>
-            <p className="mb-2 text-xs font-semibold text-slate-700">
-              Transitions
-            </p>
-            <label className="mb-2 block text-xs text-slate-600">
-              In
-              <select
-                value={clip.transitionIn ?? "none"}
-                onChange={(e) =>
-                  onUpdateClip(clip.id, {
-                    transitionIn: e.target.value as LayerTransitionPreset,
-                  })
-                }
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
-              >
-                {TRANSITION_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="mb-2 block text-xs text-slate-600">
-              Out
-              <select
-                value={clip.transitionOut ?? "none"}
-                onChange={(e) =>
-                  onUpdateClip(clip.id, {
-                    transitionOut: e.target.value as LayerTransitionPreset,
-                  })
-                }
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm"
-              >
-                {TRANSITION_OPTIONS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-xs text-slate-600">
-              Duration (frames each side)
-              <input
-                type="number"
-                min={1}
-                max={120}
-                value={clip.transitionFrames ?? 15}
-                onChange={(e) =>
-                  onUpdateClip(clip.id, {
-                    transitionFrames: Math.max(
-                      1,
-                      Math.min(120, Number(e.target.value) || 15)
-                    ),
-                  })
-                }
-                className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-              />
-            </label>
-          </section>
-        </div>
-      </aside>
-    );
-  }
+  if (selected.kind === "clip") return null;
 
   if (selected.kind === "text" && textOverlay) {
     return (
-      <aside className={shell}>
-        <TextDesignPanel overlay={textOverlay} onUpdate={onUpdateText} />
-        <div className="border-t border-slate-200 p-3">
-          <p className="mb-2 text-xs font-semibold text-slate-700">
-            Position &amp; width
-          </p>
-          <label className="mb-2 block text-xs text-slate-600">
-            X %
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={textOverlay.posX ?? 50}
-              onChange={(e) =>
-                onUpdateText(textOverlay.id, {
-                  posX: Number(e.target.value),
-                })
-              }
-              className="mt-1 w-full"
-            />
-            <span className="tabular-nums text-slate-500">
-              {Math.round(textOverlay.posX ?? 50)}
-            </span>
-          </label>
-          <label className="mb-2 block text-xs text-slate-600">
-            Y %
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={textOverlay.posY ?? 50}
-              onChange={(e) =>
-                onUpdateText(textOverlay.id, {
-                  posY: Number(e.target.value),
-                })
-              }
-              className="mt-1 w-full"
-            />
-            <span className="tabular-nums text-slate-500">
-              {Math.round(textOverlay.posY ?? 50)}
-            </span>
-          </label>
-          <label className="block text-xs text-slate-600">
-            Width %
-            <input
-              type="range"
-              min={20}
-              max={100}
+      <aside className={`${shell} flex min-h-0 flex-col`}>
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <TextDesignPanel overlay={textOverlay} onUpdate={onUpdateText} />
+        </div>
+        <div className="shrink-0 space-y-3 border-t border-slate-200 bg-white p-3">
+          <div>
+            <p className="mb-1 text-xs font-semibold text-slate-700">
+              Size
+            </p>
+            <p className="mb-2 text-[10px] leading-snug text-slate-500">
+              Box width on the canvas; type size is under Typography. Preview
+              handles resize width (sides) and type size (top/bottom).
+            </p>
+            <PercentSliderRow
+              label="Box width"
               value={textOverlay.widthPct ?? 92}
-              onChange={(e) =>
+              onChange={(n) =>
                 onUpdateText(textOverlay.id, {
-                  widthPct: Number(e.target.value),
+                  widthPct: Math.max(18, Math.min(100, n)),
                 })
               }
-              className="mt-1 w-full"
+              min={18}
+              max={100}
             />
-            <span className="tabular-nums text-slate-500">
-              {Math.round(textOverlay.widthPct ?? 92)}
-            </span>
-          </label>
+          </div>
         </div>
       </aside>
     );
@@ -269,14 +135,6 @@ export function LayerPropertiesPanel({
   if (selected.kind === "audio" && audioTrack) {
     return (
       <aside className={shell}>
-        <header className="border-b border-slate-200 px-3 py-2.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Audio
-          </p>
-          <p className="truncate text-sm font-medium text-slate-900">
-            {audioTrack.label || "Track"}
-          </p>
-        </header>
         <div className="space-y-4 p-3">
           <p className="text-xs text-slate-500">
             Audio is heard in preview; there is no video box. Adjust levels and

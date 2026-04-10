@@ -27,6 +27,7 @@ type Props = Pick<
   | "posX"
   | "posY"
   | "widthPct"
+  | "rotationDeg"
   | "shapeBackground"
   | "shapeFill"
   | "shapeStroke"
@@ -48,6 +49,7 @@ export const TextOverlayLayer: React.FC<Props> = ({
   posX = 50,
   posY = 50,
   widthPct = 92,
+  rotationDeg = 0,
   shapeBackground = "none",
   shapeFill = "rgba(255,255,255,0.92)",
   shapeStroke,
@@ -263,7 +265,7 @@ export const TextOverlayLayer: React.FC<Props> = ({
         position: "absolute",
         left: `${posX}%`,
         top: `${posY}%`,
-        transform: "translate(-50%, -50%)",
+        transform: `translate(-50%, -50%) rotate(${rotationDeg}deg)`,
         width: `${widthPct}%`,
         maxWidth: "1600px",
         display: "flex",

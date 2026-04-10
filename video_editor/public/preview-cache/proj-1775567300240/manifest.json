@@ -1,0 +1,230 @@
+{
+  "projectId": "proj-1775567300240",
+  "timelineFingerprint": "351393067c49171a85e555c6e257c3088ef57e0354a6ef03207b98745f033c2c",
+  "fps": 30,
+  "totalFrames": 1179,
+  "chunkSizeFrames": 60,
+  "generatedAt": "2026-04-10T06:33:33.807Z",
+  "chunks": [
+    {
+      "chunkId": "0-60",
+      "startFrame": 0,
+      "endFrame": 60,
+      "sourceHash": "3e5d673f9e289fbf77fbdc036d58e1a34a298db00239545cf759e580d005d5de",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/0-60-3e5d673f9e28.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "60-120",
+      "startFrame": 60,
+      "endFrame": 120,
+      "sourceHash": "dd6a97dd4c51e1a6a6b53298a4525343a9c3eada15eb5b0000d051612ee532c8",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/60-120-dd6a97dd4c51.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "120-180",
+      "startFrame": 120,
+      "endFrame": 180,
+      "sourceHash": "25cecdaf7d6b3baca10dea153d90a50d1cddb7a93c6f5c773bc054cbc6604029",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/120-180-25cecdaf7d6b.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "180-240",
+      "startFrame": 180,
+      "endFrame": 240,
+      "sourceHash": "78397cd3c7226f6ffffac030409ff14a8ea2f2aebb51f404b76c751016514e00",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/180-240-78397cd3c722.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "240-300",
+      "startFrame": 240,
+      "endFrame": 300,
+      "sourceHash": "6b8fa41d3f244071ca41f2746fe1f3ad463fd0b05b31697726a55ba2cea69208",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/240-300-6b8fa41d3f24.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "300-360",
+      "startFrame": 300,
+      "endFrame": 360,
+      "sourceHash": "64967a725e0682ef84bbef3187d6fb48c5548cbfc23cdb6c62c138a99343623d",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/300-360-64967a725e06.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "360-420",
+      "startFrame": 360,
+      "endFrame": 420,
+      "sourceHash": "8712f83ffa37311c510fe0c2fc7921093eeb2baf3189ede608f34a9b70ecd049",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/360-420-8712f83ffa37.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "420-480",
+      "startFrame": 420,
+      "endFrame": 480,
+      "sourceHash": "b921005271f4ad7da1dc4aa1a1bae18805acc12274e8841f46ddd62b07914d56",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/420-480-b921005271f4.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "480-540",
+      "startFrame": 480,
+      "endFrame": 540,
+      "sourceHash": "9762bec28c16bd879ecfdfaf1c2a52ae54d5b2589e23753288a2e4f1ac94fc2a",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/480-540-9762bec28c16.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "540-600",
+      "startFrame": 540,
+      "endFrame": 600,
+      "sourceHash": "d6df2ab98ba1f1791856f1549c8ef850699536956b012506eb5cd2695f1b8c75",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/540-600-d6df2ab98ba1.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "600-660",
+      "startFrame": 600,
+      "endFrame": 660,
+      "sourceHash": "8f951038d2c8495013ff6aacd48894667f347ff3089b4ee1bbd05565eb75827f",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/600-660-8f951038d2c8.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "660-720",
+      "startFrame": 660,
+      "endFrame": 720,
+      "sourceHash": "1ce54a0331195746d49813af0e7a40c28a16bb3262f4bb4d139c44e077957b11",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/660-720-1ce54a033119.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "720-780",
+      "startFrame": 720,
+      "endFrame": 780,
+      "sourceHash": "7a251ebac285a80ee804e67ce930e0335bbe964c47b66cedeaf66e40b030e161",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/720-780-7a251ebac285.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "780-840",
+      "startFrame": 780,
+      "endFrame": 840,
+      "sourceHash": "4c02faa7e53e790e0feae9a8b98d10d1a4c795206e6a5f5807baf8c26cae590b",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/780-840-4c02faa7e53e.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "840-900",
+      "startFrame": 840,
+      "endFrame": 900,
+      "sourceHash": "c5133c823c9997d2f3235130d993c75fd8e0fcf48202e81c999404c29b53c5aa",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/840-900-c5133c823c99.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "900-960",
+      "startFrame": 900,
+      "endFrame": 960,
+      "sourceHash": "b7681e92fc755f07b7e2d21e5a0bf47d2a83bbbb4c3dba4d768474a386b53084",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/900-960-b7681e92fc75.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "960-1020",
+      "startFrame": 960,
+      "endFrame": 1020,
+      "sourceHash": "fb5543cd772a3853c1776de67275bc6dca9e1ee7d6b7f69f777b20b1e022e7db",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/960-1020-fb5543cd772a.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "1020-1080",
+      "startFrame": 1020,
+      "endFrame": 1080,
+      "sourceHash": "d7947c2ea273422584edcaf24b38a1103923cedb19adc4558e579cfe6874aba5",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/1020-1080-d7947c2ea273.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "1080-1140",
+      "startFrame": 1080,
+      "endFrame": 1140,
+      "sourceHash": "7c6a09689c6f07620f3aa9d8401552d61ea29851683e9b01d7a7939f8e640d4d",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/1080-1140-7c6a09689c6f.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    },
+    {
+      "chunkId": "1140-1179",
+      "startFrame": 1140,
+      "endFrame": 1179,
+      "sourceHash": "17a96fb8c299325ec27b3c9b895ed081c7574a2a98aa89da0bd5252a5e1d20bb",
+      "outputPath": "/Users/thamil-1041/Documents/GitHub/mern_projects/video_editor/public/preview-cache/proj-1775567300240/1140-1179-17a96fb8c299.json",
+      "outputUrl": "",
+      "status": "failed",
+      "updatedAt": "2026-04-10T06:33:33.807Z",
+      "error": "preview_renderer_not_implemented_for_multi_layer"
+    }
+  ]
+}

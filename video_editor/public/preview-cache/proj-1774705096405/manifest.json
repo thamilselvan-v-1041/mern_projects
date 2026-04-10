@@ -1,0 +1,20 @@
+{
+  "projectId": "proj-1774705096405",
+  "timelineFingerprint": "3b6f8f645f35e2483661820b6eba33ad1242e0da13fdcec97796b43a7740ed40",
+  "fps": 30,
+  "totalFrames": 900,
+  "chunkSizeFrames": 60,
+  "generatedAt": "2026-04-07T13:03:49.064Z",
+  "chunks": [
+    {
+      "chunkId": "0-900",
+      "startFrame": 0,
+      "endFrame": 900,
+      "sourceHash": "0236b979c49da3d70e1fcd9e210c8b3c5b68027ad00301da316fe73b08442f07",
+      "outputPath": "",
+      "outputUrl": "https://videos.pexels.com/video-files/8684429/8684429-hd_1920_1080_25fps.mp4",
+      "status": "ready",
+      "updatedAt": "2026-04-07T13:03:49.064Z"
+    }
+  ]
+}

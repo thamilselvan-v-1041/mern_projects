@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   AbsoluteFill,
   Img,
@@ -100,31 +100,78 @@ function transitionOffset(
   return { tx, ty, extraScale };
 }
 
+const MAX_VIDEO_PLAYBACK_RETRIES = 2;
+
+/** Forces a fresh network load after Chrome pipeline / seek errors (skips opaque URLs). */
+function videoSrcWithRecoveryToken(src: string, retryIndex: number): string {
+  if (retryIndex <= 0) return src;
+  if (src.startsWith("blob:") || src.startsWith("data:")) return src;
+  try {
+    const base =
+      typeof document !== "undefined" ? document.baseURI : "http://localhost/";
+    const u = new URL(src, base);
+    u.searchParams.set("_rv", String(retryIndex));
+    return u.href;
+  } catch {
+    const sep = src.includes("?") ? "&" : "?";
+    return `${src}${sep}_rv=${retryIndex}`;
+  }
+}
+
 type Props = {
   clip: Clip;
   zIndex: number;
+  sequenceDurationInFrames: number;
+  muted?: boolean;
 };
 
 /**
  * One timeline clip inside a Remotion Sequence: position, scale, and in/out transitions.
  */
-export const ClipSequenceContent: React.FC<Props> = ({ clip, zIndex }) => {
+export const ClipSequenceContent: React.FC<Props> = ({
+  clip,
+  zIndex,
+  sequenceDurationInFrames,
+  muted = false,
+}) => {
+  const [videoRetry, setVideoRetry] = useState(0);
+  const [videoFatal, setVideoFatal] = useState(false);
+
+  useEffect(() => {
+    setVideoRetry(0);
+    setVideoFatal(false);
+  }, [clip.id, clip.src]);
+
+  const onVideoError = useCallback(() => {
+    setVideoRetry((n) => {
+      if (n >= MAX_VIDEO_PLAYBACK_RETRIES) {
+        setVideoFatal(true);
+        return n;
+      }
+      return n + 1;
+    });
+  }, []);
+
   const frame = useCurrentFrame();
-  const { durationInFrames } = useVideoConfig();
+  const { fps } = useVideoConfig();
+  const safeTrimStart = Math.max(0, Math.floor(clip.trimStart ?? 0));
+  const safeDuration = Math.max(1, Math.floor(sequenceDurationInFrames));
+  const fullClipTimestampSec = safeDuration / Math.max(1, fps);
+  const trimEnd = safeTrimStart + safeDuration;
   const tf = clip.transitionFrames ?? 15;
   const tin = clip.transitionIn ?? "none";
   const tout = clip.transitionOut ?? "none";
 
   const opacity = transitionOpacity(
     frame,
-    durationInFrames,
+    safeDuration,
     tf,
     tin,
     tout
   );
   const { tx, ty, extraScale } = transitionOffset(
     frame,
-    durationInFrames,
+    safeDuration,
     tf,
     tin,
     tout
@@ -133,6 +180,9 @@ export const ClipSequenceContent: React.FC<Props> = ({ clip, zIndex }) => {
   const posX = clip.posX ?? 50;
   const posY = clip.posY ?? 50;
   const scale = (clip.scale ?? 1) * extraScale;
+  const rotationDeg = clip.rotationDeg ?? 0;
+
+  const playbackSrc = videoSrcWithRecoveryToken(clip.src, videoRetry);
 
   return (
     <AbsoluteFill style={{ zIndex, pointerEvents: "none" }}>
@@ -143,7 +193,7 @@ export const ClipSequenceContent: React.FC<Props> = ({ clip, zIndex }) => {
           top: `${posY}%`,
           width: "100%",
           height: "100%",
-          transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${scale})`,
+          transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) rotate(${rotationDeg}deg) scale(${scale})`,
           opacity,
         }}
       >
@@ -156,10 +206,34 @@ export const ClipSequenceContent: React.FC<Props> = ({ clip, zIndex }) => {
               objectFit: "cover",
             }}
           />
+        ) : videoFatal ? (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(15, 23, 42, 0.35)",
+              color: "rgba(255,255,255,0.92)",
+              fontSize: 12,
+              textAlign: "center",
+              padding: 8,
+            }}
+          >
+            Clip could not play in the browser
+          </div>
         ) : (
           <Video
-            src={clip.src}
-            startFrom={clip.trimStart ?? 0}
+            key={`${clip.id}-rv${videoRetry}`}
+            src={playbackSrc}
+            startFrom={safeTrimStart}
+            endAt={trimEnd}
+            loop={false}
+            pauseWhenBuffering
+            acceptableTimeShiftInSeconds={fullClipTimestampSec}
+            volume={muted ? 0 : 1}
+            onError={onVideoError}
             style={{
               width: "100%",
               height: "100%",

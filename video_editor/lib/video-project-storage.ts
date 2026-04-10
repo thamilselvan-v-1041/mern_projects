@@ -43,13 +43,33 @@ export function deleteStoredProject(id: string): void {
 /** Create a persisted empty project and return its id (for opening `/editor` in a new tab). */
 export function createEmptyProjectInStorage(): string {
   const id = `proj-${Date.now()}`;
+  const defaultVideoSrc =
+    "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+  const defaultAudioSrc = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
   upsertStoredProject({
     id,
     name: "Untitled video",
     updatedAt: new Date().toISOString(),
-    clips: [],
+    clips: [
+      {
+        id: `clip-default-${Date.now()}`,
+        start: 0,
+        duration: 360,
+        src: defaultVideoSrc,
+        row: 0,
+      },
+    ],
     textOverlays: [],
-    audioTracks: [],
+    audioTracks: [
+      {
+        id: `audio-default-${Date.now()}`,
+        start: 0,
+        duration: 900,
+        src: defaultAudioSrc,
+        label: "Default audio sample",
+        row: 1,
+      },
+    ],
   });
   return id;
 }

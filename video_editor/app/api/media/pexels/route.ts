@@ -22,8 +22,9 @@ export async function GET(req: NextRequest) {
     40,
     Math.max(1, Number(req.nextUrl.searchParams.get("per_page") || 20))
   );
+  const page = Math.max(1, Number(req.nextUrl.searchParams.get("page") || 1));
 
-  const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=${perPage}`;
+  const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}`;
 
   try {
     const res = await fetch(url, {
@@ -33,8 +34,10 @@ export async function GET(req: NextRequest) {
       photos?: Array<{
         id: number;
         alt?: string;
+        photographer?: string;
         src?: { large2x?: string; large?: string; portrait?: string };
       }>;
+      total_results?: number;
       error?: string;
     };
 
@@ -57,6 +60,7 @@ export async function GET(req: NextRequest) {
         return {
           id: String(p.id),
           label: (p.alt || "Photo").slice(0, 80),
+          author: (p.photographer || "").trim().slice(0, 80),
           previewUrl: src,
           playbackUrl: src,
           mediaType: "image" as const,
@@ -64,7 +68,13 @@ export async function GET(req: NextRequest) {
       })
       .filter(Boolean);
 
-    return NextResponse.json({ results });
+    const total = Number(data?.total_results ?? 0);
+    const hasMore =
+      Number.isFinite(total) && total > 0
+        ? page * perPage < total
+        : raw.length >= perPage;
+
+    return NextResponse.json({ results, hasMore });
   } catch (e) {
     return NextResponse.json(
       {

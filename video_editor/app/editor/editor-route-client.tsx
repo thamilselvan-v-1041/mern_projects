@@ -1,7 +1,9 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
+import { createEmptyProjectInStorage } from "@/lib/video-project-storage";
 
 const VideoEditorDynamic = dynamic(
   () => import("@/components/video-editor-dynamic"),
@@ -19,19 +21,22 @@ const VideoEditorDynamic = dynamic(
 );
 
 export default function EditorRouteClient() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const project = searchParams.get("project");
+
+  useEffect(() => {
+    if (project?.trim()) return;
+    const createdId = createEmptyProjectInStorage();
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("project", createdId);
+    router.replace(`/editor?${next.toString()}`);
+  }, [project, router, searchParams]);
 
   if (!project?.trim()) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-white p-8 text-center">
-        <p className="text-sm text-slate-600">Missing project in the URL.</p>
-        <a
-          href="/"
-          className="text-sm font-semibold text-violet-600 hover:underline"
-        >
-          Back to projects
-        </a>
+        <p className="text-sm text-slate-600">Opening a new project...</p>
       </div>
     );
   }
