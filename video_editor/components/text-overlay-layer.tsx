@@ -68,7 +68,11 @@ export const TextOverlayLayer: React.FC<Props> = ({
     fontSize: `${fontSizeRem}rem`,
     fontWeight: fontW,
     margin: 0,
+    width: "100%",
     textAlign: "center",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   };

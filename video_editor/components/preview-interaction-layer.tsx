@@ -49,6 +49,7 @@ const HANDLE_CURSOR: Record<ResizeHandle, string> = {
 type Props = {
   wrapRef: React.RefObject<HTMLDivElement | null>;
   currentFrame: number;
+  isPlaying?: boolean;
   clips: Clip[];
   textOverlays: TextOverlay[];
   selected: Sel | null;
@@ -132,6 +133,7 @@ function ResizeChromeHandle({
 export function PreviewInteractionLayer({
   wrapRef,
   currentFrame,
+  isPlaying = false,
   clips,
   textOverlays,
   selected,
@@ -435,6 +437,11 @@ export function PreviewInteractionLayer({
           }
           const t = entry.item;
           const isSel = selected?.kind === "text" && selected.id === t.id;
+          const hasShape = (t.shapeBackground ?? "none") !== "none";
+          const shapeStrokeColor = hasShape
+            ? t.shapeStroke || t.shapeFill || "#ec4899"
+            : "#ec4899";
+          const shapeFillColor = hasShape ? t.shapeFill || "rgba(244,114,182,0.18)" : "transparent";
           const px = t.posX ?? 50;
           const py = t.posY ?? 50;
           const w = t.widthPct ?? 92;
@@ -455,11 +462,17 @@ export function PreviewInteractionLayer({
               <div
                 role="button"
                 tabIndex={0}
-                className={`absolute inset-0 cursor-pointer rounded-lg ${
-                  isSel
-                    ? "ring-2 ring-pink-500"
-                    : "ring-1 ring-white/40 hover:ring-pink-300"
-                }`}
+                className="absolute inset-0 cursor-pointer rounded-lg border-2"
+                style={{
+                  borderColor: isPlaying
+                    ? "transparent"
+                    : isSel
+                      ? shapeStrokeColor
+                      : "rgba(255,255,255,0.55)",
+                  backgroundColor:
+                    isSel && hasShape && !isPlaying ? shapeFillColor : "transparent",
+                  opacity: isSel && hasShape && !isPlaying ? 0.22 : 1,
+                }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   selectText(t);
@@ -473,33 +486,43 @@ export function PreviewInteractionLayer({
                 title="Click to select. Handles resize width or type size."
               />
               {isSel ? (
-                <div className="pointer-events-none absolute inset-0 rounded-lg border-2 border-pink-500 shadow-[0_0_0_1px_rgba(255,255,255,0.45)]">
-                  <div className="pointer-events-auto absolute -top-8 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-pink-200 bg-white/95 px-1 py-1 shadow-sm">
-                    <button
-                      type="button"
-                      aria-label="Rotate text left"
-                      className="rounded-full p-1 text-pink-700 hover:bg-pink-50"
-                      onMouseDown={(e) => rotateText(e, t, -5)}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Rotate text right"
-                      className="rounded-full p-1 text-pink-700 hover:bg-pink-50"
-                      onMouseDown={(e) => rotateText(e, t, 5)}
-                    >
-                      <RotateCw className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  {handles.map((h) => (
-                    <ResizeChromeHandle
-                      key={h}
-                      handle={h}
-                      clipLike={false}
-                      onPointerDown={(e) => startResizeText(e, t, h)}
-                    />
-                  ))}
+                <div
+                  className="pointer-events-none absolute inset-0 rounded-lg border-2 shadow-[0_0_0_1px_rgba(255,255,255,0.45)]"
+                  style={{
+                    borderColor: isPlaying ? "transparent" : shapeStrokeColor,
+                    boxShadow: isPlaying ? "none" : "0 0 0 1px rgba(255,255,255,0.45)",
+                  }}
+                >
+                  {!isPlaying ? (
+                    <>
+                      <div className="pointer-events-auto absolute -top-8 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-pink-200 bg-white/95 px-1 py-1 shadow-sm">
+                        <button
+                          type="button"
+                          aria-label="Rotate text left"
+                          className="rounded-full p-1 text-pink-700 hover:bg-pink-50"
+                          onMouseDown={(e) => rotateText(e, t, -5)}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Rotate text right"
+                          className="rounded-full p-1 text-pink-700 hover:bg-pink-50"
+                          onMouseDown={(e) => rotateText(e, t, 5)}
+                        >
+                          <RotateCw className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      {handles.map((h) => (
+                        <ResizeChromeHandle
+                          key={h}
+                          handle={h}
+                          clipLike={false}
+                          onPointerDown={(e) => startResizeText(e, t, h)}
+                        />
+                      ))}
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </div>

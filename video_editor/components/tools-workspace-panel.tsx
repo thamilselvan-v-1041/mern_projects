@@ -26,8 +26,8 @@ type Props = {
 
 export function ToolsWorkspacePanel({ onAddToTimeline }: Props) {
   const [shape, setShape] = useState<ShapeKind>("rect");
-  const [fill, setFill] = useState("#fef08a");
-  const [stroke, setStroke] = useState("#ca8a04");
+  const [fill, setFill] = useState("#8f1e5e");
+  const [stroke, setStroke] = useState("#8f1e5e");
   const [animation, setAnimation] = useState<TextAnimationPreset>("rise");
   const [label, setLabel] = useState("Label");
 
@@ -71,38 +71,16 @@ export function ToolsWorkspacePanel({ onAddToTimeline }: Props) {
 
       <label className="block text-xs font-medium text-slate-700">
         Text
-        <input
-          type="text"
+        <textarea
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-        />
-      </label>
-
-      <label className="block text-xs font-medium text-slate-700">
-        Fill
-        <input
-          type="color"
-          value={fill}
-          onChange={(e) => setFill(e.target.value)}
-          className="mt-1 h-10 w-full cursor-pointer rounded-lg border border-slate-200"
-        />
-      </label>
-
-      <label className="block text-xs font-medium text-slate-700">
-        Stroke
-        <input
-          type="color"
-          value={stroke}
-          onChange={(e) => setStroke(e.target.value)}
-          className="mt-1 h-10 w-full cursor-pointer rounded-lg border border-slate-200"
+          rows={4}
+          className="mt-1 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-sm"
         />
       </label>
 
       <div>
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-          Intro animation
-        </p>
+        <p className="mb-1 text-xs font-medium text-slate-700">Intro animation</p>
         <select
           value={animation}
           onChange={(e) =>
@@ -118,6 +96,44 @@ export function ToolsWorkspacePanel({ onAddToTimeline }: Props) {
         </select>
       </div>
 
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700">
+          <span>Fill</span>
+          <span className="relative inline-block h-5 w-5">
+            <input
+              type="color"
+              value={fill}
+              onChange={(e) => setFill(e.target.value)}
+              className="absolute inset-0 h-5 w-5 cursor-pointer opacity-0"
+              aria-label="Fill color"
+            />
+            <span
+              className="pointer-events-none absolute inset-0 rounded-sm border border-slate-300"
+              style={{ backgroundColor: fill }}
+              aria-hidden
+            />
+          </span>
+        </label>
+
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700">
+          <span>Stroke</span>
+          <span className="relative inline-block h-5 w-5">
+            <input
+              type="color"
+              value={stroke}
+              onChange={(e) => setStroke(e.target.value)}
+              className="absolute inset-0 h-5 w-5 cursor-pointer opacity-0"
+              aria-label="Stroke color"
+            />
+            <span
+              className="pointer-events-none absolute inset-0 rounded-sm border border-slate-300"
+              style={{ backgroundColor: stroke }}
+              aria-hidden
+            />
+          </span>
+        </label>
+      </div>
+
       <button
         type="button"
         onClick={() =>
@@ -129,7 +145,7 @@ export function ToolsWorkspacePanel({ onAddToTimeline }: Props) {
             label: label.trim() || "Label",
           })
         }
-        className="mt-auto w-full rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+        className="mt-2 w-full rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white hover:bg-slate-800"
       >
         Add to timeline
       </button>

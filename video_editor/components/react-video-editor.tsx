@@ -315,6 +315,15 @@ type ResizeDragState = {
 };
 
 type RowStackSlot = { lane: number; lanes: number };
+type AudioInteractionStackState = {
+  activeId: string;
+  frozenSlots: Map<string, RowStackSlot>;
+};
+type ElementInteractionStackState = {
+  activeId: string;
+  isShape: boolean;
+  frozenSlots: Map<string, RowStackSlot>;
+};
 
 function overlapsByTime(
   a: { start: number; duration: number },
@@ -377,6 +386,91 @@ function maxLanesInStack(stack: Map<string, RowStackSlot>): number {
     max = Math.max(max, slot.lanes);
   });
   return max;
+}
+
+function buildAudioInteractionStackLayout(
+  items: TimelineAudio[],
+  activeId: string,
+  frozenSlots: Map<string, RowStackSlot>
+): Map<string, RowStackSlot> {
+  const map = new Map<string, RowStackSlot>();
+  if (items.length === 0) return map;
+  const laneById = new Map<string, number>();
+  const active = items.find((item) => item.id === activeId) ?? null;
+  const others = items.filter((item) => item.id !== activeId);
+  const intervalsByLane = new Map<number, Array<{ start: number; duration: number }>>();
+  let laneCount = 1;
+
+  for (const item of others) {
+    const lane = Math.max(0, frozenSlots.get(item.id)?.lane ?? 0);
+    laneById.set(item.id, lane);
+    laneCount = Math.max(laneCount, lane + 1);
+    const laneIntervals = intervalsByLane.get(lane) ?? [];
+    laneIntervals.push({ start: item.start, duration: item.duration });
+    intervalsByLane.set(lane, laneIntervals);
+  }
+
+  if (active) {
+    let activeLane = 0;
+    for (;;) {
+      const laneIntervals = intervalsByLane.get(activeLane) ?? [];
+      const overlaps = laneIntervals.some((item) =>
+        overlapsByTime(item, { start: active.start, duration: active.duration })
+      );
+      if (!overlaps) break;
+      activeLane += 1;
+    }
+    laneById.set(active.id, activeLane);
+    laneCount = Math.max(laneCount, activeLane + 1);
+  }
+
+  for (const item of items) {
+    const lane = laneById.get(item.id) ?? 0;
+    map.set(item.id, { lane, lanes: laneCount });
+  }
+
+  return map;
+}
+
+function buildFrozenActiveStackLayout<T extends { id: string; start: number; duration: number }>(
+  items: T[],
+  activeId: string,
+  frozenSlots: Map<string, RowStackSlot>
+): Map<string, RowStackSlot> {
+  const map = new Map<string, RowStackSlot>();
+  if (items.length === 0) return map;
+  const laneById = new Map<string, number>();
+  const active = items.find((item) => item.id === activeId) ?? null;
+  const others = items.filter((item) => item.id !== activeId);
+  const intervalsByLane = new Map<number, Array<{ start: number; duration: number }>>();
+  let laneCount = 1;
+
+  for (const item of others) {
+    const lane = Math.max(0, frozenSlots.get(item.id)?.lane ?? 0);
+    laneById.set(item.id, lane);
+    laneCount = Math.max(laneCount, lane + 1);
+    const laneIntervals = intervalsByLane.get(lane) ?? [];
+    laneIntervals.push({ start: item.start, duration: item.duration });
+    intervalsByLane.set(lane, laneIntervals);
+  }
+  if (active) {
+    let activeLane = 0;
+    for (;;) {
+      const laneIntervals = intervalsByLane.get(activeLane) ?? [];
+      const overlaps = laneIntervals.some((item) =>
+        overlapsByTime(item, { start: active.start, duration: active.duration })
+      );
+      if (!overlaps) break;
+      activeLane += 1;
+    }
+    laneById.set(active.id, activeLane);
+    laneCount = Math.max(laneCount, activeLane + 1);
+  }
+  for (const item of items) {
+    const lane = laneById.get(item.id) ?? 0;
+    map.set(item.id, { lane, lanes: laneCount });
+  }
+  return map;
 }
 
 /**
@@ -626,6 +720,10 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
   const [minTimelinePaneHeight, setMinTimelinePaneHeight] = useState(260);
   const [clipDragInsertFrame, setClipDragInsertFrame] = useState<number | null>(null);
+  const [audioInteractionStackState, setAudioInteractionStackState] =
+    useState<AudioInteractionStackState | null>(null);
+  const [elementInteractionStackState, setElementInteractionStackState] =
+    useState<ElementInteractionStackState | null>(null);
   const cachedVideoRef = useRef<HTMLVideoElement>(null);
   const previewTimelineContainerRef = useRef<HTMLDivElement>(null);
   const playbackResizeStartRef = useRef<{ y: number; h: number } | null>(null);
@@ -1153,10 +1251,32 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     [previewMode, previewPlayerReady, seekPlayheadFromClientX, switchToLivePlayback],
   );
 
-  const audioStackLayout = useMemo(
+  const computedAudioStackLayout = useMemo(
     () => computeRowStackLayout(audioTracks),
     [audioTracks]
   );
+  const audioStackLayout = useMemo(() => {
+    if (!audioInteractionStackState) return computedAudioStackLayout;
+    return buildAudioInteractionStackLayout(
+      audioTracks,
+      audioInteractionStackState.activeId,
+      audioInteractionStackState.frozenSlots
+    );
+  }, [audioTracks, audioInteractionStackState, computedAudioStackLayout]);
+  const beginAudioInteractionStack = useCallback(
+    (activeId: string) => {
+      setAudioInteractionStackState((prev) => {
+        if (prev?.activeId === activeId) return prev;
+        const frozenSlots = new Map(computedAudioStackLayout);
+        frozenSlots.delete(activeId);
+        return { activeId, frozenSlots };
+      });
+    },
+    [computedAudioStackLayout]
+  );
+  const clearAudioInteractionStack = useCallback(() => {
+    setAudioInteractionStackState((prev) => (prev === null ? prev : null));
+  }, []);
   const textOnlyStackLayout = useMemo(
     () =>
       computeRowStackLayout(
@@ -1171,6 +1291,46 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       ),
     [textOverlays]
   );
+  const interactionTextOnlyStackLayout = useMemo(() => {
+    if (!elementInteractionStackState || elementInteractionStackState.isShape) {
+      return textOnlyStackLayout;
+    }
+    const textItems = textOverlays.filter(
+      (t) => (t.shapeBackground ?? "none") === "none"
+    );
+    return buildFrozenActiveStackLayout(
+      textItems,
+      elementInteractionStackState.activeId,
+      elementInteractionStackState.frozenSlots
+    );
+  }, [elementInteractionStackState, textOnlyStackLayout, textOverlays]);
+  const interactionShapeStackLayout = useMemo(() => {
+    if (!elementInteractionStackState || !elementInteractionStackState.isShape) {
+      return shapeStackLayout;
+    }
+    const shapeItems = textOverlays.filter(
+      (t) => (t.shapeBackground ?? "none") !== "none"
+    );
+    return buildFrozenActiveStackLayout(
+      shapeItems,
+      elementInteractionStackState.activeId,
+      elementInteractionStackState.frozenSlots
+    );
+  }, [elementInteractionStackState, shapeStackLayout, textOverlays]);
+  const beginElementInteractionStack = useCallback(
+    (activeId: string, isShape: boolean) => {
+      setElementInteractionStackState((prev) => {
+        if (prev?.activeId === activeId && prev.isShape === isShape) return prev;
+        const baseMap = new Map(isShape ? shapeStackLayout : textOnlyStackLayout);
+        baseMap.delete(activeId);
+        return { activeId, isShape, frozenSlots: baseMap };
+      });
+    },
+    [shapeStackLayout, textOnlyStackLayout]
+  );
+  const clearElementInteractionStack = useCallback(() => {
+    setElementInteractionStackState((prev) => (prev === null ? prev : null));
+  }, []);
 
   const trackRowMetrics = useMemo(() => {
     const audioStackGap = 6;
@@ -1185,8 +1345,8 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         TRACK_ROW_H,
         lanes * laneItemHeight + Math.max(0, lanes - 1) * laneGap + paddingY
       );
-    const hasTextElements = textOnlyStackLayout.size > 0;
-    const hasShapeElements = shapeStackLayout.size > 0;
+    const hasTextElements = interactionTextOnlyStackLayout.size > 0;
+    const hasShapeElements = interactionShapeStackLayout.size > 0;
     const hasAnyElements = hasTextElements || hasShapeElements;
     const videoRowH = TRACK_ROW_H;
     const audioRowH = expandedHeight(
@@ -1196,14 +1356,14 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     );
     const textRowH = hasTextElements
       ? expandedHeight(
-          maxLanesInStack(textOnlyStackLayout),
+          maxLanesInStack(interactionTextOnlyStackLayout),
           ELEMENTS_ITEM_H,
           elementsStackGap
         )
       : 0;
     const shapeRowH = hasShapeElements
       ? expandedHeight(
-          maxLanesInStack(shapeStackLayout),
+          maxLanesInStack(interactionShapeStackLayout),
           ELEMENTS_ITEM_H,
           elementsStackGap
         )
@@ -1230,7 +1390,11 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       tracksBodyH,
       elementsBlockH,
     };
-  }, [audioStackLayout, shapeStackLayout, textOnlyStackLayout]);
+  }, [
+    audioStackLayout,
+    interactionShapeStackLayout,
+    interactionTextOnlyStackLayout,
+  ]);
 
   const tracksBodyHeightPx = trackRowMetrics.tracksBodyH;
   const playheadFullHeight = RULER_H + tracksBodyHeightPx;
@@ -3140,15 +3304,22 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     const onUp = () => {
       const shouldResume = resumeAfterClipResizeRef.current;
       resumeAfterClipResizeRef.current = false;
-      setResizeDragging(null);
-      if (!shouldResume || previewMode !== "live") return;
-      const player = playerRef.current;
-      if (!player) return;
+      // Keep next Play anchored to the currently visible playhead after resize.
       const frame = clampFrameToTimeline(currentFrameRef.current);
       playActionFrameRef.current = frame;
-      safeSeekPlayer(player, frame);
+      if (resizeDragging.kind === "audio") {
+        clearAudioInteractionStack();
+      } else if (resizeDragging.kind === "text") {
+        clearElementInteractionStack();
+      }
+      setResizeDragging(null);
+      const player = playerRef.current;
       setCurrentFrame((prev) => (prev === frame ? prev : frame));
       setPlaybackFrame((prev) => (prev === frame ? prev : frame));
+      if (player) {
+        safeSeekPlayer(player, frame);
+      }
+      if (!shouldResume || previewMode !== "live" || !player) return;
       void player.play();
     };
     window.addEventListener("mousemove", onMove);
@@ -3157,7 +3328,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [resizeDragging, previewMode, clampFrameToTimeline, safeSeekPlayer]);
+  }, [resizeDragging, previewMode, clampFrameToTimeline, safeSeekPlayer, clearAudioInteractionStack, clearElementInteractionStack]);
 
   useEffect(() => {
     if (!trackContextMenu) return;
@@ -3278,7 +3449,20 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         });
       } else {
         setClipDragInsertFrame((prev) => (prev === null ? prev : null));
-        setTextOverlays((prev) => realignTrackAfterMove(prev, dragging.id, newStart));
+        setTextOverlays((prev) => {
+          let changed = false;
+          const next = prev.map((overlay) => {
+            if (overlay.id !== dragging.id) return overlay;
+            if (overlay.start === newStart) return overlay;
+            changed = true;
+            return { ...overlay, start: newStart };
+          });
+          if (!changed) return prev;
+          return [...next].sort((a, b) => {
+            if (a.start !== b.start) return a.start - b.start;
+            return a.id.localeCompare(b.id);
+          });
+        });
       }
     };
 
@@ -3322,6 +3506,13 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         window.cancelAnimationFrame(rafId);
         rafId = 0;
       }
+      if (dragging.kind === "audio") {
+        clearAudioInteractionStack();
+      } else if (dragging.kind === "text") {
+        clearElementInteractionStack();
+      }
+      // Keep next Play anchored to the currently visible playhead after rearrange.
+      playActionFrameRef.current = clampFrameToTimeline(currentFrameRef.current);
       setDragging(null);
       setDragEdgeIndicator(null);
       setClipDragInsertFrame(null);
@@ -3339,7 +3530,15 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       setClipDragInsertFrame(null);
       clipDragSnapshotRef.current = null;
     };
-  }, [dragging, resizeDragging, realignTrackAfterMove, computeTrackInsertFrame, frameFromClientX]);
+  }, [dragging, resizeDragging, realignTrackAfterMove, computeTrackInsertFrame, frameFromClientX, clearAudioInteractionStack, clearElementInteractionStack, clampFrameToTimeline]);
+  useEffect(() => {
+    if (dragging?.kind === "audio" || resizeDragging?.kind === "audio") return;
+    setAudioInteractionStackState((prev) => (prev === null ? prev : null));
+  }, [dragging, resizeDragging]);
+  useEffect(() => {
+    if (dragging?.kind === "text" || resizeDragging?.kind === "text") return;
+    setElementInteractionStackState((prev) => (prev === null ? prev : null));
+  }, [dragging, resizeDragging]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -4287,6 +4486,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
               <PreviewInteractionLayer
                 wrapRef={previewWrapRef}
                 currentFrame={activeFrame}
+                isPlaying={previewIsPlaying}
                 clips={clips}
                 textOverlays={textOverlays}
                 selected={selected}
@@ -4641,7 +4841,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                           <div
                             role="button"
                             tabIndex={0}
-                            className="flex min-w-0 flex-1 cursor-grab items-center justify-start active:cursor-grabbing"
+                            className="flex min-w-0 flex-1 cursor-grab items-center justify-center active:cursor-grabbing"
                             onMouseDown={(e) => {
                               if (e.button !== 0) return;
                               e.stopPropagation();
@@ -4786,6 +4986,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
+                              beginAudioInteractionStack(track.id);
                               setResizeDragging({
                                 kind: "audio",
                                 id: track.id,
@@ -4805,6 +5006,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               if (e.button !== 0) return;
                               e.stopPropagation();
                               e.preventDefault();
+                              beginAudioInteractionStack(track.id);
                               const clickedFrame = frameFromClientX(e.clientX);
                               if (previewMode === "cached") {
                                 switchToLivePlayback(clickedFrame);
@@ -4848,6 +5050,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
+                              beginAudioInteractionStack(track.id);
                               setResizeDragging({
                                 kind: "audio",
                                 id: track.id,
@@ -4871,7 +5074,9 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                       );
                       const isShape = (overlay.shapeBackground ?? "none") !== "none";
                       const stackSlot = (
-                        isShape ? shapeStackLayout : textOnlyStackLayout
+                        isShape
+                          ? interactionShapeStackLayout
+                          : interactionTextOnlyStackLayout
                       ).get(overlay.id) ?? { lane: 0, lanes: 1 };
                       const stackGap = trackRowMetrics.elementsStackGap;
                       const rowTop = isShape
@@ -4941,6 +5146,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
+                              beginElementInteractionStack(overlay.id, isShape);
                               setResizeDragging({
                                 kind: "text",
                                 id: overlay.id,
@@ -4960,6 +5166,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               if (e.button !== 0) return;
                               e.stopPropagation();
                               e.preventDefault();
+                              beginElementInteractionStack(overlay.id, isShape);
                               const clickedFrame = frameFromClientX(e.clientX);
                               if (previewMode === "cached") {
                                 switchToLivePlayback(clickedFrame);
@@ -4991,7 +5198,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               }
                             }}
                           >
-                            <span className="pointer-events-none min-w-0 max-w-full truncate px-2 text-left text-[10px] font-bold leading-tight text-white drop-shadow-sm">
+                            <span className="pointer-events-none min-w-0 max-w-full truncate px-2 text-center text-[10px] font-bold leading-tight text-white drop-shadow-sm">
                               {elementBarText}
                             </span>
               </div>
@@ -5003,6 +5210,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               e.preventDefault();
+                              beginElementInteractionStack(overlay.id, isShape);
                               setResizeDragging({
                                 kind: "text",
                                 id: overlay.id,
