@@ -2210,6 +2210,7 @@ export default function App() {
     silent = false,
   ) => {
     const isBackground = silent || forceRefresh;
+    const keepReadyStateDuringBackgroundRefresh = forceRefresh && silent;
 
     // Skip if all segments in group already cached
     if (!forceRefresh) {
@@ -2221,10 +2222,12 @@ export default function App() {
     if (forceRefresh && !silent) setRefreshing(true);
 
     // Mark all segments in group as loading
-    setSegmentReadyByMarket((prev) => ({
-      ...prev,
-      [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, false])) },
-    }));
+    if (!keepReadyStateDuringBackgroundRefresh) {
+      setSegmentReadyByMarket((prev) => ({
+        ...prev,
+        [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, false])) },
+      }));
+    }
 
     const params = new URLSearchParams({ limit: '150', market: m, segment: segments.join(',') });
     if (forceRefresh) params.set('refresh', '1');
@@ -2270,8 +2273,10 @@ export default function App() {
   const fetchForMarket = useCallback(async (m: string, forceRefresh = false, silent = false) => {
     if (forceRefresh) {
       loadedSegmentsRef.current[m] = new Set();
-      setSegmentsByMarket((prev) => ({ ...prev, [m]: [] }));
-      setSegmentReadyByMarket((prev) => ({ ...prev, [m]: {} }));
+      if (!silent) {
+        setSegmentsByMarket((prev) => ({ ...prev, [m]: [] }));
+        setSegmentReadyByMarket((prev) => ({ ...prev, [m]: {} }));
+      }
     }
     // Group 1 (large+mid): show immediately
     await fetchSegmentGroupForMarket(m, FETCH_GROUPS[0], forceRefresh, silent);
@@ -2309,6 +2314,32 @@ export default function App() {
       fetchForMarket('us', false, false);
     }
   }, [market, segmentsByMarket.us, fetchForMarket]);
+
+  const backgroundRefreshRunningRef = useRef<Record<string, boolean>>({});
+  const areAllCapSegmentsLoaded = useCallback((m: string) => {
+    const loaded = loadedSegmentsRef.current?.[m];
+    return CAP_SEGMENT_VALUES.every((seg) => loaded?.has(seg));
+  }, []);
+
+  const refreshMarketInBackground = useCallback(async (m: string) => {
+    if (backgroundRefreshRunningRef.current[m]) return;
+    backgroundRefreshRunningRef.current[m] = true;
+    try {
+      for (const group of FETCH_GROUPS) {
+        await fetchSegmentGroupForMarket(m, group, true, true);
+      }
+    } finally {
+      backgroundRefreshRunningRef.current[m] = false;
+    }
+  }, [fetchSegmentGroupForMarket]);
+
+  useEffect(() => {
+    if (!areAllCapSegmentsLoaded(market)) return;
+    const intervalId = window.setInterval(() => {
+      void refreshMarketInBackground(market);
+    }, 15 * 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [market, areAllCapSegmentsLoaded, refreshMarketInBackground]);
 
   useEffect(() => {
     setActiveStockId(null);
