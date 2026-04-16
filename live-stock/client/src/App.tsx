@@ -1757,7 +1757,10 @@ function StockListSection({
           const id = `${stock.symbol}-${stock.segment}`;
           const isExpanded = activeStockId === id;
           const period = chartPeriod[id] ?? defaultChartPeriod;
-          const chartDataForPeriod = chartDataForPeriodFromThreeYear(chartCache[id]?.['3y'] ?? null, period);
+          const chartDataForPeriod =
+            period === '5y'
+              ? (chartCache[id]?.['5y'] ?? [])
+              : chartDataForPeriodFromThreeYear(chartCache[id]?.['3y'] ?? null, period);
           return (
             <StockItem
               key={id}
@@ -2739,6 +2742,31 @@ export default function App() {
     }
   }, [chartCache]);
 
+  const ensureChartLoadedForPeriod = useCallback(async (stock: Stock, id: string, period: ChartPeriod) => {
+    if (period === '5y') {
+      if (chartCache[id]?.['5y']) return chartCache[id]?.['5y'] ?? [];
+      const marketCode = stock.market || 'in';
+      setLoadingChartId(id);
+      try {
+        const res = await fetch(`${API}/chart/${stock.symbol}?period=5y&market=${marketCode}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        const history = Array.isArray(data.history) ? data.history : [];
+        setChartCache((c) => ({
+          ...c,
+          [id]: { ...(c[id] ?? {}), '5y': history },
+        }));
+        return history;
+      } catch {
+        setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), '5y': [] } }));
+        return [];
+      } finally {
+        setLoadingChartId(null);
+      }
+    }
+    return ensureThreeYearChartLoaded(stock, id);
+  }, [chartCache, ensureThreeYearChartLoaded]);
+
   const handleStockTap = (stock: Stock) => {
     const id = `${stock.symbol}-${stock.segment}`;
     if (activeStockId === id) {
@@ -2790,7 +2818,8 @@ export default function App() {
     }
 
     if (openTab === 'chart') {
-      void ensureThreeYearChartLoaded(stock, id);
+      const period = chartPeriod[id] ?? preferredChartPeriod;
+      void ensureChartLoadedForPeriod(stock, id, period);
     }
 
   };
@@ -2997,7 +3026,8 @@ export default function App() {
 
     if (tab === 'chart') {
       setChartPeriod((p) => ({ ...p, [id]: p[id] ?? preferredChartPeriod }));
-      await ensureThreeYearChartLoaded(stock, id);
+      const period = chartPeriod[id] ?? preferredChartPeriod;
+      await ensureChartLoadedForPeriod(stock, id, period);
     }
 
     if (tab === 'prediction') {
@@ -3187,7 +3217,7 @@ export default function App() {
     const id = `${stock.symbol}-${stock.segment}`;
     setPreferredChartPeriod(period); // sticky: new stocks open with same period
     setChartPeriod((p) => ({ ...p, [id]: period }));
-    void ensureThreeYearChartLoaded(stock, id);
+    void ensureChartLoadedForPeriod(stock, id, period);
   };
 
   if (error) {
