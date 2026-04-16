@@ -3340,6 +3340,62 @@ function expandPredictedSeries(predictedRaw, currentPrice, targetDays) {
   return out;
 }
 
+function parsePredictionJsonFromModelText(text) {
+  const src = String(text || '');
+  const jsonMatch = src.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No JSON in response');
+  const raw = jsonMatch[0];
+
+  // 1) strict parse first
+  try {
+    return JSON.parse(raw);
+  } catch {}
+
+  // 2) lightweight repair for common LLM mistakes:
+  //    - missing commas between numeric array items
+  //    - trailing commas before ] / }
+  try {
+    let repaired = raw;
+    repaired = repaired.replace(
+      /("predictedPrices"\s*:\s*\[)([\s\S]*?)(\])/m,
+      (_full, open, body, close) => {
+        const normalizedBody = String(body)
+          .replace(/(\d)\s+(-?\d)/g, '$1, $2')
+          .replace(/,\s*,+/g, ', ')
+          .replace(/,\s*$/g, '');
+        return `${open}${normalizedBody}${close}`;
+      }
+    );
+    repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+    return JSON.parse(repaired);
+  } catch {}
+
+  // 3) fallback extraction: salvage key fields and continue
+  const predictedMatch = raw.match(/"predictedPrices"\s*:\s*\[([\s\S]*?)\]/m);
+  const predictedPrices = predictedMatch
+    ? (predictedMatch[1].match(/-?\d+(?:\.\d+)?/g) || []).map((n) => Number(n)).filter(Number.isFinite)
+    : [];
+  const trendMatch = raw.match(/"trend"\s*:\s*"(bullish|bearish|neutral)"/i);
+  const confidenceMatch = raw.match(/"confidence"\s*:\s*(-?\d+(?:\.\d+)?)/i);
+  const summaryMatch = raw.match(/"summary"\s*:\s*"([\s\S]*?)"/i);
+  const supportMatch = raw.match(/"support"\s*:\s*(-?\d+(?:\.\d+)?)/i);
+  const resistanceMatch = raw.match(/"resistance"\s*:\s*(-?\d+(?:\.\d+)?)/i);
+  const factorsMatch = raw.match(/"keyFactors"\s*:\s*\[([\s\S]*?)\]/i);
+  const keyFactors = factorsMatch
+    ? (factorsMatch[1].match(/"([^"]+)"/g) || []).map((s) => s.replace(/^"|"$/g, ''))
+    : [];
+
+  return {
+    predictedPrices,
+    trend: trendMatch ? String(trendMatch[1]).toLowerCase() : 'neutral',
+    confidence: confidenceMatch ? Number(confidenceMatch[1]) : 45,
+    summary: summaryMatch ? summaryMatch[1] : '',
+    keyFactors,
+    support: supportMatch ? Number(supportMatch[1]) : null,
+    resistance: resistanceMatch ? Number(resistanceMatch[1]) : null,
+  };
+}
+
 function deriveTrendAndConfidenceFromSeries(series, entryPrice) {
   const arr = Array.isArray(series) ? series.map((x) => Number(x)).filter(Number.isFinite) : [];
   const base = Number(entryPrice);
@@ -3738,9 +3794,7 @@ Output exactly this JSON (predictedPrices = array of ${outputPoints} price numbe
     }
     if (!completion) throw lastModelErr || new Error('Prediction model unavailable');
     const text = completion.choices[0]?.message?.content || '{}';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON in response');
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = parsePredictionJsonFromModelText(text);
 
     // Attach dates (skip weekends)
     const days = expandPredictedSeries(parsed.predictedPrices, currentPrice, clampedDays);
