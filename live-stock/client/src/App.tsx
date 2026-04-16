@@ -220,6 +220,111 @@ function inferCapType(stock: Stock, fundamentals: Record<string, string> | null)
   return 'Small';
 }
 
+type ScorecardBand = 'low' | 'avg' | 'fair' | 'high' | 'bad' | 'good';
+
+function scoreBandClass(v: ScorecardBand): string {
+  if (v === 'high' || v === 'good') return 'high';
+  if (v === 'low' || v === 'bad') return 'low';
+  return 'fair';
+}
+
+function scorecardFromFundamentals(fundamentals: Record<string, string> | null): {
+  performance: ScorecardBand;
+  valuation: ScorecardBand;
+  growth: ScorecardBand;
+  profitability: ScorecardBand;
+  entryPoint: ScorecardBand;
+  redFlags: ScorecardBand;
+} {
+  const pe = toNumberOrNull(fundamentals?.pe);
+  const fpe = toNumberOrNull(fundamentals?.forwardPE);
+  const eps = toNumberOrNull(fundamentals?.eps);
+  const div = toNumberOrNull(fundamentals?.dividendYield);
+  const open = toNumberOrNull(fundamentals?.open);
+  const price = toNumberOrNull(fundamentals?.price);
+  const dayLow = toNumberOrNull(fundamentals?.dayLow);
+  const dayHigh = toNumberOrNull(fundamentals?.dayHigh);
+  const low52 = toNumberOrNull(fundamentals?.fiftyTwoWeekLow);
+  const high52 = toNumberOrNull(fundamentals?.fiftyTwoWeekHigh);
+  const pos52 = price != null && low52 != null && high52 != null && high52 > low52
+    ? (price - low52) / (high52 - low52)
+    : null;
+
+  const perf = (() => {
+    if (price == null || open == null || open <= 0) return 'avg';
+    const dayMove = ((price - open) / open) * 100;
+    if (dayMove >= 1) return 'high';
+    if (dayMove <= -1) return 'low';
+    return 'avg';
+  })();
+
+  const valuation = (() => {
+    if (pos52 == null && pe == null && fpe == null) return 'avg';
+    const p = pe ?? fpe;
+    let score = 0;
+    if (pos52 != null) {
+      if (pos52 <= 0.35) score += 2;         // nearer 52W low => better valuation
+      else if (pos52 <= 0.65) score += 1;
+      else if (pos52 >= 0.85) score -= 2;    // too close to highs => expensive
+      else if (pos52 >= 0.7) score -= 1;
+    }
+    if (p != null) {
+      if (p <= 18) score += 1;
+      else if (p >= 35) score -= 1;
+    }
+    if (score >= 2) return 'high';
+    if (score <= -1) return 'low';
+    return 'avg';
+  })();
+
+  const growth = (() => {
+    if (eps == null && pe == null && fpe == null) return 'avg';
+    let score = 0;
+    if ((eps ?? 0) > 0) score += 1;
+    if (pe != null && fpe != null && fpe < pe) score += 1;
+    if ((div ?? 0) >= 1) score += 1;
+    if (score >= 2) return 'high';
+    if (score <= 0) return 'low';
+    return 'avg';
+  })();
+
+  const profitability = (() => {
+    let score = 0;
+    if ((eps ?? 0) > 0) score += 1;
+    if ((div ?? 0) >= 0.7) score += 1;
+    if (pe != null && pe > 0 && pe <= 30) score += 1;
+    if (score >= 2) return 'high';
+    if (score === 1) return 'fair';
+    return 'low';
+  })();
+
+  const entryPoint = (() => {
+    if (price == null || low52 == null || high52 == null || high52 <= low52) return 'fair';
+    const pos = (price - low52) / (high52 - low52); // 0 near 52W low, 1 near 52W high
+    const intradayTop = dayHigh != null && dayLow != null && dayHigh > dayLow
+      ? (price - dayLow) / (dayHigh - dayLow)
+      : 0.5;
+    if (pos <= 0.35 && intradayTop <= 0.75) return 'good';
+    if (pos >= 0.75 || intradayTop >= 0.9) return 'bad';
+    return 'fair';
+  })();
+
+  const redFlags = (() => {
+    let risk = 0;
+    if (pos52 != null && pos52 >= 0.85) risk += 2; // overheated near highs
+    else if (pos52 != null && pos52 >= 0.7) risk += 1;
+    if (eps != null && eps < 0) risk += 2;
+    if ((pe ?? 0) > 45) risk += 2;
+    if (fpe != null && pe != null && fpe > pe * 1.2) risk += 1;
+    if ((div ?? 0) === 0 && (pe ?? 0) > 30) risk += 1;
+    if (risk >= 3) return 'high';
+    if (risk >= 1) return 'fair';
+    return 'low';
+  })();
+
+  return { performance: perf, valuation, growth, profitability, entryPoint, redFlags };
+}
+
 async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -910,6 +1015,8 @@ function StockItem({
   predictionLevel,
   onPredictionPeriodChange,
   onPredictionLevelChange,
+  fundamentalsSubTab,
+  onFundamentalsSubTabChange,
 }: {
   stock: Stock;
   expanded: boolean;
@@ -927,6 +1034,8 @@ function StockItem({
   predictionLevel: PredictionLevel;
   onPredictionPeriodChange: (period: PredictionPeriod) => void;
   onPredictionLevelChange: (level: PredictionLevel) => void;
+  fundamentalsSubTab: 'details' | 'scorecard';
+  onFundamentalsSubTabChange: (tab: 'details' | 'scorecard') => void;
   quarterlyProfit: QuarterlyProfitPayload | null;
   loadingQuarterlyProfit: boolean;
   stockInfo: StockInfoResponse | null;
@@ -1198,40 +1307,102 @@ function StockItem({
           <div className="stock-detail-content">
             {activeTab === 'fundamentals' && (
               fundamentals ? (
-                <div className="fundamentals-grid">
-                  {[
-                    ['Price', fundamentals.price ?? '—', null],
-                    ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
-                    ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? inferCapType(stock, fundamentals) : stock.segmentName?.replace(/\s+Cap$/, '')],
-                    ['Volume', fundamentals.volume, null],
-                    ['Avg Volume', fundamentals.avgVolume, null],
-                    ['P/E', fundamentals.pe, null],
-                    ['Forward P/E', fundamentals.forwardPE, null],
-                    ['EPS', fundamentals.eps, null],
-                    ['Dividend Yield', fundamentals.dividendYield, null],
-                    ['Open', fundamentals.open, null],
-                  ].map(([label, val, cap]) => (
-                    <div key={label} className="fund-row">
-                      <span className="fund-label">{label}</span>
-                      <span className="fund-value">
-                        {val}
-                        {cap && <span className="fund-cap-type"> ({cap})</span>}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="fund-row-pair">
-                    <div className="fund-row fund-row-stack">
-                      <span className="fund-label">52W Low</span>
-                      <span className="fund-value">{fundamentals.fiftyTwoWeekLow ?? '—'}</span>
-                      <span className="fund-label">Day Range</span>
-                      <span className="fund-value">{fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—'}</span>
-                    </div>
-                    <div className="fund-row">
-                      <span className="fund-label">52W High</span>
-                      <span className="fund-value">{fundamentals.fiftyTwoWeekHigh ?? '—'}</span>
-                    </div>
+                <>
+                  <div className="fund-subtabs">
+                    <button
+                      type="button"
+                      className={`fund-subtab-btn ${fundamentalsSubTab === 'details' ? 'active' : ''}`}
+                      onClick={() => onFundamentalsSubTabChange('details')}
+                    >
+                      Details
+                    </button>
+                    <button
+                      type="button"
+                      className={`fund-subtab-btn ${fundamentalsSubTab === 'scorecard' ? 'active' : ''}`}
+                      onClick={() => onFundamentalsSubTabChange('scorecard')}
+                    >
+                      Scorecard
+                    </button>
                   </div>
-                </div>
+
+                  {fundamentalsSubTab === 'details' ? (
+                    <div className="fundamentals-grid">
+                      {[
+                        ['Price', fundamentals.price ?? '—', null],
+                        ['Sector', stock.sector?.trim() || fundamentals.sector || '—', null],
+                        ['Market Cap', fundamentals.marketCap, /^search$/i.test(String(stock.segmentName || '')) ? inferCapType(stock, fundamentals) : stock.segmentName?.replace(/\s+Cap$/, '')],
+                        ['Volume', fundamentals.volume, null],
+                        ['Avg Volume', fundamentals.avgVolume, null],
+                        ['P/E', fundamentals.pe, null],
+                        ['Forward P/E', fundamentals.forwardPE, null],
+                        ['EPS', fundamentals.eps, null],
+                        ['Dividend Yield', fundamentals.dividendYield, null],
+                        ['Open', fundamentals.open, null],
+                      ].map(([label, val, cap]) => (
+                        <div key={label} className="fund-row">
+                          <span className="fund-label">{label}</span>
+                          <span className="fund-value">
+                            {val}
+                            {cap && <span className="fund-cap-type"> ({cap})</span>}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="fund-row-pair">
+                        <div className="fund-row fund-row-stack">
+                          <span className="fund-label">52W Low</span>
+                          <span className="fund-value">{fundamentals.fiftyTwoWeekLow ?? '—'}</span>
+                          <span className="fund-label">52W Position</span>
+                          <span className="fund-value">
+                            {(() => {
+                              const p = toNumberOrNull(fundamentals.price);
+                              const low = toNumberOrNull(fundamentals.fiftyTwoWeekLow);
+                              const high = toNumberOrNull(fundamentals.fiftyTwoWeekHigh);
+                              if (p == null || low == null || high == null || high <= low) return '—';
+                              const posPct = ((p - low) / (high - low)) * 100;
+                              return `${posPct.toFixed(1)}% (${p.toFixed(2)} in ${low.toFixed(2)} - ${high.toFixed(2)})`;
+                            })()}
+                          </span>
+                          <span className="fund-label">Day Range</span>
+                          <span className="fund-value">{fundamentals.dayLow != null && fundamentals.dayHigh != null ? `${fundamentals.dayLow} - ${fundamentals.dayHigh}` : '—'}</span>
+                        </div>
+                        <div className="fund-row">
+                          <span className="fund-label">52W High</span>
+                          <span className="fund-value">{fundamentals.fiftyTwoWeekHigh ?? '—'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="fund-scorecard">
+                      {(() => {
+                        const score = scorecardFromFundamentals(fundamentals);
+                        const rows: Array<{ label: string; value: ScorecardBand }> = [
+                          { label: 'Performance', value: score.performance },
+                          { label: 'Valuation', value: score.valuation },
+                          { label: 'Growth', value: score.growth },
+                          { label: 'Profitability', value: score.profitability },
+                          { label: 'Entry Point', value: score.entryPoint },
+                          { label: 'Red Flags', value: score.redFlags },
+                        ];
+                        const pairRows: Array<Array<{ label: string; value: ScorecardBand } | null>> = [];
+                        for (let i = 0; i < rows.length; i += 2) {
+                          pairRows.push([rows[i], rows[i + 1] ?? null]);
+                        }
+                        return pairRows.map((pair, i) => (
+                          <div key={`score-pair-${i}`} className="fund-score-grid-row">
+                            {pair.map((item, idx) => item ? (
+                              <div key={`${item.label}-${idx}`} className="fund-score-cell">
+                                <span className="fund-label">{item.label}</span>
+                                <span className={`fund-score-badge ${scoreBandClass(item.value)}`}>{item.value}</span>
+                              </div>
+                            ) : (
+                              <div key={`empty-${idx}`} className="fund-score-cell fund-score-cell-empty" />
+                            ))}
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
+                </>
               ) : loadingFundamentals ? (
                 <div className="loading">Loading fundamentals...</div>
               ) : null
@@ -1710,6 +1881,8 @@ function StockListSection({
   onPredictionPeriodChange,
   onPredictionLevelChange,
   defaultChartPeriod,
+  fundamentalsSubTab,
+  onFundamentalsSubTabChange,
 }: {
   stocks: Stock[];
   activeStockId: string | null;
@@ -1745,6 +1918,8 @@ function StockListSection({
   onPredictionPeriodChange: (stock: Stock, period: PredictionPeriod) => void;
   onPredictionLevelChange: (stock: Stock, level: PredictionLevel) => void;
   defaultChartPeriod: ChartPeriod;
+  fundamentalsSubTab: 'details' | 'scorecard';
+  onFundamentalsSubTabChange: (tab: 'details' | 'scorecard') => void;
 }) {
   return (
     <section className="stock-list-section">
@@ -1797,6 +1972,8 @@ function StockListSection({
               predictionLevel={predictionLevel}
               onPredictionPeriodChange={(p) => onPredictionPeriodChange(stock, p)}
               onPredictionLevelChange={(l) => onPredictionLevelChange(stock, l)}
+              fundamentalsSubTab={fundamentalsSubTab}
+              onFundamentalsSubTabChange={onFundamentalsSubTabChange}
             />
           );
         })}
@@ -1845,6 +2022,7 @@ export default function App() {
   const [loadingPredictionId, setLoadingPredictionId] = useState<string | null>(null);
   const [predictionPeriod, setPredictionPeriod] = useState<Record<string, PredictionPeriod>>({});
   const [predictionLevel, setPredictionLevel] = useState<PredictionLevel>('low');
+  const [preferredFundamentalsSubTab, setPreferredFundamentalsSubTab] = useState<'details' | 'scorecard'>('details');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [market, setMarket] = useState<string>('in');
   const [displayLimit, setDisplayLimit] = useState<50 | 100 | 150>(150);
@@ -4387,6 +4565,8 @@ export default function App() {
             onPredictionPeriodChange={handlePredictionPeriodChange}
             onPredictionLevelChange={handlePredictionLevelChange}
             defaultChartPeriod={preferredChartPeriod}
+            fundamentalsSubTab={preferredFundamentalsSubTab}
+            onFundamentalsSubTabChange={setPreferredFundamentalsSubTab}
           />
         )}
       </main>
