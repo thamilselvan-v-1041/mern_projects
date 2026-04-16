@@ -81,6 +81,8 @@ const NSE_INDEX_MAP = {
   large: 'NIFTY 100',
   mid: 'NIFTY MIDCAP 150',
   small: 'NIFTY SMALLCAP 250',
+  micro: 'NIFTY MICROCAP 250',
+  nano: 'NIFTY SME EMERGE',
   flexi: 'NIFTY 200', // flexi = mix of large + mid
 };
 
@@ -89,10 +91,12 @@ const FALLBACK_STOCKS = {
   large: ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS', 'HINDUNILVR.NS', 'ITC.NS', 'SBIN.NS', 'KOTAKBANK.NS', 'BHARTIARTL.NS', 'LT.NS', 'AXISBANK.NS', 'MARUTI.NS', 'BAJFINANCE.NS', 'ASIANPAINT.NS', 'HDFCLIFE.NS', 'TATAMOTOR.NS', 'HCLTECH.NS', 'WIPRO.NS', 'TITAN.NS', 'TATACONSUM.NS', 'NESTLEIND.NS', 'BAJAJFINSV.NS', 'SUNPHARMA.NS', 'ULTRACEMCO.NS', 'M&M.NS', 'POWERGRID.NS', 'ONGC.NS', 'NTPC.NS', 'INDUSINDBK.NS', 'BRITANNIA.NS', 'TECHM.NS', 'DIVISLAB.NS', 'ADANIPORTS.NS', 'CIPLA.NS', 'DRREDDY.NS', 'APOLLOHOSP.NS', 'COALINDIA.NS', 'GRASIM.NS', 'EICHERMOT.NS', 'JSWSTEEL.NS', 'TATASTEEL.NS', 'TATACOMM.NS', 'HEROMOTOCO.NS', 'BPCL.NS', 'HINDALCO.NS', 'ADANIENT.NS', 'SHRIRAMFIN.NS', 'SBILIFE.NS', 'DMART.NS'],
   mid: ['PIDILITIND.NS', 'BAJFINANCE.NS', 'INDUSINDBK.NS', 'AXISBANK.NS', 'MARUTI.NS', 'ASIANPAINT.NS', 'BRITANNIA.NS', 'TITAN.NS', 'TATACONSUM.NS', 'NESTLEIND.NS', 'PERSISTENT.NS', 'COFORGE.NS', 'BSE.NS', 'HEROMOTOCO.NS', 'FEDERALBNK.NS', 'SUZLON.NS', 'INDIGOTOWERS.NS', 'PBFINETECH.NS', 'ASHOKLEY.NS', 'CUMMINSIND.NS', 'ABB.NS', 'SIEMENS.NS', 'LALPATHLAB.NS', 'APOLLOTYRE.NS', 'BALKRISIND.NS', 'DIVISLAB.NS', 'AUBANK.NS', 'CANFINHOME.NS', 'ASTRAL.NS', 'DIXON.NS', 'POLYCAB.NS', 'TRENT.NS', 'VOLTAS.NS', 'TATAELXSI.NS', 'MPHASIS.NS', 'TECHM.NS', 'ZYDUSLIFE.NS', 'TORNTPHARM.NS', 'LAURUSLABS.NS', 'ALKEM.NS', 'GLENMARK.NS', 'AUROPHARMA.NS', 'BIOCON.NS', 'LUPIN.NS', 'DRREDDY.NS', 'CIPLA.NS', 'SUNPHARMA.NS', 'ABBOTINDIA.NS', 'SANOFI.NS', 'PFIZER.NS', 'GLAXO.NS'],
   small: ['CDSL.NS', 'PERSISTENT.NS', 'COFORGE.NS', 'KPITTECH.NS', 'LAURUSLABS.NS', 'TATAELXSI.NS', 'CANFINHOME.NS', 'AUBANK.NS', 'ZYDUSLIFE.NS', 'TORNTPHARM.NS', 'ASTRAL.NS', 'DIXON.NS', 'POLYCAB.NS', 'TRENT.NS', 'VOLTAS.NS', 'MPHASIS.NS', 'ALKEM.NS', 'GLENMARK.NS', 'AUROPHARMA.NS', 'BIOCON.NS', 'LUPIN.NS', 'ABBOTINDIA.NS', 'SANOFI.NS', 'PFIZER.NS', 'GLAXO.NS', 'CROMPTON.NS', 'HAVELLS.NS', 'VGUARD.NS', 'CUB.NS', 'RBLBANK.NS', 'BANDHANBNK.NS', 'IDFC.NS', 'IDFCFIRSTB.NS', 'PNB.NS', 'BANKBARODA.NS', 'UNIONBANK.NS', 'CANBK.NS', 'INDIACEM.NS', 'ACC.NS', 'AMBUJACEM.NS', 'GRANULES.NS', 'SUVEN.NS', 'NAVINFLUOR.NS', 'AEGISLOG.NS', 'ATUL.NS', 'BASF.NS', 'SRF.NS', 'AARTIIND.NS', 'VINATIORGA.NS', 'FINEORG.NS', 'DEEPAKNTR.NS'],
+  micro: ['IRB.NS', 'IDBI.NS', 'NBCC.NS', 'HFCL.NS', 'KPIL.NS', 'PNCINFRA.NS', 'JUBLINGREA.NS', 'BORORENEW.NS', 'KNRCON.NS', 'UJJIVANSFB.NS', 'EASEMYTRIP.NS', 'TANLA.NS', 'NETWORK18.NS', 'RATNAMANI.NS', 'BLS.NS', 'CLEAN.NS', 'LATENTVIEW.NS', 'INDIAMART.NS', 'KALYANKJIL.NS', 'TITAGARH.NS', 'JYOTHYLAB.NS', 'BALRAMCHIN.NS', 'PCBL.NS', 'JSLHISAR.NS', 'GNFC.NS', 'NCC.NS', 'RAINBOW.NS', 'RKFORGE.NS', 'AETHER.NS', 'SONACOMS.NS', 'GRAVITA.NS', 'BECTORFOOD.NS', 'FSL.NS', 'CAMPUS.NS', 'KAYNES.NS', 'SWSOLAR.NS', 'ROUTE.NS', 'MAPMYINDIA.NS', 'IDEA.NS', 'AARTIDRUGS.NS', 'MOTILALOFS.NS', 'IIFL.NS', 'FIVESTAR.NS', 'POLYMED.NS', 'ZENSARTECH.NS', 'DATAPATTNS.NS', 'CIEINDIA.NS', 'HAPPSTMNDS.NS', 'ANANTRAJ.NS', 'INOXGREEN.NS'],
+  nano: ['V2RETAIL.NS', 'SARDAEN.NS', 'KITEX.NS', 'KCP.NS', 'PENIND.NS', 'ORISSAMINE.NS', 'HINDCOPPER.NS', 'SEQUENT.NS', 'SIS.NS', 'JAGRAN.NS', 'RADICO.NS', 'SUDARSCHEM.NS', 'UFO.NS', 'MAHSCOOTER.NS', 'NACLIND.NS', 'SFL.NS', 'RUSTOMJEE.NS', 'BOMDYEING.NS', 'STARCEMENT.NS', 'WELSPUNLIV.NS', 'NAZARA.NS', 'IFBIND.NS', 'GREENPANEL.NS', 'MEDPLUS.NS', 'SPANDANA.NS', 'JTEKTINDIA.NS', 'SOUTHBANK.NS', 'TARC.NS', 'MANINFRA.NS', 'GOKEX.NS', 'LUMAXTECH.NS', 'RPGLIFE.NS', 'MOLDTKPAC.NS', 'SURYAROSNI.NS', 'RICOAUTO.NS', 'XCHANGING.NS', 'IRCON.NS', 'JTLIND.NS', 'PARADEEP.NS', 'SHANKARA.NS', 'MSTCLTD.NS', 'PTCIL.NS', 'FINCABLES.NS', 'NILKAMAL.NS', 'TTKPRESTIG.NS', 'VENKEYS.NS', 'JKIL.NS', 'RAMCOIND.NS', 'CHEMCON.NS', 'VSTIND.NS'],
   flexi: ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS', 'BHARTIARTL.NS', 'LT.NS', 'SBIN.NS', 'TATAMOTOR.NS', 'HINDUNILVR.NS', 'ITC.NS', 'KOTAKBANK.NS', 'AXISBANK.NS', 'MARUTI.NS', 'BAJFINANCE.NS', 'ASIANPAINT.NS', 'HDFCLIFE.NS', 'HCLTECH.NS', 'WIPRO.NS', 'TITAN.NS', 'TATACONSUM.NS', 'NESTLEIND.NS', 'BAJAJFINSV.NS', 'SUNPHARMA.NS', 'ULTRACEMCO.NS', 'M&M.NS', 'POWERGRID.NS', 'ONGC.NS', 'NTPC.NS', 'INDUSINDBK.NS', 'BRITANNIA.NS', 'TECHM.NS', 'DIVISLAB.NS', 'ADANIPORTS.NS', 'CIPLA.NS', 'DRREDDY.NS', 'APOLLOHOSP.NS', 'COALINDIA.NS', 'GRASIM.NS', 'EICHERMOT.NS', 'JSWSTEEL.NS', 'TATASTEEL.NS', 'TATACOMM.NS', 'HEROMOTOCO.NS', 'BPCL.NS', 'HINDALCO.NS', 'ADANIENT.NS', 'SHRIRAMFIN.NS', 'SBILIFE.NS', 'PIDILITIND.NS', 'PERSISTENT.NS', 'COFORGE.NS'],
 };
 
-const SEGMENT_NAMES = { large: 'Large Cap', mid: 'Mid Cap', small: 'Small Cap', flexi: 'Flexi Cap' };
+const SEGMENT_NAMES = { large: 'Large Cap', mid: 'Mid Cap', small: 'Small Cap', micro: 'Micro Cap', nano: 'Nano Cap', flexi: 'Flexi Cap' };
 
 const NSE_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -127,7 +131,11 @@ async function fetchNSEIndexConstituents(indexName, cookieHeader) {
 
 /** Get stock lists for US market (predefined symbols) */
 function getStockListsForUS() {
-  return US_STOCKS;
+  return {
+    ...US_STOCKS,
+    micro: (US_STOCKS.small || []).slice(0, 150),
+    nano: (US_STOCKS.small || []).slice(150, 300),
+  };
 }
 
 /** Get full stock lists per segment via NSE API; fallback to FALLBACK_STOCKS on failure */
@@ -135,15 +143,19 @@ async function getStockListsBySegment() {
   const lists = { large: [], mid: [], small: [], flexi: [] };
   try {
     const cookie = await getNSESessionCookie();
-    const [large, mid, small, flexi] = await Promise.all([
+    const [large, mid, small, micro, nano, flexi] = await Promise.all([
       fetchNSEIndexConstituents(NSE_INDEX_MAP.large, cookie),
       fetchNSEIndexConstituents(NSE_INDEX_MAP.mid, cookie),
       fetchNSEIndexConstituents(NSE_INDEX_MAP.small, cookie),
+      fetchNSEIndexConstituents(NSE_INDEX_MAP.micro, cookie),
+      fetchNSEIndexConstituents(NSE_INDEX_MAP.nano, cookie),
       fetchNSEIndexConstituents(NSE_INDEX_MAP.flexi, cookie),
     ]);
     lists.large = large;
     lists.mid = mid;
     lists.small = small;
+    lists.micro = micro;
+    lists.nano = nano;
     lists.flexi = flexi;
   } catch (err) {
     console.warn('NSE API failed, using fallback lists:', err.message);
@@ -162,7 +174,13 @@ async function fetchHistorical(symbol, days = 21) {
       period2: end.toISOString().slice(0, 10),
     });
     const quotes = result?.quotes || [];
-    return quotes.map((q) => ({ date: q.date, close: q.close }));
+    return quotes.map((q) => ({
+      date: q.date,
+      close: q.close,
+      high: q.high ?? q.close,
+      low: q.low ?? q.close,
+      volume: q.volume ?? null,
+    }));
   } catch (err) {
     console.warn(`Historical failed for ${symbol}:`, err.message);
     return [];
@@ -172,8 +190,10 @@ async function fetchHistorical(symbol, days = 21) {
 const DEFAULT_LIMIT = 50;
 const ALLOWED_LIMITS = [50, 100, 150];
 const CACHE_TTL_MS = 2 * 60 * 1000; // 2 min cache
+const STALE_CACHE_TTL_MS = 15 * 60 * 1000; // serve stale while revalidating
 const stocksCacheByLimit = {};
 const stocksCacheTimeByLimit = {};
+const stocksCacheInFlight = {};
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -611,7 +631,7 @@ async function processAllSegmentsDeduplicated(lists, limit, market) {
   const maxSymbols = ALLOWED_LIMITS.includes(limit) ? limit : DEFAULT_LIMIT;
   const segmentToSymbols = {};
   const seenAcrossCaps = new Set();
-  const SEGMENTS_EXCLUSIVE = ['large', 'mid', 'small'];
+  const SEGMENTS_EXCLUSIVE = ['large', 'mid', 'small', 'micro', 'nano'];
 
   for (const seg of SEGMENTS_EXCLUSIVE) {
     const rawList = lists[seg] || [];
@@ -911,7 +931,7 @@ async function fetchSymbolData(symbol, market) {
   };
 }
 
-const SEGMENTS = ['large', 'mid', 'small', 'flexi'];
+const SEGMENTS = ['large', 'mid', 'small', 'micro', 'nano', 'flexi'];
 
 /** Use Yahoo screener (2 API calls vs 60+) - more reliable when quote() fails. */
 async function getStocksViaScreener(market, count = 50) {
@@ -973,38 +993,60 @@ async function getStocksViaScreener(market, count = 50) {
   }
 }
 
+async function computeAndCacheTopStocksBySegment(limit = DEFAULT_LIMIT, segmentFilter = null, market = 'in') {
+  const cacheKey = `${market}:${limit}:${Array.isArray(segmentFilter) ? segmentFilter.join(',') : (segmentFilter || 'all')}`;
+  const inFlight = stocksCacheInFlight[cacheKey];
+  if (inFlight) return inFlight;
+
+  stocksCacheInFlight[cacheKey] = (async () => {
+    // 1. Individual quotes via v8 chart (no cookies) + NSE/Yahoo fallback - most reliable
+    const lists = market === 'us' ? getStockListsForUS() : await getStockListsBySegment();
+    const listsToUse = Array.isArray(segmentFilter)
+      ? Object.fromEntries(segmentFilter.map((s) => [s, lists[s] || []]))
+      : segmentFilter && SEGMENTS.includes(segmentFilter)
+        ? { [segmentFilter]: lists[segmentFilter] || [] }
+        : lists;
+    let segmentData = await processAllSegmentsDeduplicated(listsToUse, limit, market);
+
+    const hasData = SEGMENTS.some((seg) =>
+      (segmentData[seg]?.topGainers?.length || 0) + (segmentData[seg]?.topLosers?.length || 0) > 0
+    );
+
+    // 2. Try Yahoo screener only if individual fetches returned nothing
+    if (!hasData) {
+      const screenerData = await getStocksViaScreener(market, Math.min(limit, 50));
+      if (screenerData) segmentData = screenerData;
+    }
+
+    SEGMENTS.forEach((seg) => {
+      if (!segmentData[seg]) {
+        segmentData[seg] = { topGainers: [], topLosers: [] };
+      }
+    });
+    stocksCacheByLimit[cacheKey] = segmentData;
+    stocksCacheTimeByLimit[cacheKey] = Date.now();
+    return segmentData;
+  })();
+
+  try {
+    return await stocksCacheInFlight[cacheKey];
+  } finally {
+    delete stocksCacheInFlight[cacheKey];
+  }
+}
+
 async function getTopStocksBySegment(limit = DEFAULT_LIMIT, segmentFilter = null, market = 'in') {
-  const cacheKey = `${market}:${limit}:${segmentFilter || 'all'}`;
+  const cacheKey = `${market}:${limit}:${Array.isArray(segmentFilter) ? segmentFilter.join(',') : (segmentFilter || 'all')}`;
   const cached = stocksCacheByLimit[cacheKey];
-  if (cached && Date.now() - (stocksCacheTimeByLimit[cacheKey] || 0) < CACHE_TTL_MS) {
+  const ageMs = Date.now() - (stocksCacheTimeByLimit[cacheKey] || 0);
+
+  if (cached && ageMs < CACHE_TTL_MS) return cached; // fresh
+  if (cached && ageMs < STALE_CACHE_TTL_MS) {
+    // stale-while-revalidate: return immediately and refresh in background
+    void computeAndCacheTopStocksBySegment(limit, segmentFilter, market).catch(() => {});
     return cached;
   }
-
-  // 1. Individual quotes via v8 chart (no cookies) + NSE/Yahoo fallback - most reliable
-  const lists = market === 'us' ? getStockListsForUS() : await getStockListsBySegment();
-  const listsToUse = segmentFilter && SEGMENTS.includes(segmentFilter)
-    ? { [segmentFilter]: lists[segmentFilter] || [] }
-    : lists;
-  let segmentData = await processAllSegmentsDeduplicated(listsToUse, limit, market);
-
-  const hasData = SEGMENTS.some((seg) =>
-    (segmentData[seg]?.topGainers?.length || 0) + (segmentData[seg]?.topLosers?.length || 0) > 0
-  );
-
-  // 2. Try Yahoo screener only if individual fetches returned nothing
-  if (!hasData) {
-    const screenerData = await getStocksViaScreener(market, Math.min(limit, 50));
-    if (screenerData) segmentData = screenerData;
-  }
-
-  SEGMENTS.forEach((seg) => {
-    if (!segmentData[seg]) {
-      segmentData[seg] = { topGainers: [], topLosers: [] };
-    }
-  });
-  stocksCacheByLimit[cacheKey] = segmentData;
-  stocksCacheTimeByLimit[cacheKey] = Date.now();
-  return segmentData;
+  return computeAndCacheTopStocksBySegment(limit, segmentFilter, market);
 }
 
 async function getAIProsCons(stock) {
@@ -1063,6 +1105,19 @@ Format your response as JSON only:
 function isGroqRateLimitError(err) {
   const msg = String(err?.message || '');
   return /rate limit/i.test(msg) || /429/.test(msg) || err?.status === 429 || err?.code === 'rate_limit_exceeded';
+}
+
+function parseGroqRetryAfterSeconds(err) {
+  const msg = String(err?.message || '');
+  const m = msg.match(/try again in\s+(\d+)m([\d.]+)s/i);
+  if (m) {
+    const mins = Number(m[1]) || 0;
+    const secs = Number(m[2]) || 0;
+    return Math.max(1, Math.round(mins * 60 + secs));
+  }
+  const s = msg.match(/try again in\s+([\d.]+)s/i);
+  if (s) return Math.max(1, Math.round(Number(s[1]) || 0));
+  return null;
 }
 
 function inferOwnershipLabel(description, sector, industry, companyName) {
@@ -1315,17 +1370,27 @@ app.get('/api/stocks', async (req, res) => {
   try {
     const raw = parseInt(req.query.limit, 10);
     const limit = ALLOWED_LIMITS.includes(raw) ? raw : 150;
-    const segment = req.query.segment || null;
+    // Support comma-separated segments: ?segment=large,mid
+    const segmentParam = req.query.segment || null;
+    const segmentList = segmentParam
+      ? segmentParam.split(',').map((s) => s.trim()).filter((s) => SEGMENTS.includes(s))
+      : null;
+    const segment = segmentList && segmentList.length > 0
+      ? (segmentList.length === 1 ? segmentList[0] : segmentList)
+      : null;
     const market = ALLOWED_MARKETS.includes(req.query.market) ? req.query.market : 'in';
     if (req.query.refresh === '1') {
-      const cacheKey = `${market}:${limit}:${segment || 'all'}`;
+      const cacheKey = `${market}:${limit}:${Array.isArray(segment) ? segment.join(',') : (segment || 'all')}`;
       delete stocksCacheByLimit[cacheKey];
     }
 
+    // Timeout fallback: only empty-out the requested segments, not all 6.
+    // This prevents overwriting already-cached data for other segments on the client.
+    const requestedSegs = Array.isArray(segment) ? segment : (segment ? [segment] : SEGMENTS);
     const segmentData = await withTimeout(
       getTopStocksBySegment(limit, segment || null, market),
       STOCKS_API_TIMEOUT_MS,
-      Object.fromEntries(SEGMENTS.map((s) => [s, { topGainers: [], topLosers: [] }]))
+      Object.fromEntries(requestedSegs.map((s) => [s, { topGainers: [], topLosers: [] }]))
     );
 
     const bestRankMap = market === 'in' ? computeBestRanks(segmentData) : {};
@@ -2747,6 +2812,1030 @@ app.get('/api/cron/auto-trade', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[AutoTrade] Cron error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Technical Indicators — computed purely from price/volume history
+// ---------------------------------------------------------------------------
+
+function computeEMA(closes, period) {
+  if (closes.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
+  return +ema.toFixed(2);
+}
+
+function computeAllEMAs(closes) {
+  const ema20  = computeEMA(closes, 20);
+  const ema50  = computeEMA(closes, 50);
+  const ema200 = computeEMA(closes, 200);
+  const price  = closes[closes.length - 1];
+  const trend =
+    ema20 && ema50 && ema200 && ema20 > ema50 && ema50 > ema200 ? 'STRONG BULLISH (EMA20>50>200 — golden alignment)' :
+    ema20 && ema50 && ema200 && ema20 < ema50 && ema50 < ema200 ? 'STRONG BEARISH (EMA20<50<200 — death alignment)' :
+    ema20 && ema50 && ema20 > ema50 ? 'MODERATE BULLISH (EMA20>50)' :
+    ema20 && ema50 && ema20 < ema50 ? 'MODERATE BEARISH (EMA20<50)' : 'MIXED';
+  return {
+    ema20, ema50, ema200,
+    priceVsEma20:  ema20  ? +((price - ema20)  / ema20  * 100).toFixed(2) : null,
+    priceVsEma50:  ema50  ? +((price - ema50)  / ema50  * 100).toFixed(2) : null,
+    priceVsEma200: ema200 ? +((price - ema200) / ema200 * 100).toFixed(2) : null,
+    trend,
+  };
+}
+
+function computeRSI(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff; else losses -= diff;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(0, diff))  / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -diff)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs  = avgGain / avgLoss;
+  const rsi = 100 - (100 / (1 + rs));
+  const zone = rsi >= 70 ? 'OVERBOUGHT (>70 — sell signal risk)' : rsi <= 30 ? 'OVERSOLD (<30 — potential bounce)' : 'NEUTRAL (30-70)';
+  return { value: +rsi.toFixed(1), zone };
+}
+
+function computeMACD(closes, fast = 12, slow = 26, signal = 9) {
+  if (closes.length < slow + signal) return null;
+  const emaFast = (arr) => {
+    const k = 2 / (fast + 1);
+    let e = arr.slice(0, fast).reduce((a, b) => a + b, 0) / fast;
+    for (let i = fast; i < arr.length; i++) e = arr[i] * k + e * (1 - k);
+    return e;
+  };
+  const emaSlow = (arr) => {
+    const k = 2 / (slow + 1);
+    let e = arr.slice(0, slow).reduce((a, b) => a + b, 0) / slow;
+    for (let i = slow; i < arr.length; i++) e = arr[i] * k + e * (1 - k);
+    return e;
+  };
+  // Build MACD line series
+  const macdLine = [];
+  for (let i = slow - 1; i < closes.length; i++) {
+    const slice = closes.slice(0, i + 1);
+    macdLine.push(emaFast(slice) - emaSlow(slice));
+  }
+  // Signal line = EMA(9) of MACD
+  const k9 = 2 / (signal + 1);
+  let sig = macdLine.slice(0, signal).reduce((a, b) => a + b, 0) / signal;
+  for (let i = signal; i < macdLine.length; i++) sig = macdLine[i] * k9 + sig * (1 - k9);
+
+  const macdVal = macdLine[macdLine.length - 1];
+  const hist    = macdVal - sig;
+  const trend   = macdVal > sig && hist > 0 ? 'BULLISH (MACD above signal, positive histogram)' :
+                  macdVal < sig && hist < 0 ? 'BEARISH (MACD below signal, negative histogram)' :
+                  'MIXED (crossover zone — watch for direction)';
+  return { macd: +macdVal.toFixed(4), signal: +sig.toFixed(4), histogram: +hist.toFixed(4), trend };
+}
+
+function computeBollingerBands(closes, period = 20, stdDev = 2) {
+  if (closes.length < period) return null;
+  const recent = closes.slice(-period);
+  const sma = recent.reduce((a, b) => a + b, 0) / period;
+  const variance = recent.reduce((s, c) => s + (c - sma) ** 2, 0) / period;
+  const std = Math.sqrt(variance);
+  const upper  = sma + stdDev * std;
+  const lower  = sma - stdDev * std;
+  const price  = closes[closes.length - 1];
+  const pctB   = std > 0 ? ((price - lower) / (upper - lower)) * 100 : 50;
+  const bWidth = std > 0 ? ((upper - lower) / sma) * 100 : 0;
+  const zone   = pctB > 90 ? 'ABOVE UPPER BAND (overbought, high reversal risk)' :
+                 pctB < 10 ? 'BELOW LOWER BAND (oversold, bounce potential)' :
+                 pctB > 70 ? 'NEAR UPPER BAND (caution)' :
+                 pctB < 30 ? 'NEAR LOWER BAND (watch for support)' : 'WITHIN BANDS (neutral)';
+  return {
+    upper: +upper.toFixed(2), middle: +sma.toFixed(2), lower: +lower.toFixed(2),
+    pctB: +pctB.toFixed(1), bandWidth: +bWidth.toFixed(2), zone,
+  };
+}
+
+function computeATR(history, period = 14) {
+  if (history.length < period + 1) return null;
+  const trs = [];
+  for (let i = 1; i < history.length; i++) {
+    const high  = history[i].high  ?? history[i].close;
+    const low   = history[i].low   ?? history[i].close;
+    const pClose = history[i - 1].close;
+    trs.push(Math.max(high - low, Math.abs(high - pClose), Math.abs(low - pClose)));
+  }
+  const recent = trs.slice(-period);
+  const atr = recent.reduce((a, b) => a + b, 0) / period;
+  const price = history[history.length - 1].close;
+  const atrPct = price > 0 ? (atr / price) * 100 : 0;
+  return { atr: +atr.toFixed(2), atrPct: +atrPct.toFixed(2) };
+}
+
+function computeVolumeAnalysis(history) {
+  const withVol = history.filter((h) => h.volume != null && h.volume > 0);
+  if (withVol.length < 10) return null;
+  const vols    = withVol.map((h) => h.volume);
+  const avg20   = vols.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, vols.length);
+  const current = vols[vols.length - 1];
+  const ratio   = avg20 > 0 ? (current / avg20) : 1;
+  // Volume trend: last 5 days vs prior 5 days
+  const last5   = vols.slice(-5).reduce((a, b) => a + b, 0) / 5;
+  const prev5   = vols.slice(-10, -5).reduce((a, b) => a + b, 0) / 5;
+  const volTrend = prev5 > 0 ? ((last5 - prev5) / prev5) * 100 : 0;
+  const signal  = ratio > 1.5 ? 'HIGH VOLUME (strong conviction)' :
+                  ratio < 0.6 ? 'LOW VOLUME (weak conviction, move may not sustain)' : 'NORMAL VOLUME';
+  return {
+    avgVolume20d: Math.round(avg20),
+    currentVolume: current,
+    volumeRatio: +ratio.toFixed(2),
+    volumeTrend5d: +volTrend.toFixed(1),
+    signal,
+  };
+}
+
+function computeSupportResistanceLevels(history) {
+  // Find key price levels with highest cluster density from 3Y data
+  const closes = history.map((h) => h.close).filter(Number.isFinite);
+  if (closes.length < 30) return null;
+  const min = Math.min(...closes), max = Math.max(...closes);
+  const buckets = 20;
+  const step    = (max - min) / buckets;
+  const freq    = Array(buckets).fill(0);
+  closes.forEach((c) => {
+    const idx = Math.min(buckets - 1, Math.floor((c - min) / step));
+    freq[idx]++;
+  });
+  // Top 3 most-visited price zones = support/resistance
+  const zones = freq
+    .map((count, i) => ({ price: +(min + (i + 0.5) * step).toFixed(2), count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
+  const current = closes[closes.length - 1];
+  const below = zones.filter((z) => z.price < current).sort((a, b) => b.price - a.price);
+  const above = zones.filter((z) => z.price > current).sort((a, b) => a.price - b.price);
+  return {
+    supports:   below.slice(0, 3).map((z) => z.price),
+    resistances: above.slice(0, 3).map((z) => z.price),
+  };
+}
+
+// Fetch advanced fundamentals: beta, ROE, debt/equity, revenue growth, free cash flow
+async function fetchAdvancedFundamentals(symbol, market) {
+  try {
+    const yfSymbol = toYahooSymbol(symbol, market);
+    const result = await yahooFinance.quoteSummary(yfSymbol, {
+      modules: ['defaultKeyStatistics', 'financialData', 'summaryDetail'],
+    }).catch(() => null);
+    if (!result) return null;
+
+    const ks  = result.defaultKeyStatistics || {};
+    const fd  = result.financialData         || {};
+    const sd  = result.summaryDetail         || {};
+
+    const fmt2 = (v) => v != null && isFinite(Number(v)) ? +Number(v).toFixed(2) : null;
+    const fmtPct = (v) => v != null && isFinite(Number(v)) ? +(Number(v) * 100).toFixed(2) : null;
+
+    return {
+      beta:             fmt2(ks.beta),
+      shortRatio:       fmt2(ks.shortRatio),
+      bookValue:        fmt2(ks.bookValue),
+      priceToBook:      fmt2(ks.priceToBook),
+      returnOnEquity:   fmtPct(fd.returnOnEquity),
+      returnOnAssets:   fmtPct(fd.returnOnAssets),
+      debtToEquity:     fmt2(fd.debtToEquity),
+      revenueGrowth:    fmtPct(fd.revenueGrowth),
+      earningsGrowth:   fmtPct(fd.earningsGrowth),
+      operatingMargins: fmtPct(fd.operatingMargins),
+      profitMargins:    fmtPct(fd.profitMargins),
+      currentRatio:     fmt2(fd.currentRatio),
+      quickRatio:       fmt2(fd.quickRatio),
+      freeCashflow:     fd.freeCashflow ? Math.round(Number(fd.freeCashflow) / 1e7) + ' Cr' : null,
+      payoutRatio:      fmtPct(sd.payoutRatio),
+      fiveYearAvgDividendYield: fmt2(sd.fiveYearAvgDividendYield),
+    };
+  } catch (e) {
+    console.warn('[advFund]', e.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic Price Cycle Analysis — mirrors deriveBestSaleSignal (client)
+// ---------------------------------------------------------------------------
+
+/**
+ * ZigZag peak/trough detector.
+ * swingThreshold: minimum % move to count as a new swing (e.g. 0.05 = 5%)
+ */
+function detectPeaksTroughs(closes, swingThreshold = 0.05) {
+  if (closes.length < 10) return [];
+  const pivots = []; // { type: 'peak'|'trough', idx, price }
+  let lastPivotType = null;
+  let lastPivotPrice = closes[0];
+  let lastPivotIdx = 0;
+
+  for (let i = 1; i < closes.length; i++) {
+    const c = closes[i];
+    if (lastPivotType === null || lastPivotType === 'trough') {
+      if (c >= lastPivotPrice * (1 + swingThreshold)) {
+        // Rising enough from last trough — mark last trough if not yet
+        if (lastPivotType === null) {
+          pivots.push({ type: 'trough', idx: lastPivotIdx, price: lastPivotPrice });
+        }
+        lastPivotType = 'peak_candidate';
+        lastPivotPrice = c;
+        lastPivotIdx = i;
+      } else if (c < lastPivotPrice) {
+        lastPivotPrice = c;
+        lastPivotIdx = i;
+      }
+    }
+    if (lastPivotType === 'peak' || lastPivotType === 'peak_candidate') {
+      if (c <= lastPivotPrice * (1 - swingThreshold)) {
+        pivots.push({ type: 'peak', idx: lastPivotIdx, price: lastPivotPrice });
+        lastPivotType = 'trough';
+        lastPivotPrice = c;
+        lastPivotIdx = i;
+      } else if (c > lastPivotPrice) {
+        lastPivotPrice = c;
+        lastPivotIdx = i;
+      }
+    }
+    if (lastPivotType === 'peak_candidate' && c <= lastPivotPrice * (1 - swingThreshold)) {
+      pivots.push({ type: 'peak', idx: lastPivotIdx, price: lastPivotPrice });
+      lastPivotType = 'trough';
+      lastPivotPrice = c;
+      lastPivotIdx = i;
+    }
+  }
+  return pivots;
+}
+
+/**
+ * Full cycle analysis from 3-year history.
+ * Returns rich structured data for the Groq prompt — no AI guesswork needed.
+ */
+function computePriceCycleAnalysis(history, fundamentals) {
+  const closes = history.map((h) => Number(h.close)).filter(Number.isFinite);
+  const dates  = history.map((h) => h.date);
+  if (closes.length < 30) return null;
+
+  const currentPrice = closes[closes.length - 1];
+  const swingThreshold = 0.05; // 5% minimum swing
+  const pivots = detectPeaksTroughs(closes, swingThreshold);
+
+  // Build rise/fall cycles from consecutive peak–trough pairs
+  const rallies = []; // trough→peak
+  const declines = []; // peak→trough
+  for (let i = 0; i < pivots.length - 1; i++) {
+    const a = pivots[i], b = pivots[i + 1];
+    const pctChange = ((b.price - a.price) / a.price) * 100;
+    const days = b.idx - a.idx;
+    if (a.type === 'trough' && b.type === 'peak') {
+      rallies.push({ pct: pctChange, days, fromPrice: a.price, toPrice: b.price, fromIdx: a.idx, toIdx: b.idx });
+    } else if (a.type === 'peak' && b.type === 'trough') {
+      declines.push({ pct: pctChange, days, fromPrice: a.price, toPrice: b.price, fromIdx: a.idx, toIdx: b.idx });
+    }
+  }
+
+  const avg = (arr) => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null;
+  const avgRallyPct  = avg(rallies.map((r) => r.pct));
+  const avgRallyDays = avg(rallies.map((r) => r.days));
+  const avgDeclinePct  = avg(declines.map((d) => d.pct));
+  const avgDeclineDays = avg(declines.map((d) => d.days));
+
+  // Largest falls (top 3 by magnitude)
+  const topFalls = [...declines].sort((a, b) => a.pct - b.pct).slice(0, 3)
+    .map((d) => `${d.pct.toFixed(1)}% over ${d.days}d`);
+
+  // Largest rallies (top 3)
+  const topRallies = [...rallies].sort((a, b) => b.pct - a.pct).slice(0, 3)
+    .map((r) => `+${r.pct.toFixed(1)}% over ${r.days}d`);
+
+  // Current phase: find last pivot
+  const lastPivot = pivots[pivots.length - 1];
+  let currentPhase = 'unknown';
+  let daysInPhase = 0;
+  let phasePctMoved = 0;
+  let phaseRemainingEstimate = null;
+
+  if (lastPivot) {
+    daysInPhase = closes.length - 1 - lastPivot.idx;
+    phasePctMoved = ((currentPrice - lastPivot.price) / lastPivot.price) * 100;
+
+    if (lastPivot.type === 'trough') {
+      currentPhase = 'RALLY (rising from last trough)';
+      if (avgRallyPct && avgRallyDays) {
+        const estimatedRemainingPct = avgRallyPct - phasePctMoved;
+        const estimatedRemainingDays = avgRallyDays - daysInPhase;
+        phaseRemainingEstimate = `~${estimatedRemainingPct.toFixed(1)}% gain remaining over ~${Math.max(0, Math.round(estimatedRemainingDays))}d before historical reversal zone`;
+      }
+    } else {
+      currentPhase = 'DECLINE (falling from last peak)';
+      if (avgDeclinePct && avgDeclineDays) {
+        const estimatedRemainingPct = avgDeclinePct - phasePctMoved; // both negative
+        const estimatedRemainingDays = avgDeclineDays - daysInPhase;
+        phaseRemainingEstimate = `~${estimatedRemainingPct.toFixed(1)}% further decline expected over ~${Math.max(0, Math.round(estimatedRemainingDays))}d`;
+      }
+    }
+  }
+
+  // Market regime scoring (mirrors deriveBestSaleSignal)
+  const high1y = Math.max(...closes.slice(-252));
+  const low1y  = Math.min(...closes.slice(-252));
+  const recent21 = closes.slice(-21);
+  const momentum21 = recent21.length >= 2 ? ((currentPrice - recent21[0]) / recent21[0]) * 100 : 0;
+  const recent7  = closes.slice(-7);
+  const prev7    = closes.slice(-14, -7);
+  const avg7  = recent7.reduce((a, b) => a + b, 0) / recent7.length;
+  const avgP7 = prev7.length ? prev7.reduce((a, b) => a + b, 0) / prev7.length : avg7;
+  const momentum7 = avgP7 > 0 ? ((avg7 - avgP7) / avgP7) * 100 : 0;
+  const inUpperBand = low1y > 0 ? (currentPrice - low1y) / Math.max(1, high1y - low1y) >= 0.72 : false;
+  const inLowerBand = low1y > 0 ? (currentPrice - low1y) / Math.max(1, high1y - low1y) <= 0.28 : false;
+  const drawdownFromHigh1y = high1y > 0 ? ((high1y - currentPrice) / high1y) * 100 : 0;
+
+  const pe = parseFloat(fundamentals?.pe) || null;
+  const forwardPE = parseFloat(fundamentals?.forwardPE) || null;
+  const divYield = parseFloat(fundamentals?.dividendYield) || null;
+
+  let regimeScore = 0;
+  const regimeSignals = [];
+  if (momentum7 < -1)  { regimeScore -= 1; regimeSignals.push(`7d momentum: ${momentum7.toFixed(1)}% (bearish)`); }
+  if (momentum7 > 1)   { regimeScore += 1; regimeSignals.push(`7d momentum: ${momentum7.toFixed(1)}% (bullish)`); }
+  if (momentum21 < -4) { regimeScore -= 2; regimeSignals.push(`21d momentum: ${momentum21.toFixed(1)}% (bearish)`); }
+  if (momentum21 > 4)  { regimeScore += 1; regimeSignals.push(`21d momentum: ${momentum21.toFixed(1)}% (bullish)`); }
+  if (inUpperBand)     { regimeScore -= 1; regimeSignals.push('Price in upper 72% of 1Y band (overbought zone)'); }
+  if (inLowerBand)     { regimeScore += 1; regimeSignals.push('Price in lower 28% of 1Y band (oversold zone)'); }
+  if (drawdownFromHigh1y >= 15) { regimeScore -= 1; regimeSignals.push(`${drawdownFromHigh1y.toFixed(1)}% below 1Y high (momentum breakdown)`); }
+  if (pe != null && pe > 35)   { regimeScore -= 1; regimeSignals.push(`High P/E ${pe.toFixed(1)} (overvalued risk)`); }
+  if (pe != null && pe < 12)   { regimeScore += 1; regimeSignals.push(`Low P/E ${pe.toFixed(1)} (undervalued signal)`); }
+  if (forwardPE && pe && forwardPE > pe * 0.98) { regimeScore -= 1; regimeSignals.push('Forward P/E not improving (earnings deceleration)'); }
+  if (divYield != null && divYield < 0.8) { regimeScore -= 0.5; regimeSignals.push('Low dividend yield (limited downside cushion)'); }
+
+  const regime = regimeScore >= 2 ? 'BULLISH' : regimeScore <= -2 ? 'BEARISH' : 'NEUTRAL';
+
+  // Seasonal: monthly avg returns across 3Y
+  const monthlyReturns = {};
+  for (let i = 1; i < closes.length; i++) {
+    const month = new Date(dates[i] || '').getMonth(); // 0=Jan
+    if (!monthlyReturns[month]) monthlyReturns[month] = [];
+    monthlyReturns[month].push(((closes[i] - closes[i - 1]) / closes[i - 1]) * 100);
+  }
+  const currentMonth = new Date().getMonth();
+  const thisMonthAvg = monthlyReturns[currentMonth]
+    ? (monthlyReturns[currentMonth].reduce((a, b) => a + b, 0) / monthlyReturns[currentMonth].length).toFixed(2)
+    : null;
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const seasonalLine = thisMonthAvg !== null
+    ? `Historical avg daily return in ${monthNames[currentMonth]}: ${thisMonthAvg}% (across 3 years)`
+    : null;
+
+  return {
+    summary: {
+      totalCycles: Math.min(rallies.length, declines.length),
+      avgRallyPct:  avgRallyPct  != null ? +avgRallyPct.toFixed(1)  : null,
+      avgRallyDays: avgRallyDays != null ? +avgRallyDays.toFixed(0) : null,
+      avgDeclinePct:  avgDeclinePct  != null ? +avgDeclinePct.toFixed(1)  : null,
+      avgDeclineDays: avgDeclineDays != null ? +avgDeclineDays.toFixed(0) : null,
+      topFalls, topRallies,
+    },
+    currentPhase,
+    daysInPhase,
+    phasePctMoved: +phasePctMoved.toFixed(2),
+    phaseRemainingEstimate,
+    regime,
+    regimeScore: +regimeScore.toFixed(1),
+    regimeSignals,
+    momentum7d: +momentum7.toFixed(2),
+    momentum21d: +momentum21.toFixed(2),
+    drawdownFromHigh1y: +drawdownFromHigh1y.toFixed(1),
+    inUpperBand,
+    inLowerBand,
+    seasonalLine,
+  };
+}
+
+// Stock Price Prediction via 3Y history + cycle analysis + fundamentals + pros/cons + sector news
+// ---------------------------------------------------------------------------
+
+function summarizeOhlcvWindow(history, lookback = 180) {
+  const rows = Array.isArray(history) ? history.slice(-lookback) : [];
+  if (!rows.length) return 'OHLCV summary unavailable';
+  const closes = rows.map((h) => Number(h.close)).filter(Number.isFinite);
+  const highs = rows.map((h) => Number(h.high)).filter(Number.isFinite);
+  const lows = rows.map((h) => Number(h.low)).filter(Number.isFinite);
+  const volumes = rows.map((h) => Number(h.volume)).filter(Number.isFinite);
+  if (!closes.length) return 'OHLCV summary unavailable';
+
+  const first = closes[0];
+  const last = closes[closes.length - 1];
+  const retPct = first > 0 ? ((last - first) / first) * 100 : 0;
+  const high = highs.length ? Math.max(...highs) : Math.max(...closes);
+  const low = lows.length ? Math.min(...lows) : Math.min(...closes);
+  const avgClose = closes.reduce((a, b) => a + b, 0) / closes.length;
+  const avgVol = volumes.length
+    ? volumes.reduce((a, b) => a + b, 0) / volumes.length
+    : null;
+  const vol5 = volumes.length >= 5
+    ? volumes.slice(-5).reduce((a, b) => a + b, 0) / 5
+    : null;
+  const volRatio = avgVol && vol5 ? vol5 / avgVol : null;
+  const dailyMoves = [];
+  for (let i = 1; i < closes.length; i += 1) {
+    const p0 = closes[i - 1];
+    const p1 = closes[i];
+    if (p0 > 0 && Number.isFinite(p1)) dailyMoves.push(Math.abs((p1 - p0) / p0) * 100);
+  }
+  const dailyVolPct = dailyMoves.length
+    ? dailyMoves.reduce((a, b) => a + b, 0) / dailyMoves.length
+    : null;
+  const nearHighPct = high > 0 ? ((last - high) / high) * 100 : null;
+  const aboveAvgPct = avgClose > 0 ? ((last - avgClose) / avgClose) * 100 : null;
+
+  return [
+    `Window:${rows.length}d`,
+    `Return:${retPct.toFixed(2)}%`,
+    `Range:${low.toFixed(2)}-${high.toFixed(2)}`,
+    nearHighPct != null ? `FromHigh:${nearHighPct.toFixed(2)}%` : null,
+    aboveAvgPct != null ? `VsAvg:${aboveAvgPct.toFixed(2)}%` : null,
+    dailyVolPct != null ? `AvgDailyMove:${dailyVolPct.toFixed(2)}%` : null,
+    volRatio != null ? `Vol5d/Avg:${volRatio.toFixed(2)}x` : null,
+  ].filter(Boolean).join(' | ');
+}
+
+function getYearWeekKey(dateLike) {
+  const d = new Date(dateLike);
+  if (!Number.isFinite(d.getTime())) return null;
+  const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+  return `${utc.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function buildWeeklyLowestCandles(history, maxCandles = 156) {
+  const rows = Array.isArray(history) ? history : [];
+  if (!rows.length) return [];
+  const byWeek = new Map();
+  for (const row of rows) {
+    const key = getYearWeekKey(row?.date);
+    const low = Number(row?.low);
+    const close = Number(row?.close);
+    if (!key || !Number.isFinite(low) || !Number.isFinite(close)) continue;
+    const existing = byWeek.get(key);
+    if (!existing || low < existing.low) {
+      byWeek.set(key, {
+        date: row.date,
+        low,
+        close,
+      });
+    }
+  }
+  return Array.from(byWeek.values())
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-maxCandles);
+}
+
+function expandPredictedSeries(predictedRaw, currentPrice, targetDays) {
+  const target = Math.max(1, Number(targetDays) || 1);
+  const points = (Array.isArray(predictedRaw) ? predictedRaw : [])
+    .map((v) => Number(typeof v === 'object' ? (v?.price ?? NaN) : v))
+    .filter(Number.isFinite);
+  if (!points.length) return Array.from({ length: target }, () => Number(currentPrice));
+  if (points.length >= target) return points.slice(0, target);
+
+  const anchors = [{ day: 0, price: Number(currentPrice) }];
+  for (let i = 0; i < points.length; i += 1) {
+    const day = Math.max(1, Math.min(target, Math.round(((i + 1) * target) / points.length)));
+    anchors.push({ day, price: points[i] });
+  }
+  if (anchors[anchors.length - 1].day < target) {
+    anchors.push({ day: target, price: anchors[anchors.length - 1].price });
+  }
+
+  const out = [];
+  let a = 0;
+  for (let d = 1; d <= target; d += 1) {
+    while (a + 1 < anchors.length && anchors[a + 1].day < d) a += 1;
+    const left = anchors[a];
+    const right = anchors[Math.min(a + 1, anchors.length - 1)];
+    if (!right || right.day <= left.day) {
+      out.push(left.price);
+      continue;
+    }
+    const t = (d - left.day) / (right.day - left.day);
+    out.push(left.price + (right.price - left.price) * t);
+  }
+  return out;
+}
+
+function deriveTrendAndConfidenceFromSeries(series, entryPrice) {
+  const arr = Array.isArray(series) ? series.map((x) => Number(x)).filter(Number.isFinite) : [];
+  const base = Number(entryPrice);
+  if (!arr.length || !Number.isFinite(base) || base <= 0) {
+    return { trend: 'neutral', confidence: 45 };
+  }
+  const end = arr[arr.length - 1];
+  const netPct = ((end - base) / base) * 100;
+  const upMoves = arr.filter((v, i) => i > 0 && v > arr[i - 1]).length;
+  const downMoves = arr.filter((v, i) => i > 0 && v < arr[i - 1]).length;
+  const moveCount = Math.max(1, upMoves + downMoves);
+  const consistency = Math.max(upMoves, downMoves) / moveCount; // 0.5..1
+  const magnitude = Math.min(1, Math.abs(netPct) / 8); // saturate near 8%
+  const confidence = Math.round(Math.max(35, Math.min(85, 35 + (consistency * 30) + (magnitude * 20))));
+  if (netPct > 0.2) return { trend: 'bullish', confidence };
+  if (netPct < -0.2) return { trend: 'bearish', confidence };
+  return { trend: 'neutral', confidence: Math.max(35, confidence - 10) };
+}
+
+function computeDeterministicNextDayPrice(currentPrice, momentum7d, atrPct, emaTrend, rsiValue) {
+  const base = Number(currentPrice);
+  if (!Number.isFinite(base) || base <= 0) return base;
+  const atrCap = Number.isFinite(Number(atrPct)) ? Math.max(0.2, Math.min(6, Number(atrPct))) : 1.2;
+  const momentumBias = Number.isFinite(Number(momentum7d)) ? Number(momentum7d) / 7 : 0; // weekly -> daily
+  let trendBias = 0;
+  if (String(emaTrend || '').toLowerCase().includes('bull')) trendBias += 0.18;
+  if (String(emaTrend || '').toLowerCase().includes('bear')) trendBias -= 0.18;
+  const rsi = Number(rsiValue);
+  let rsiBias = 0;
+  if (Number.isFinite(rsi)) {
+    if (rsi >= 70) rsiBias -= 0.22;
+    else if (rsi <= 30) rsiBias += 0.22;
+  }
+  const rawDailyPct = momentumBias + trendBias + rsiBias;
+  const boundedPct = Math.max(-atrCap, Math.min(atrCap, rawDailyPct));
+  return +(base * (1 + boundedPct / 100)).toFixed(2);
+}
+
+async function getStockPrediction(symbol, market, stockMeta, periodDays = 7, clientFundamentals = null, clientAnalysis = null, clientHistory3y = null, predictionLevel = 'medium') {
+  if (!groq) {
+    return { error: 'Prediction requires GROQ_API_KEY in .env' };
+  }
+
+  const yfSymbol = toYahooSymbol(symbol, market);
+
+  // 1. Use client-supplied 3Y chart data if available (already cached, no re-fetch needed)
+  //    Otherwise fetch from Yahoo Finance
+  let history = [];
+  if (Array.isArray(clientHistory3y) && clientHistory3y.length > 100) {
+    history = clientHistory3y;
+  } else {
+    try {
+      history = await fetchHistorical(yfSymbol, 1095);
+    } catch (e) {
+      console.warn('[predict] history fetch failed:', e.message);
+    }
+  }
+
+  // 2. Use client-provided fundamentals (already fetched & rich) or fall back to a quick fetch
+  let fundamentals = clientFundamentals;
+  if (!fundamentals || Object.keys(fundamentals).length === 0) {
+    try {
+      const host = market === 'us' ? 'query2.finance.yahoo.com' : 'query1.finance.yahoo.com';
+      const url = `https://${host}/v8/finance/chart/${encodeURIComponent(yfSymbol)}?range=1d&interval=1d`;
+      const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (r.ok) {
+        const j = await r.json();
+        const meta = j?.chart?.result?.[0]?.meta || {};
+        const fmt = (n, dec = 2) => n != null && isFinite(n) ? Number(n).toFixed(dec) : null;
+        const fmtPct = (n) => n != null && isFinite(n) ? (Number(n) * 100).toFixed(2) + '%' : null;
+        const fmtIndian = (n) => {
+          if (n == null || !isFinite(n)) return null;
+          if (Math.abs(n) >= 1e7) return (n / 1e7).toFixed(2) + ' Cr';
+          if (Math.abs(n) >= 1e5) return (n / 1e5).toFixed(2) + ' L';
+          return String(n);
+        };
+        fundamentals = {
+          pe: fmt(meta.trailingPE),
+          forwardPE: fmt(meta.forwardPE),
+          eps: fmt(meta.epsTrailingTwelveMonths),
+          dividendYield: fmtPct(meta.dividendYield),
+          marketCap: fmtIndian(meta.marketCap),
+          fiftyTwoWeekHigh: fmt(meta.fiftyTwoWeekHigh),
+          fiftyTwoWeekLow: fmt(meta.fiftyTwoWeekLow),
+        };
+      }
+    } catch (e) {
+      console.warn('[predict] fundamentals fetch failed:', e.message);
+    }
+  }
+
+  // 3. Fetch sector/company news context (DuckDuckGo — last 3 months context)
+  const sector = stockMeta?.sector || '';
+  const companyName = stockMeta?.name || symbol;
+  const newsQuery = `${companyName} ${sector} stock news outlook 2025`;
+  let newsContext = '';
+  try {
+    const ddgParts = await fetchDuckDuckGoContextForCompany(newsQuery);
+    newsContext = (Array.isArray(ddgParts) ? ddgParts : [ddgParts])
+      .filter(Boolean)
+      .slice(0, 12)
+      .join('\n');
+  } catch (e) {
+    console.warn('[predict] news fetch failed:', e.message);
+  }
+
+  // 4. Summarise price data for Groq (last 90 days + annual stats)
+  const recentHistory = history.slice(-90);
+  const prices = recentHistory.map((h) => h.close);
+  const currentPrice = stockMeta?.price ?? prices[prices.length - 1] ?? 0;
+  const avg90 = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : currentPrice;
+  const max90 = prices.length ? Math.max(...prices) : currentPrice;
+  const min90 = prices.length ? Math.min(...prices) : currentPrice;
+
+  // Simple momentum: last 7 days vs prior 7 days
+  const last7 = prices.slice(-7);
+  const prev7 = prices.slice(-14, -7);
+  const last7Avg = last7.length ? last7.reduce((a, b) => a + b, 0) / last7.length : currentPrice;
+  const prev7Avg = prev7.length ? prev7.reduce((a, b) => a + b, 0) / prev7.length : currentPrice;
+  const momentum7d = prev7Avg > 0 ? ((last7Avg - prev7Avg) / prev7Avg) * 100 : 0;
+
+  // 3-year CAGR
+  const oldest = history[0]?.close;
+  const newest = history[history.length - 1]?.close ?? currentPrice;
+  const years = history.length / 252;
+  const cagr3y = oldest && years > 0 ? ((newest / oldest) ** (1 / years) - 1) * 100 : null;
+
+  // Adaptive price sample — daily for short-term, weekly for long-term (saves tokens)
+  // ─── Trading day count ───────────────────────────────────────────────────────
+  const tradingDaysPerMonth = 21;
+  const totalDays = Math.round((periodDays / 30) * tradingDaysPerMonth);
+  const clampedDays = Math.max(7, Math.min(260, totalDays));
+
+  // ─── Shared computed stats ────────────────────────────────────────────────────
+  const priceNow = Number(currentPrice).toFixed(2);
+  const pctFrom52High = fundamentals?.fiftyTwoWeekHigh
+    ? (((currentPrice - parseFloat(fundamentals.fiftyTwoWeekHigh)) / parseFloat(fundamentals.fiftyTwoWeekHigh)) * 100).toFixed(1)
+    : null;
+  const pctFrom52Low = fundamentals?.fiftyTwoWeekLow
+    ? (((currentPrice - parseFloat(fundamentals.fiftyTwoWeekLow)) / parseFloat(fundamentals.fiftyTwoWeekLow)) * 100).toFixed(1)
+    : null;
+
+  // ─── Worst drawdowns (3Y) ─────────────────────────────────────────────────────
+  let worstDrawdowns = 'N/A';
+  if (history.length > 20) {
+    const closes3y = history.map((h) => h.close);
+    const drawdowns = [];
+    let peak = closes3y[0];
+    let peakIdx = 0;
+    for (let i = 1; i < closes3y.length; i++) {
+      if (closes3y[i] > peak) { peak = closes3y[i]; peakIdx = i; }
+      const dd = ((closes3y[i] - peak) / peak) * 100;
+      drawdowns.push({ dd, date: history[i].date, peakDate: history[peakIdx].date });
+    }
+    drawdowns.sort((a, b) => a.dd - b.dd);
+    worstDrawdowns = drawdowns.slice(0, 3).map((d) => `${d.peakDate}\u2192${d.date}:${d.dd.toFixed(1)}%`).join(' | ');
+  }
+
+  // ─── All technical indicators + cycle + advanced fundamentals ─────────────────
+  const closes = history.map((h) => Number(h.close)).filter(Number.isFinite);
+
+  const [cycleAnalysis, advFundamentals] = await Promise.all([
+    Promise.resolve(computePriceCycleAnalysis(history, fundamentals)),
+    predictionLevel !== 'low' ? fetchAdvancedFundamentals(symbol, market) : Promise.resolve(null),
+  ]);
+
+  const emaData   = computeAllEMAs(closes);
+  const rsi       = computeRSI(closes);
+  const macd      = predictionLevel !== 'low' ? computeMACD(closes)              : null;
+  const bollinger = predictionLevel !== 'low' ? computeBollingerBands(closes)    : null;
+  const atr       = computeATR(history);
+  const volumeData= predictionLevel !== 'low' ? computeVolumeAnalysis(history)   : null;
+  const srLevels  = computeSupportResistanceLevels(history);
+
+  // ─── Market index (Nifty/Sensex) — medium & high only ─────────────────────────
+  let marketIndexContext = '';
+  if (market !== 'us' && predictionLevel !== 'low') {
+    try {
+      const [niftyQ, sensexQ] = await Promise.all([
+        fetchQuote('^NSEI').catch(() => null),
+        fetchQuote('^BSESN').catch(() => null),
+      ]);
+      const fmtIndex = (q, name) => q?.regularMarketChangePercent != null
+        ? `${name}:${q.regularMarketChangePercent >= 0 ? '+' : ''}${Number(q.regularMarketChangePercent).toFixed(2)}%`
+        : null;
+      marketIndexContext = [fmtIndex(niftyQ, 'Nifty50'), fmtIndex(sensexQ, 'Sensex')].filter(Boolean).join(' ');
+    } catch { /* ignore */ }
+  }
+
+  // ─── HIGH level: fetch extra internet context (macro + analyst targets) ────────
+  let extraHighContext = '';
+  if (predictionLevel === 'high') {
+    try {
+      const [macroNews, analystNews] = await Promise.all([
+        fetchDuckDuckGoContextForCompany(`${market === 'in' ? 'India' : 'US'} stock market outlook macro 2025`).catch(() => ''),
+        fetchDuckDuckGoContextForCompany(`${companyName} analyst target price forecast 2025`).catch(() => ''),
+      ]);
+      const fmtExtra = (raw, label, n, len) => {
+        const items = (Array.isArray(raw) ? raw : [raw]).join('\n').split('\n').filter(Boolean).slice(0, n);
+        return items.length ? `${label}: ${items.map((s) => s.slice(0, len)).join(' | ')}` : '';
+      };
+      extraHighContext = [
+        fmtExtra(macroNews, 'MACRO', 3, 200),
+        fmtExtra(analystNews, 'ANALYST_TARGETS', 3, 220),
+      ].filter(Boolean).join('\n');
+    } catch { /* ignore */ }
+  }
+
+  // ─── Build level-specific strings ─────────────────────────────────────────────
+
+  // Price sample: LOW=14d, MEDIUM=30d/90dWeekly, HIGH=60d daily
+  const weeklyLowCandles3y = buildWeeklyLowestCandles(history, 156);
+  const sampleSlice = predictionLevel === 'low'
+    ? history.slice(-14)
+    : predictionLevel === 'high'
+      ? weeklyLowCandles3y
+      : (periodDays <= 30 ? history.slice(-30) : weeklyLowCandles3y);
+  const priceSample = sampleSlice
+    .map((h) => `${h.date}:${Number((h.low ?? h.close)).toFixed(2)}`)
+    .join(', ');
+  const ohlcvSummary = summarizeOhlcvWindow(
+    history,
+    predictionLevel === 'high' ? 252 : 180
+  );
+
+  // Fundamentals strings
+  const basicFundKeys = predictionLevel === 'low'
+    ? ['pe','fiftyTwoWeekHigh','fiftyTwoWeekLow','marketCap']
+    : ['pe','forwardPE','eps','dividendYield','marketCap','fiftyTwoWeekHigh','fiftyTwoWeekLow'];
+  const basicFundStr = fundamentals && Object.keys(fundamentals).length > 0
+    ? Object.entries(fundamentals)
+        .filter(([k, v]) => v != null && v !== '\u2014' && v !== '' && basicFundKeys.includes(k))
+        .map(([k, v]) => `${k}:${v}`).join(' ')
+    : 'N/A';
+
+  const advFundKeys = predictionLevel === 'high'
+    ? null  // null = include ALL non-null fields
+    : ['roe','debtToEquity','revenueGrowth','earningsGrowth','currentRatio','freeCashflow','operatingMargins'];
+  const advFundStr = advFundamentals
+    ? Object.entries(advFundamentals)
+        .filter(([k, v]) => v != null && (advFundKeys === null || advFundKeys.includes(k)))
+        .map(([k, v]) => `${k}:${v}`).join(' ')
+    : 'N/A';
+
+  // News: LOW=none, MEDIUM=top3/180chars, HIGH=top5/300chars
+  const newsLines = newsContext ? newsContext.split('\n').filter(Boolean) : [];
+  const compactNews = predictionLevel === 'low'
+    ? 'N/A'
+    : predictionLevel === 'high'
+      ? newsLines.slice(0, 3).map((n) => n.slice(0, 160)).join(' | ') || 'N/A'
+      : newsLines.slice(0, 2).map((n) => n.slice(0, 140)).join(' | ') || 'N/A';
+
+  // Pros/Cons: LOW=none, MEDIUM=top3, HIGH=top5
+  const prosLimit = predictionLevel === 'low' ? 0 : 3;
+  const consLimit = prosLimit;
+  const prosStr = clientAnalysis?.pros?.length > 0 && prosLimit > 0
+    ? clientAnalysis.pros.slice(0, prosLimit).join(' | ') : 'N/A';
+  const consStr = clientAnalysis?.cons?.length > 0 && consLimit > 0
+    ? clientAnalysis.cons.slice(0, consLimit).join(' | ') : 'N/A';
+  const outputPoints = clampedDays > 90 ? Math.min(52, Math.ceil(clampedDays / 5)) : clampedDays;
+  const smartSignals = [
+    `EMA:${emaData?.trend ?? 'N/A'}`,
+    rsi ? `RSI:${rsi.value}(${rsi.zone})` : null,
+    macd ? `MACD:${macd.trend}` : null,
+    bollinger ? `BB:${bollinger.zone}` : null,
+    atr ? `ATR:${atr.atr}(${atr.atrPct}%/d)` : null,
+    volumeData ? `VOL:${volumeData.signal} ${volumeData.volumeRatio}x` : null,
+    cycleAnalysis ? `Cycle:${cycleAnalysis.currentPhase}` : null,
+    cycleAnalysis ? `Regime:${cycleAnalysis.regime}(${cycleAnalysis.regimeScore})` : null,
+    marketIndexContext ? `Index:${marketIndexContext}` : null,
+  ].filter(Boolean).join(' | ');
+
+  // ─── Build prompt by level ────────────────────────────────────────────────────
+
+  let prompt;
+
+  if (predictionLevel === 'low') {
+    // ── LOW: Quick Signal ──────────────────────────────────────────────────────
+    // ~300 input tokens. Fast direction signal using only price + RSI + ATR.
+    prompt = `Quant analyst. Output JSON only. Derive everything from the data below.
+RULES: ①ATR(${atr?.atr ?? '?'}) = max daily move. ②If RSI>70 = likely pullback, RSI<30 = likely bounce. ③No invented reversals. ④Fractional prices only.
+
+${symbol}|${market === 'in' ? 'NSE' : 'US'}|${sector || '?'}|CMP:${priceNow}|${clampedDays}td${pctFrom52High !== null ? `|52H:${pctFrom52High}%` : ''}${pctFrom52Low !== null ? `|52L:+${pctFrom52Low}%` : ''}
+PRICE: CAGR:${cagr3y != null ? cagr3y.toFixed(2) + '%' : 'N/A'}|90d H/L:${max90.toFixed(2)}/${min90.toFixed(2)}|7dMom:${momentum7d.toFixed(2)}%
+Last 14d closes: ${priceSample}
+RSI:${rsi ? `${rsi.value}(${rsi.zone})` : 'N/A'} | ATR:${atr ? `${atr.atr}(${atr.atrPct}%/d)` : 'N/A'} | EMA:${emaData?.ema20 ?? '?'}/${emaData?.ema50 ?? '?'}(${emaData?.trend ?? '?'})
+S/R: Sup:${srLevels?.supports?.join(',') || 'N/A'} Res:${srLevels?.resistances?.join(',') || 'N/A'}
+FUNDAMENTALS: ${basicFundStr}
+
+Output JSON (predictedPrices = ${outputPoints} plain numbers):
+{"predictedPrices":[<${outputPoints} numbers>],"trend":"bullish|bearish|neutral","confidence":<0-100>,"summary":"<1 sentence citing price level and momentum>","keyFactors":["<f1>","<f2>","<f3>"],"support":<n>,"resistance":<n>}`;
+
+  } else if (predictionLevel === 'high') {
+    // Compact high mode: data-dense points, lower token usage.
+
+    prompt = `Strict quant analyst. JSON only.
+RULES: ATR(${atr?.atr ?? '?'}) is max daily move cap. Follow cycle direction unless explicit contradictory signals. Use fractional prices.
+
+${symbol}|${market === 'in' ? 'NSE' : 'US'}|${sector || '?'}|CMP:${priceNow}|Period:${clampedDays}td(${periodDays}cd)
+PRICE: Days:${history.length}|CAGR:${cagr3y != null ? cagr3y.toFixed(2) + '%' : 'N/A'}|90d H/L/Avg:${max90.toFixed(2)}/${min90.toFixed(2)}/${avg90.toFixed(2)}|7dMom:${momentum7d.toFixed(2)}%|DD:${worstDrawdowns}
+OHLCV:${ohlcvSummary}
+WEEKLY_LOW_3Y(max156): ${priceSample}
+SMART_SIGNALS: ${smartSignals}
+FUNDAMENTALS: ${basicFundStr}
+HEALTH: ${advFundStr.split(' ').slice(0, 12).join(' ') || 'N/A'}
+BULLISH: ${prosStr}
+BEARISH: ${consStr}
+NEWS: ${compactNews}
+
+Output exactly this JSON (predictedPrices = array of ${outputPoints} plain price numbers, no objects):
+{"predictedPrices":[<${outputPoints} numbers>],"trend":"bullish|bearish|neutral","confidence":<0-100>,"summary":"<2 short sentences with specific price/% levels>","keyFactors":["<f1>","<f2>","<f3>"],"support":<n>,"resistance":<n>}`;
+
+  } else {
+    // ── MEDIUM: Balanced (default) ─────────────────────────────────────────────
+    // ~900 input tokens.
+    const cycleStr = cycleAnalysis ? [
+      `Cycles:${cycleAnalysis.summary.totalCycles}`,
+      `AvgRally:+${cycleAnalysis.summary.avgRallyPct ?? '?'}%/${cycleAnalysis.summary.avgRallyDays ?? '?'}d`,
+      `AvgDecline:${cycleAnalysis.summary.avgDeclinePct ?? '?'}%/${cycleAnalysis.summary.avgDeclineDays ?? '?'}d`,
+      `TopFalls:${cycleAnalysis.summary.topFalls.slice(0,2).join('|') || 'N/A'}`,
+      `Phase:${cycleAnalysis.currentPhase} ${cycleAnalysis.daysInPhase}d ${cycleAnalysis.phasePctMoved > 0 ? '+' : ''}${cycleAnalysis.phasePctMoved}%moved`,
+      `Remaining:${cycleAnalysis.phaseRemainingEstimate ?? 'unknown'}`,
+      `Regime:${cycleAnalysis.regime}(${cycleAnalysis.regimeScore})`,
+      `Band:${cycleAnalysis.inUpperBand ? 'UPPER' : cycleAnalysis.inLowerBand ? 'LOWER' : 'MID'}`,
+      `Mom7d:${cycleAnalysis.momentum7d}% Mom21d:${cycleAnalysis.momentum21d}%`,
+      `DD1y:${cycleAnalysis.drawdownFromHigh1y}%`,
+      cycleAnalysis.seasonalLine ?? '',
+    ].filter(Boolean).join(' | ') : 'N/A';
+
+    const techStr = [
+      `EMA:${emaData?.ema20 ?? '?'}/${emaData?.ema50 ?? '?'}/${emaData?.ema200 ?? '?'}(${emaData?.trend ?? '?'})`,
+      `PvsE20:${emaData?.priceVsEma20 != null ? (emaData.priceVsEma20 > 0 ? '+' : '') + emaData.priceVsEma20 + '%' : '?'}`,
+      `PvsE200:${emaData?.priceVsEma200 != null ? (emaData.priceVsEma200 > 0 ? '+' : '') + emaData.priceVsEma200 + '%' : '?'}`,
+      rsi ? `RSI:${rsi.value}(${rsi.zone})` : '',
+      macd ? `MACD:${macd.trend} H=${macd.histogram}` : '',
+      bollinger ? `BB:${bollinger.zone} %B=${bollinger.pctB}% BW=${bollinger.bandWidth}%` : '',
+      atr ? `ATR:${atr.atr}(${atr.atrPct}%/d)` : '',
+      volumeData ? `Vol:${volumeData.signal} ${volumeData.volumeRatio}x` : '',
+      srLevels?.supports?.length  ? `Sup:${srLevels.supports.join(',')}` : '',
+      srLevels?.resistances?.length ? `Res:${srLevels.resistances.join(',')}` : '',
+      marketIndexContext,
+    ].filter(Boolean).join(' | ');
+
+    prompt = `Strict quant analyst. Output JSON only. Real investors use this for buy/sell decisions.
+RULES:\u2460ATR(${atr?.atr ?? '?'}) is max daily move cap.\u2461Follow current phase direction\u2014no invented reversals.\u2462Confidence:55-70% strong,35-55% mixed,25-40% contradictory.\u2463Use fractional prices,not round numbers.\u2464If momentum negative+price<90dAvg\u2192predict downside unless specific reversal data exists.\u2465Summary must cite specific price levels or %.
+
+${symbol}|${market === 'in' ? 'NSE' : 'US'}|${sector || '?'}|CMP:${priceNow}|Period:${clampedDays}td(${periodDays}cd)${pctFrom52High !== null ? `|52H:${pctFrom52High}%` : ''}${pctFrom52Low !== null ? `|52L:+${pctFrom52Low}%` : ''}
+
+PRICE(3Y): Days:${history.length}|CAGR:${cagr3y != null ? cagr3y.toFixed(2) + '%' : 'N/A'}|90d H/L/Avg:${max90.toFixed(2)}/${min90.toFixed(2)}/${avg90.toFixed(2)}|7dMom:${momentum7d.toFixed(2)}%|Drawdowns:${worstDrawdowns}
+OHLCV SUMMARY (derived server-side): ${ohlcvSummary}
+${sampleSlice.length <= 30 ? 'Last 30d closes' : 'Weekly lowest candles (3Y, max 156)'}: ${priceSample}
+
+CYCLE: ${cycleStr}
+
+TECHNICALS: ${techStr}
+
+FUNDAMENTALS: ${basicFundStr}
+HEALTH: ${advFundStr}
+BULLISH: ${prosStr}
+BEARISH: ${consStr}
+NEWS: ${compactNews}
+
+Output exactly this JSON (predictedPrices = array of ${outputPoints} price numbers only, no objects):
+{"predictedPrices":[<${outputPoints} plain numbers>],"trend":"bullish|bearish|neutral","confidence":<0-100>,"summary":"<2 sentences with specific price/% data>","keyFactors":["<f1>","<f2>","<f3>"],"support":<n>,"resistance":<n>}`;
+  }
+
+  // ─── Token budget per level × period ─────────────────────────────────────────
+  const maxTokens = (() => {
+    const base = predictionLevel === 'low' ? [180, 260, 420, 520] :
+                 predictionLevel === 'high' ? [400, 650, 1000, 1400] :
+                 /* medium */                 [260, 420, 700, 900];
+    if (clampedDays <= 7)  return base[0];
+    if (clampedDays <= 30) return base[1];
+    if (clampedDays <= 90) return base[2];
+    return base[3];
+  })();
+
+  const modelFallbacks = ['llama-3.1-8b-instant'];
+
+  try {
+    let completion = null;
+    let lastModelErr = null;
+    for (const model of modelFallbacks) {
+      try {
+        completion = await groq.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: predictionLevel === 'high' ? 0.05 : 0.1, // stricter for high
+          max_tokens: maxTokens,
+        });
+        break;
+      } catch (modelErr) {
+        lastModelErr = modelErr;
+        if (!isGroqRateLimitError(modelErr)) throw modelErr;
+      }
+    }
+    if (!completion) throw lastModelErr || new Error('Prediction model unavailable');
+    const text = completion.choices[0]?.message?.content || '{}';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in response');
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    // Attach dates (skip weekends)
+    const days = expandPredictedSeries(parsed.predictedPrices, currentPrice, clampedDays);
+    const deterministicTomorrow = computeDeterministicNextDayPrice(
+      currentPrice,
+      momentum7d,
+      atr?.atrPct,
+      emaData?.trend,
+      rsi?.value,
+    );
+    if (days.length > 0 && Number.isFinite(deterministicTomorrow) && deterministicTomorrow > 0) {
+      days[0] = deterministicTomorrow;
+    }
+    const datedPrices = [];
+    let date = new Date();
+    let added = 0;
+    let safeLimit = 0;
+    let prevPrice = Number(currentPrice);
+    while (added < clampedDays && safeLimit < 600) {
+      safeLimit++;
+      date = new Date(date);
+      date.setDate(date.getDate() + 1);
+      const dow = date.getDay();
+      if (dow === 0 || dow === 6) continue; // skip weekends
+      const predicted = days[added];
+      // Support both plain numbers (new compact format) and legacy {price:N} objects
+      const price = Number(typeof predicted === 'object' ? (predicted?.price ?? currentPrice) : (predicted ?? currentPrice));
+      const dayChangePercent = prevPrice > 0 ? ((price - prevPrice) / prevPrice * 100) : 0;
+      const entryChangePercent = currentPrice > 0 ? ((price - currentPrice) / currentPrice * 100) : 0;
+      datedPrices.push({
+        day: added + 1,
+        date: date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', ...(clampedDays > 30 ? { year: 'numeric' } : { weekday: 'short' }) }),
+        price: +price.toFixed(2),
+        changePercent: +dayChangePercent.toFixed(2),
+        entryChangePercent: +entryChangePercent.toFixed(2),
+      });
+      prevPrice = price;
+      added++;
+    }
+
+    const derived = deriveTrendAndConfidenceFromSeries(days, currentPrice);
+    const parsedTrend = ['bullish', 'bearish', 'neutral'].includes(String(parsed.trend)) ? String(parsed.trend) : null;
+    const parsedConfidenceRaw = Number(parsed.confidence);
+    const parsedConfidence = Number.isFinite(parsedConfidenceRaw)
+      ? Math.min(100, Math.max(0, parsedConfidenceRaw))
+      : null;
+    const netMove = ((days[days.length - 1] - currentPrice) / currentPrice) * 100;
+    const conflict = (parsedTrend === 'bullish' && netMove < -0.2) || (parsedTrend === 'bearish' && netMove > 0.2);
+    const finalTrend = conflict ? derived.trend : (parsedTrend || derived.trend);
+    const finalConfidence = conflict || parsedConfidence == null ? derived.confidence : parsedConfidence;
+
+    return {
+      currentPrice: +currentPrice.toFixed(2),
+      predictedPrices: datedPrices,
+      trend: finalTrend,
+      confidence: finalConfidence,
+      summary: String(parsed.summary || ''),
+      keyFactors: Array.isArray(parsed.keyFactors) ? parsed.keyFactors.slice(0, 4) : [],
+      support: parsed.support ? +Number(parsed.support).toFixed(2) : null,
+      resistance: parsed.resistance ? +Number(parsed.resistance).toFixed(2) : null,
+      disclaimer: 'AI prediction only. Not financial advice. Past patterns do not guarantee future results.',
+    };
+  } catch (err) {
+    console.error('[predict] Groq error:', err.message);
+    if (isGroqRateLimitError(err)) {
+      const retryAfterSeconds = parseGroqRetryAfterSeconds(err);
+      const retryHint = retryAfterSeconds ? `Retry in ~${retryAfterSeconds}s.` : 'Retry shortly.';
+      return {
+        error: `Prediction rate-limited by AI provider. ${retryHint} Tip: use low/medium level or shorter period.`,
+        code: 'rate_limit_exceeded',
+        retryAfterSeconds,
+      };
+    }
+    return { error: 'Prediction failed: ' + err.message };
+  }
+}
+
+app.post('/api/predict', async (req, res) => {
+  try {
+    const { symbol, market, stock, periodDays, fundamentals, analysis, history3y, predictionLevel } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    const days = Math.max(7, Math.min(365, Number(periodDays) || 7));
+    const level = ['low', 'medium', 'high'].includes(predictionLevel) ? predictionLevel : 'medium';
+    const result = await getStockPrediction(
+      symbol,
+      market || 'in',
+      stock || {},
+      days,
+      fundamentals || null,
+      analysis || null,
+      history3y || null,
+      level,
+    );
+    res.json(result);
+  } catch (err) {
+    console.error('[api/predict]', err);
     res.status(500).json({ error: err.message });
   }
 });

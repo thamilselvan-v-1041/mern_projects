@@ -246,8 +246,14 @@ const SEGMENT_OPTIONS = [
   { value: 'large', label: 'Large Cap' },
   { value: 'mid', label: 'Mid Cap' },
   { value: 'small', label: 'Small Cap' },
+  { value: 'micro', label: 'Micro Cap' },
+  { value: 'nano', label: 'Nano Cap' },
   { value: 'flexi', label: 'Flexi Cap' },
 ] as const;
+const CAP_SEGMENT_VALUES = SEGMENT_OPTIONS
+  .filter((opt) => opt.value !== 'all')
+  .map((opt) => opt.value);
+const LOAD_ORDER_SEGMENTS = ['large', 'mid', 'small', 'micro', 'nano', 'flexi'] as const;
 
 type Stock = {
   symbol: string;
@@ -285,7 +291,35 @@ type Analysis = {
   cons: string[];
 };
 
-type TabType = 'fundamentals' | 'chart' | 'proscons';
+type TabType = 'fundamentals' | 'chart' | 'proscons' | 'prediction';
+
+type PredictionDay = { day: number; date: string; price: number; changePercent: number; };
+type PredictionPeriod = '7d' | '1m' | '3m' | '6m' | '1y';
+type PredictionLevel = 'low' | 'medium' | 'high';
+type Prediction = {
+  currentPrice: number;
+  predictedPrices: PredictionDay[];
+  trend: 'bullish' | 'bearish' | 'neutral';
+  confidence: number;
+  summary: string;
+  keyFactors: string[];
+  support: number | null;
+  resistance: number | null;
+  disclaimer: string;
+  error?: string;
+};
+const PREDICTION_PERIODS: { value: PredictionPeriod; label: string; days: number }[] = [
+  { value: '7d',  label: '7 Days',  days: 7  },
+  { value: '1m',  label: '1 Month', days: 30 },
+  { value: '3m',  label: '3 Months',days: 90 },
+  { value: '6m',  label: '6 Months',days: 180},
+  { value: '1y',  label: '1 Year',  days: 365},
+];
+const PREDICTION_LEVELS: { value: PredictionLevel; label: string; desc: string; icon: string }[] = [
+  { value: 'low',    label: 'Low',    desc: 'Quick signal — RSI, ATR, 14d price',                       icon: '⚡' },
+  { value: 'medium', label: 'Medium', desc: '',                                                           icon: '⚖️' },
+  { value: 'high',   label: 'High',   desc: 'Deep analysis — full data + live macro + analyst targets',  icon: '🔬' },
+];
 
 type QuarterlyProfitRow = {
   periodEnd: string;
@@ -347,6 +381,11 @@ const CHART_PERIOD_LABELS: Record<ChartPeriod, string> = {
 };
 
 const MAX_CHART_BARS = 120;
+const CHART_PERIOD_TRADING_DAYS: Partial<Record<ChartPeriod, number>> = {
+  '7d': 7,
+  '1m': 21,
+  '1y': 252,
+};
 
 function sampleForChart<T>(arr: T[], maxBars: number): T[] {
   if (arr.length <= maxBars) return arr;
@@ -357,6 +396,17 @@ function sampleForChart<T>(arr: T[], maxBars: number): T[] {
     result.push(arr[idx]);
   }
   return result;
+}
+
+function chartDataForPeriodFromThreeYear(
+  threeYearHistory: Array<{ date: string; close: number }> | null | undefined,
+  period: ChartPeriod
+): Array<{ date: string; close: number }> {
+  const rows = Array.isArray(threeYearHistory) ? threeYearHistory : [];
+  if (!rows.length) return [];
+  const days = CHART_PERIOD_TRADING_DAYS[period];
+  if (!days) return rows; // 3y / 5y
+  return rows.slice(-days);
 }
 
 type BestSaleSignal = {
@@ -814,6 +864,12 @@ function StockItem({
   onRequestFinancialsLoad,
   financialsOpenId,
   onFinancialsOpenChange,
+  prediction,
+  loadingPrediction,
+  predictionPeriod,
+  predictionLevel,
+  onPredictionPeriodChange,
+  onPredictionLevelChange,
 }: {
   stock: Stock;
   expanded: boolean;
@@ -825,6 +881,12 @@ function StockItem({
   loadingAnalysis: boolean;
   fundamentals: Record<string, string> | null;
   loadingFundamentals: boolean;
+  prediction: Prediction | null;
+  loadingPrediction: boolean;
+  predictionPeriod: PredictionPeriod;
+  predictionLevel: PredictionLevel;
+  onPredictionPeriodChange: (period: PredictionPeriod) => void;
+  onPredictionLevelChange: (level: PredictionLevel) => void;
   quarterlyProfit: QuarterlyProfitPayload | null;
   loadingQuarterlyProfit: boolean;
   stockInfo: StockInfoResponse | null;
@@ -848,6 +910,37 @@ function StockItem({
   const history = chartData ?? stock.history ?? [];
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [infoModalOpen, setInfoModalOpen] = useState(false);
+
+  // ── Prediction drill-down state ────────────────────────────────────────────
+  // level: 'months' → 'weeks' → 'days'
+  type DrillLevel = 'months' | 'weeks' | 'days';
+  const [drillLevel, setDrillLevel]       = useState<DrillLevel>('months');
+  const [drillMonthIdx, setDrillMonthIdx] = useState<number | null>(null);
+  const [drillWeekIdx, setDrillWeekIdx]   = useState<number | null>(null); // global week index
+
+  // Reset drill when period/level/prediction changes
+  const resetDrill = () => { setDrillLevel('months'); setDrillMonthIdx(null); setDrillWeekIdx(null); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(resetDrill, [predictionPeriod, predictionLevel, prediction?.currentPrice]);
+
+  // Group PredictionDay[] into chunks of `size`
+  const chunkDays = (arr: PredictionDay[], size: number): PredictionDay[][] => {
+    const out: PredictionDay[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+
+  // Summary stats for a group of days
+  const groupSummary = (days: PredictionDay[]) => {
+    if (!days.length) return { open: 0, close: 0, high: 0, low: 0, changePct: 0 };
+    const open  = days[0].price;
+    const close = days[days.length - 1].price;
+    const high  = Math.max(...days.map(d => d.price));
+    const low   = Math.min(...days.map(d => d.price));
+    const changePct = open > 0 ? ((close - open) / open) * 100 : 0;
+    return { open, close, high, low, changePct };
+  };
+
   const toggleFinancials = (id: FinancialsSectionId) => {
     onFinancialsOpenChange(financialsOpenId === id ? null : id);
   };
@@ -972,6 +1065,18 @@ function StockItem({
               </svg>
             </button>
             <button
+              className={`icon-btn ${activeTab === 'prediction' ? 'active' : ''}`}
+              onClick={() => onTabClick('prediction')}
+              title="7-Day Price Prediction (AI)"
+              aria-label="Price Prediction"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M2 20h20" />
+                <path d="M6 16l4-6 4 3 4-8" />
+                <circle cx="18" cy="5" r="2" fill="currentColor" stroke="none" />
+              </svg>
+            </button>
+            <button
               type="button"
               className={`icon-btn ${infoModalOpen ? 'active' : ''}`}
               onClick={(e) => {
@@ -1047,69 +1152,85 @@ function StockItem({
                 {history.length > 0 ? (
                   (() => {
                     const displayData = sampleForChart(history, MAX_CHART_BARS);
-                    const min = Math.min(...displayData.map((h) => h.close));
-                    const max = Math.max(...displayData.map((h) => h.close));
-                    const range = max - min || 1;
-                    const chartH = 100;
-                    const hoveredPoint =
-                      hoveredBarIndex != null && hoveredBarIndex >= 0 && hoveredBarIndex < displayData.length
-                        ? displayData[hoveredBarIndex]
-                        : null;
-                    const tooltipLeftPct =
-                      hoveredBarIndex != null && displayData.length > 1
-                        ? (hoveredBarIndex / (displayData.length - 1)) * 100
-                        : 0;
-                    const isLeftEdge = hoveredBarIndex != null && tooltipLeftPct <= 14;
-                    const isRightEdge = hoveredBarIndex != null && tooltipLeftPct >= 86;
+                    const closes = displayData.map((h) => h.close);
+                    const minVal = Math.min(...closes);
+                    const maxVal = Math.max(...closes);
+                    const range  = maxVal - minVal || 1;
+                    const W = 600, H = 140, PAD = { top: 10, right: 8, bottom: 4, left: 8 };
+                    const iW = W - PAD.left - PAD.right;
+                    const iH = H - PAD.top - PAD.bottom;
+                    const isUp = closes[closes.length - 1] >= closes[0];
+                    const lineColor = isUp ? '#22c55e' : '#ef4444';
+                    const gradId = `grad-${stock.symbol}`;
+
+                    const px = (i: number) => PAD.left + (i / (displayData.length - 1)) * iW;
+                    const py = (v: number) => PAD.top + iH - ((v - minVal) / range) * iH;
+
+                    const linePath = displayData.map((d, i) =>
+                      `${i === 0 ? 'M' : 'L'}${px(i).toFixed(1)},${py(d.close).toFixed(1)}`
+                    ).join(' ');
+
+                    const areaPath = `${linePath} L${px(displayData.length - 1).toFixed(1)},${(PAD.top + iH).toFixed(1)} L${PAD.left},${(PAD.top + iH).toFixed(1)} Z`;
+
+                    const hoveredPoint = hoveredBarIndex != null && hoveredBarIndex < displayData.length
+                      ? displayData[hoveredBarIndex] : null;
+                    const hx = hoveredBarIndex != null ? px(hoveredBarIndex) : null;
+                    const hy = hoveredPoint ? py(hoveredPoint.close) : null;
+                    const tooltipLeftPct = hoveredBarIndex != null && displayData.length > 1
+                      ? (hoveredBarIndex / (displayData.length - 1)) * 100 : 0;
+                    const isLeftEdge  = tooltipLeftPct <= 14;
+                    const isRightEdge = tooltipLeftPct >= 86;
+
                     return (
-                      <>
-                        <div className="mini-chart-wrapper">
-                          {hoveredPoint ? (
-                            <div
-                              className={`chart-tooltip chart-tooltip--floating ${
-                                isLeftEdge ? 'chart-tooltip--left' : isRightEdge ? 'chart-tooltip--right' : ''
-                              }`}
-                              style={{ left: `${tooltipLeftPct}%` }}
-                            >
-                              {new Date(hoveredPoint.date).toLocaleDateString('en-IN', {
-                                day: 'numeric',
-                                month: 'short',
-                                year: 'numeric',
-                              })}
-                              <br />
-                              <strong>
-                                {currency}
-                                {hoveredPoint.close?.toLocaleString('en-IN', {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </strong>
-                            </div>
-                          ) : null}
+                      <div className="mini-chart-wrapper line-chart-wrapper">
+                        {hoveredPoint && (
                           <div
-                            className="mini-chart"
-                            onMouseLeave={() => setHoveredBarIndex(null)}
-                            onTouchEnd={() => setHoveredBarIndex(null)}
+                            className={`chart-tooltip chart-tooltip--floating ${isLeftEdge ? 'chart-tooltip--left' : isRightEdge ? 'chart-tooltip--right' : ''}`}
+                            style={{ left: `${tooltipLeftPct}%` }}
                           >
-                            {displayData.map((p, i) => (
-                              <div
-                                key={p.date}
-                                className="chart-bar"
-                                style={{
-                                  height: `${((p.close - min) / range) * chartH}px`,
-                                  minHeight: 2,
-                                }}
-                                onMouseEnter={() => setHoveredBarIndex(i)}
-                                onMouseMove={() => {
-                                  if (hoveredBarIndex !== i) setHoveredBarIndex(i);
-                                }}
-                                onTouchStart={() => setHoveredBarIndex(i)}
-                                title={`${new Date(p.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · ${currency}${p.close?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                              />
-                            ))}
+                            {new Date(hoveredPoint.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                            <br />
+                            <strong>{currency}{hoveredPoint.close?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                           </div>
-                        </div>
-                      </>
+                        )}
+                        <svg
+                          viewBox={`0 0 ${W} ${H}`}
+                          className="line-chart-svg"
+                          onMouseLeave={() => setHoveredBarIndex(null)}
+                          onMouseMove={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const relX = ((e.clientX - rect.left) / rect.width) * iW;
+                            const idx = Math.round((relX / iW) * (displayData.length - 1));
+                            setHoveredBarIndex(Math.max(0, Math.min(displayData.length - 1, idx)));
+                          }}
+                          onTouchMove={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const relX = ((e.touches[0].clientX - rect.left) / rect.width) * iW;
+                            const idx = Math.round((relX / iW) * (displayData.length - 1));
+                            setHoveredBarIndex(Math.max(0, Math.min(displayData.length - 1, idx)));
+                          }}
+                          onTouchEnd={() => setHoveredBarIndex(null)}
+                          style={{ cursor: 'crosshair' }}
+                        >
+                          <defs>
+                            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={lineColor} stopOpacity="0.25" />
+                              <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+                            </linearGradient>
+                          </defs>
+                          {/* Gradient fill */}
+                          <path d={areaPath} fill={`url(#${gradId})`} />
+                          {/* Line */}
+                          <path d={linePath} fill="none" stroke={lineColor} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+                          {/* Crosshair */}
+                          {hx != null && hy != null && (
+                            <>
+                              <line x1={hx} y1={PAD.top} x2={hx} y2={PAD.top + iH} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="3,3" />
+                              <circle cx={hx} cy={hy} r="3.5" fill={lineColor} stroke="#1a1a2e" strokeWidth="1.5" />
+                            </>
+                          )}
+                        </svg>
+                      </div>
                     );
                   })()
                 ) : loadingChart ? (
@@ -1142,6 +1263,268 @@ function StockItem({
             ) : loadingAnalysis ? (
               <div className="loading">Analyzing...</div>
             ) : null
+          )}
+          {activeTab === 'prediction' && (
+            <>
+              {/* Period + Level dropdowns */}
+              <div className="prediction-filters">
+                <div className="prediction-filter-group">
+                  <label className="prediction-filter-label">Period</label>
+                  <select
+                    className="prediction-filter-select"
+                    value={predictionPeriod}
+                    onChange={(e) => onPredictionPeriodChange(e.target.value as PredictionPeriod)}
+                  >
+                    {PREDICTION_PERIODS.map((p) => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="prediction-filter-group">
+                  <label className="prediction-filter-label">Severity</label>
+                  <select
+                    className="prediction-filter-select"
+                    value={predictionLevel}
+                    onChange={(e) => onPredictionLevelChange(e.target.value as PredictionLevel)}
+                  >
+                    {PREDICTION_LEVELS.map((l) => (
+                      <option key={l.value} value={l.value}>{l.icon} {l.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {PREDICTION_LEVELS.find((l) => l.value === predictionLevel)?.desc ? (
+                  <span className="prediction-level-desc">
+                    {PREDICTION_LEVELS.find((l) => l.value === predictionLevel)?.desc}
+                  </span>
+                ) : null}
+              </div>
+            {loadingPrediction ? (
+              <div className="loading prediction-loading-text">
+                Generating {PREDICTION_PERIODS.find((p) => p.value === predictionPeriod)?.label ?? ''} outlook ({predictionLevel})...
+              </div>
+            ) : prediction?.error ? (
+              <div className="loading">{prediction.error}</div>
+            ) : prediction ? (
+              <div className="prediction-panel">
+                {/* Header: trend badge + confidence */}
+                <div className="prediction-header">
+                  <span className={`prediction-trend-badge prediction-trend-${prediction.trend}`}>
+                    {prediction.trend === 'bullish' ? '▲ Bullish' : prediction.trend === 'bearish' ? '▼ Bearish' : '● Neutral'}
+                  </span>
+                  <span className="prediction-confidence">
+                    Confidence: <strong>{prediction.confidence}%</strong>
+                  </span>
+                </div>
+
+                {/* Summary */}
+                {prediction.summary && (
+                  <p className="prediction-summary">{prediction.summary}</p>
+                )}
+
+                {/* ── Drill-down price table ───────────────────────────── */}
+                {(() => {
+                  const all = prediction.predictedPrices;
+                  const fmt = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+                  // 7d → always flat daily table, no drill
+                  if (predictionPeriod === '7d') {
+                    return (
+                      <div className="prediction-table-wrap">
+                        <table className="prediction-table">
+                          <thead><tr><th>Day</th><th>Date</th><th>Price</th><th>Change</th></tr></thead>
+                          <tbody>
+                            {all.map((d) => (
+                              <tr key={d.day} className={d.changePercent >= 0 ? 'pred-up' : 'pred-down'}>
+                                <td>D+{d.day}</td><td>{d.date}</td>
+                                <td><strong>{currency}{fmt(d.price)}</strong></td>
+                                <td className={d.changePercent >= 0 ? 'up' : 'down'}>{d.changePercent >= 0 ? '+' : ''}{d.changePercent.toFixed(2)}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  }
+
+                  // 1m → weeks drill (top: weeks, drill: days)
+                  if (predictionPeriod === '1m') {
+                    const weeks = chunkDays(all, 5);
+                    if (drillLevel === 'days' && drillWeekIdx !== null) {
+                      const wDays = weeks[drillWeekIdx] ?? [];
+                      const s = groupSummary(wDays);
+                      return (
+                        <div className="prediction-table-wrap">
+                          <div className="pred-drill-breadcrumb">
+                            <button className="pred-drill-back" onClick={() => { setDrillLevel('months'); setDrillWeekIdx(null); }}>◀ Weeks</button>
+                            <span>Week {drillWeekIdx + 1}</span>
+                          </div>
+                          <table className="prediction-table">
+                            <thead><tr><th>Day</th><th>Date</th><th>Price</th><th>vs Entry</th></tr></thead>
+                            <tbody>
+                              {wDays.map((d) => {
+                                const chg = s.open > 0 ? ((d.price - s.open) / s.open) * 100 : 0;
+                                return (
+                                  <tr key={d.day} className={chg >= 0 ? 'pred-up' : 'pred-down'}>
+                                    <td>D+{d.day}</td><td>{d.date}</td>
+                                    <td><strong>{currency}{fmt(d.price)}</strong></td>
+                                    <td className={chg >= 0 ? 'up' : 'down'}>{chg >= 0 ? '+' : ''}{chg.toFixed(2)}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    }
+                    // Default: week list
+                    return (
+                      <div className="prediction-table-wrap">
+                        <table className="prediction-table pred-group-table">
+                          <thead><tr><th>Week</th><th>Range</th><th>Open → Close</th><th>Change</th><th></th></tr></thead>
+                          <tbody>
+                            {weeks.map((wk, wi) => {
+                              const s = groupSummary(wk);
+                              return (
+                                <tr key={wi} className={`pred-group-row ${s.changePct >= 0 ? 'pred-up' : 'pred-down'}`}
+                                  onClick={() => { setDrillWeekIdx(wi); setDrillLevel('days'); }}>
+                                  <td><strong>Wk {wi + 1}</strong></td>
+                                  <td className="pred-range">{wk[0]?.date} – {wk[wk.length-1]?.date}</td>
+                                  <td>{currency}{fmt(s.open)} → <strong>{currency}{fmt(s.close)}</strong></td>
+                                  <td className={s.changePct >= 0 ? 'up' : 'down'}>{s.changePct >= 0 ? '+' : ''}{s.changePct.toFixed(2)}%</td>
+                                  <td className="pred-drill-arrow">›</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  }
+
+                  // 3m / 6m / 1y → months → weeks → days drill
+                  const months = chunkDays(all, 21);
+                  const allWeeks = chunkDays(all, 5);
+
+                  // Level: days (deepest)
+                  if (drillLevel === 'days' && drillWeekIdx !== null) {
+                    const wDays = allWeeks[drillWeekIdx] ?? [];
+                    const s = groupSummary(wDays);
+                    // which month does this week belong to?
+                    const mIdx = drillMonthIdx ?? Math.floor((drillWeekIdx * 5) / 21);
+                    return (
+                      <div className="prediction-table-wrap">
+                        <div className="pred-drill-breadcrumb">
+                          <button className="pred-drill-back" onClick={() => { setDrillLevel('months'); setDrillMonthIdx(null); setDrillWeekIdx(null); }}>◀ Months</button>
+                          <span className="pred-drill-sep">›</span>
+                          <button className="pred-drill-back" onClick={() => { setDrillLevel('weeks'); setDrillWeekIdx(null); }}>Month {mIdx + 1}</button>
+                          <span className="pred-drill-sep">›</span>
+                          <span>Week {(drillWeekIdx - Math.floor(mIdx * 21 / 5)) + 1}</span>
+                        </div>
+                        <table className="prediction-table">
+                          <thead><tr><th>Day</th><th>Date</th><th>Price</th><th>vs Entry</th></tr></thead>
+                          <tbody>
+                            {wDays.map((d) => {
+                              const chg = s.open > 0 ? ((d.price - s.open) / s.open) * 100 : 0;
+                              return (
+                                <tr key={d.day} className={chg >= 0 ? 'pred-up' : 'pred-down'}>
+                                  <td>D+{d.day}</td><td>{d.date}</td>
+                                  <td><strong>{currency}{fmt(d.price)}</strong></td>
+                                  <td className={chg >= 0 ? 'up' : 'down'}>{chg >= 0 ? '+' : ''}{chg.toFixed(2)}%</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  }
+
+                  // Level: weeks (inside a month)
+                  if (drillLevel === 'weeks' && drillMonthIdx !== null) {
+                    const mDays = months[drillMonthIdx] ?? [];
+                    const mWeeks = chunkDays(mDays, 5);
+                    const globalWeekOffset = Math.floor((drillMonthIdx * 21) / 5);
+                    return (
+                      <div className="prediction-table-wrap">
+                        <div className="pred-drill-breadcrumb">
+                          <button className="pred-drill-back" onClick={() => { setDrillLevel('months'); setDrillMonthIdx(null); }}>◀ Months</button>
+                          <span className="pred-drill-sep">›</span>
+                          <span>Month {drillMonthIdx + 1}</span>
+                        </div>
+                        <table className="prediction-table pred-group-table">
+                          <thead><tr><th>Week</th><th>Range</th><th>Open → Close</th><th>Change</th><th></th></tr></thead>
+                          <tbody>
+                            {mWeeks.map((wk, wi) => {
+                              const s = groupSummary(wk);
+                              const globalWi = globalWeekOffset + wi;
+                              return (
+                                <tr key={wi} className={`pred-group-row ${s.changePct >= 0 ? 'pred-up' : 'pred-down'}`}
+                                  onClick={() => { setDrillWeekIdx(globalWi); setDrillLevel('days'); }}>
+                                  <td><strong>Wk {wi + 1}</strong></td>
+                                  <td className="pred-range">{wk[0]?.date} – {wk[wk.length-1]?.date}</td>
+                                  <td>{currency}{fmt(s.open)} → <strong>{currency}{fmt(s.close)}</strong></td>
+                                  <td className={s.changePct >= 0 ? 'up' : 'down'}>{s.changePct >= 0 ? '+' : ''}{s.changePct.toFixed(2)}%</td>
+                                  <td className="pred-drill-arrow">›</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  }
+
+                  // Level: months (top)
+                  return (
+                    <div className="prediction-table-wrap">
+                      <table className="prediction-table pred-group-table">
+                        <thead><tr><th>Month</th><th>Range</th><th>Open → Close</th><th>Change</th><th></th></tr></thead>
+                        <tbody>
+                          {months.map((mo, mi) => {
+                            const s = groupSummary(mo);
+                            return (
+                              <tr key={mi} className={`pred-group-row ${s.changePct >= 0 ? 'pred-up' : 'pred-down'}`}
+                                onClick={() => { setDrillMonthIdx(mi); setDrillWeekIdx(null); setDrillLevel('weeks'); }}>
+                                <td><strong>Mo {mi + 1}</strong></td>
+                                <td className="pred-range">{mo[0]?.date} – {mo[mo.length-1]?.date}</td>
+                                <td>{currency}{fmt(s.open)} → <strong>{currency}{fmt(s.close)}</strong></td>
+                                <td className={s.changePct >= 0 ? 'up' : 'down'}>{s.changePct >= 0 ? '+' : ''}{s.changePct.toFixed(2)}%</td>
+                                <td className="pred-drill-arrow">›</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+
+                {/* Support / Resistance */}
+                {(prediction.support != null || prediction.resistance != null) && (
+                  <div className="prediction-levels">
+                    {prediction.support != null && (
+                      <span className="pred-level pred-support">Support: {currency}{prediction.support}</span>
+                    )}
+                    {prediction.resistance != null && (
+                      <span className="pred-level pred-resistance">Resistance: {currency}{prediction.resistance}</span>
+                    )}
+                  </div>
+                )}
+
+                {/* Key Factors */}
+                {prediction.keyFactors.length > 0 && (
+                  <div className="prediction-factors">
+                    <span className="prediction-factors-label">Key Factors:</span>
+                    <ul>
+                      {prediction.keyFactors.map((f, i) => <li key={i}>{f}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+
+              </div>
+            ) : null}
+            </>
           )}
           </div>
         </div>
@@ -1216,6 +1599,13 @@ function StockListSection({
   onRequestFinancialsLoad,
   financialsOpenId,
   onFinancialsOpenChange,
+  predictionCache,
+  loadingPredictionId,
+  predictionPeriod,
+  predictionLevel,
+  onPredictionPeriodChange,
+  onPredictionLevelChange,
+  defaultChartPeriod,
 }: {
   stocks: Stock[];
   activeStockId: string | null;
@@ -1244,6 +1634,13 @@ function StockListSection({
   highlightedSearchId?: string | null;
   financialsOpenId: FinancialsSectionId | null;
   onFinancialsOpenChange: (id: FinancialsSectionId | null) => void;
+  predictionCache: Record<string, Prediction>;
+  loadingPredictionId: string | null;
+  predictionPeriod: Record<string, PredictionPeriod>;
+  predictionLevel: PredictionLevel;
+  onPredictionPeriodChange: (stock: Stock, period: PredictionPeriod) => void;
+  onPredictionLevelChange: (stock: Stock, level: PredictionLevel) => void;
+  defaultChartPeriod: ChartPeriod;
 }) {
   return (
     <section className="stock-list-section">
@@ -1255,8 +1652,8 @@ function StockListSection({
         ) : stocks.map((stock) => {
           const id = `${stock.symbol}-${stock.segment}`;
           const isExpanded = activeStockId === id;
-          const period = chartPeriod[id] ?? '1y';
-          const chartDataForPeriod = chartCache[id]?.[period] ?? null;
+          const period = chartPeriod[id] ?? defaultChartPeriod;
+          const chartDataForPeriod = chartDataForPeriodFromThreeYear(chartCache[id]?.['3y'] ?? null, period);
           return (
             <StockItem
               key={id}
@@ -1287,6 +1684,12 @@ function StockListSection({
               onRequestFinancialsLoad={() => onRequestFinancialsLoad(stock, id)}
               financialsOpenId={financialsOpenId}
               onFinancialsOpenChange={onFinancialsOpenChange}
+              prediction={predictionCache[`${id}-${predictionPeriod[id] ?? '7d'}-${predictionLevel}`] ?? null}
+              loadingPrediction={loadingPredictionId === id}
+              predictionPeriod={predictionPeriod[id] ?? '7d'}
+              predictionLevel={predictionLevel}
+              onPredictionPeriodChange={(p) => onPredictionPeriodChange(stock, p)}
+              onPredictionLevelChange={(l) => onPredictionLevelChange(stock, l)}
             />
           );
         })}
@@ -1296,7 +1699,13 @@ function StockListSection({
 }
 
 export default function App() {
-  const [segmentsByMarket, setSegmentsByMarket] = useState<Record<string, SegmentData[]>>({});
+  const [segmentsByMarket, setSegmentsByMarket] = useState<Record<string, SegmentData[]>>(() => {
+    try {
+      const raw = sessionStorage.getItem('livestock_segments_v1');
+      if (raw) return JSON.parse(raw) as Record<string, SegmentData[]>;
+    } catch {}
+    return {};
+  });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1323,14 +1732,38 @@ export default function App() {
   const [loadingFinancialsReportId, setLoadingFinancialsReportId] = useState<string | null>(null);
   const [chartCache, setChartCache] = useState<Record<string, Partial<Record<ChartPeriod, { date: string; close: number }[]>>>>({});
   const [chartPeriod, setChartPeriod] = useState<Record<string, ChartPeriod>>({});
+  const [preferredChartPeriod, setPreferredChartPeriod] = useState<ChartPeriod>('3y');
   const [loadingChartId, setLoadingChartId] = useState<string | null>(null);
+  const [predictionCache, setPredictionCache] = useState<Record<string, Prediction>>({});
+  const [loadingPredictionId, setLoadingPredictionId] = useState<string | null>(null);
+  const [predictionPeriod, setPredictionPeriod] = useState<Record<string, PredictionPeriod>>({});
+  const [predictionLevel, setPredictionLevel] = useState<PredictionLevel>('medium');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [market, setMarket] = useState<string>('in');
   const [displayLimit, setDisplayLimit] = useState<50 | 100 | 150>(150);
-  const [segmentFilter, setSegmentFilter] = useState<string>('all');
+  const [segmentFilter, setSegmentFilter] = useState<string[]>(['large']);
+  const [segmentMenuOpen, setSegmentMenuOpen] = useState(false);
+  const [segmentMenuPos, setSegmentMenuPos] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [segmentReadyByMarket, setSegmentReadyByMarket] = useState<Record<string, Record<string, boolean>>>(() => {
+    try {
+      const raw = sessionStorage.getItem('livestock_segments_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, SegmentData[]>;
+        const result: Record<string, Record<string, boolean>> = { in: {}, us: {} };
+        for (const [mkt, segs] of Object.entries(parsed)) {
+          result[mkt] = {};
+          (segs || []).forEach((s) => {
+            if (s?.segment) result[mkt][s.segment] = (s.topGainers?.length > 0 || s.topLosers?.length > 0);
+          });
+        }
+        return result;
+      }
+    } catch {}
+    return { in: {}, us: {} };
+  });
   /** `__none__` = stocks with no sector label */
   const [sectorFilter, setSectorFilter] = useState<string>('all');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('best');
   const [autoTradeLoading, setAutoTradeLoading] = useState(false);
   const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
@@ -1406,6 +1839,9 @@ export default function App() {
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const settingsSigninGroupRef = useRef<HTMLDivElement>(null);
   const settingsAccessTokenRef = useRef<HTMLDivElement>(null);
+  const segmentMenuRef = useRef<HTMLDivElement>(null);
+  const segmentMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const segmentMenuPopupRef = useRef<HTMLDivElement>(null);
   const kiteFormRef = useRef<{ apiKey: string; secret: string; accessToken: string; requestToken: string }>({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteForm, setKiteForm] = useState({ apiKey: '', secret: '', accessToken: '', requestToken: '' });
   const [kiteGenerateLoading, setKiteGenerateLoading] = useState(false);
@@ -1436,41 +1872,130 @@ export default function App() {
     average_price?: number;
   }>>([]);
 
-  const fetchForMarket = useCallback((m: string, forceRefresh = false, silent = false) => {
+  const upsertSegmentsForMarket = useCallback((m: string, incoming: SegmentData[]) => {
+    setSegmentsByMarket((prev) => {
+      const existing = Array.isArray(prev[m]) ? prev[m] : [];
+      const map = new Map<string, SegmentData>();
+      existing.forEach((row) => map.set(String(row.segment || ''), row));
+      incoming.forEach((row) => {
+        const key = String(row.segment || '');
+        const existingRow = map.get(key);
+        const incomingHasData = (row.topGainers?.length ?? 0) > 0 || (row.topLosers?.length ?? 0) > 0;
+        const existingHasData = (existingRow?.topGainers?.length ?? 0) > 0 || (existingRow?.topLosers?.length ?? 0) > 0;
+        // Never overwrite good data with empty data (e.g. from a timeout fallback)
+        if (existingHasData && !incomingHasData) return;
+        map.set(key, row);
+      });
+      const ordered = LOAD_ORDER_SEGMENTS
+        .map((seg) => map.get(seg))
+        .filter(Boolean) as SegmentData[];
+      const next = { ...prev, [m]: ordered };
+      try { sessionStorage.setItem('livestock_segments_v1', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  // Ref-based cache: tracks which segments have been loaded per market.
+  // useRef doesn't support lazy initializers — use null sentinel pattern instead.
+  const loadedSegmentsRef = useRef<Record<string, Set<string>> | null>(null);
+  if (loadedSegmentsRef.current === null) {
+    const base: Record<string, Set<string>> = { in: new Set(), us: new Set() };
+    try {
+      const raw = sessionStorage.getItem('livestock_segments_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, SegmentData[]>;
+        for (const [mkt, segs] of Object.entries(parsed)) {
+          if (!base[mkt]) base[mkt] = new Set();
+          (segs as SegmentData[]).forEach((s) => {
+            if (s?.segment && ((s.topGainers?.length ?? 0) > 0 || (s.topLosers?.length ?? 0) > 0)) {
+              base[mkt].add(s.segment);
+            }
+          });
+        }
+      }
+    } catch {}
+    loadedSegmentsRef.current = base;
+  }
+
+  // Fetch a group of segments in one API call (e.g. ['large','mid'])
+  const fetchSegmentGroupForMarket = useCallback((
+    m: string,
+    segments: readonly string[],
+    forceRefresh = false,
+    silent = false,
+  ) => {
     const isBackground = silent || forceRefresh;
 
-    if (!isBackground) {
-      setLoading(true);
-      setError(null);
+    // Skip if all segments in group already cached
+    if (!forceRefresh) {
+      const allLoaded = segments.every((s) => loadedSegmentsRef.current[m]?.has(s));
+      if (allLoaded) return Promise.resolve();
     }
+
+    if (!isBackground) { setLoading(true); setError(null); }
     if (forceRefresh && !silent) setRefreshing(true);
 
-    const params = new URLSearchParams({ limit: '150', market: m });
+    // Mark all segments in group as loading
+    setSegmentReadyByMarket((prev) => ({
+      ...prev,
+      [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, false])) },
+    }));
+
+    const params = new URLSearchParams({ limit: '150', market: m, segment: segments.join(',') });
     if (forceRefresh) params.set('refresh', '1');
-    const url = `${API}/stocks?${params}`;
-    return fetch(url)
+
+    return fetch(`${API}/stocks?${params}`)
       .then(async (r) => {
         const text = await r.text();
         if (!text) throw new Error('Empty response. Make sure the server is running.');
-        try {
-          return JSON.parse(text);
-        } catch {
-          throw new Error('Invalid response. Make sure the server is running.');
-        }
+        try { return JSON.parse(text); }
+        catch { throw new Error('Invalid response. Make sure the server is running.'); }
       })
       .then((data) => {
-        setSegmentsByMarket((prev) => ({ ...prev, [m]: data.segments || [] }));
+        upsertSegmentsForMarket(m, data.segments || []);
+        if (!loadedSegmentsRef.current[m]) loadedSegmentsRef.current[m] = new Set();
+        segments.forEach((s) => loadedSegmentsRef.current[m].add(s));
+        setSegmentReadyByMarket((prev) => ({
+          ...prev,
+          [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, true])) },
+        }));
         setLastUpdated(data.date || new Date().toISOString());
         setError(null);
       })
       .catch((err) => {
         if (!isBackground) setError(err.message);
+        setSegmentReadyByMarket((prev) => ({
+          ...prev,
+          [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, false])) },
+        }));
       })
       .finally(() => {
         if (!isBackground) setLoading(false);
         if (forceRefresh && !silent) setRefreshing(false);
       });
-  }, []);
+  }, [upsertSegmentsForMarket]);
+
+  // 3 grouped fetches: group1 shown immediately, groups 2+3 parallel in background
+  const FETCH_GROUPS = [
+    ['large', 'mid'],
+    ['small', 'flexi'],
+    ['micro', 'nano'],
+  ] as const;
+
+  const fetchForMarket = useCallback(async (m: string, forceRefresh = false, silent = false) => {
+    if (forceRefresh) {
+      loadedSegmentsRef.current[m] = new Set();
+      setSegmentsByMarket((prev) => ({ ...prev, [m]: [] }));
+      setSegmentReadyByMarket((prev) => ({ ...prev, [m]: {} }));
+    }
+    // Group 1 (large+mid): show immediately
+    await fetchSegmentGroupForMarket(m, FETCH_GROUPS[0], forceRefresh, silent);
+    // Groups 2+3: parallel background
+    await Promise.all([
+      fetchSegmentGroupForMarket(m, FETCH_GROUPS[1], forceRefresh, true),
+      fetchSegmentGroupForMarket(m, FETCH_GROUPS[2], forceRefresh, true),
+    ]);
+  }, [fetchSegmentGroupForMarket]);
 
   const fetchIndicesIn = useCallback(() => {
     setIndicesLoading(true);
@@ -1505,9 +2030,78 @@ export default function App() {
     setActiveTab(null);
   }, [segmentFilter, displayLimit, market]);
 
+  // Reset cap filter to large when switching market so user starts fresh.
+  const prevMarketRef = useRef(market);
+  useEffect(() => {
+    if (prevMarketRef.current !== market) {
+      prevMarketRef.current = market;
+      setSegmentFilter(['large']);
+    }
+  }, [market]);
+
+  // Auto-select: keep user selection valid as segments load one by one.
+  useEffect(() => {
+    const readyMap = segmentReadyByMarket[market] || {};
+    const readySegments: string[] = CAP_SEGMENT_VALUES.filter((v) => readyMap[v]);
+    if (!readySegments.length) return;
+    setSegmentFilter((prev) => {
+      if (!prev.length) return prev; // allow explicit 0-selected state
+      if (prev.includes('all')) {
+        // Sync 'all' array to include newly loaded segments so allChecked stays accurate
+        const currentInFilter = new Set(prev.filter((v) => v !== 'all'));
+        const newOnes = readySegments.filter((v) => !currentInFilter.has(v));
+        if (newOnes.length === 0) return prev;
+        return ['all', ...Array.from(currentInFilter), ...newOnes];
+      }
+      // Keep any segments the user has selected that are now ready
+      const prevValid = prev.filter((v) => v !== 'all' && readySegments.includes(v));
+      if (prevValid.length > 0) return prevValid;
+      // If currently selected segments became invalid/unavailable, allow empty state.
+      return [];
+    });
+  }, [market, segmentReadyByMarket]);
+
   useEffect(() => {
     setSectorFilter('all');
   }, [market, segmentFilter]);
+
+  useEffect(() => {
+    if (!segmentMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (
+        target &&
+        segmentMenuRef.current &&
+        !segmentMenuRef.current.contains(target) &&
+        segmentMenuPopupRef.current &&
+        !segmentMenuPopupRef.current.contains(target)
+      ) {
+        setSegmentMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [segmentMenuOpen]);
+
+  useEffect(() => {
+    if (!segmentMenuOpen) return;
+    const updatePosition = () => {
+      const rect = segmentMenuTriggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setSegmentMenuPos({
+        top: rect.bottom + 6,
+        left: rect.left,
+        minWidth: Math.max(rect.width, 192),
+      });
+    };
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [segmentMenuOpen]);
 
   useEffect(() => {
     try {
@@ -1805,9 +2399,9 @@ export default function App() {
   const segments = segmentsByMarket[market] || [];
 
   const baseMerged = useMemo(() => {
-    if (!segmentFilter) return [];
+    if (!segmentFilter || segmentFilter.length === 0) return [];
     let merged: Stock[] = [];
-    if (segmentFilter === 'all') {
+    if (segmentFilter.includes('all')) {
       const all = segments.flatMap((s) => [...s.topGainers, ...s.topLosers]);
       const seen = new Set<string>();
       merged = all.filter((s) => {
@@ -1816,9 +2410,9 @@ export default function App() {
         return true;
       });
     } else {
-      const seg = segments.find((s) => s.segment === segmentFilter);
-      if (!seg) return [];
-      const combined = [...seg.topGainers, ...seg.topLosers];
+      const chosen = segments.filter((s) => segmentFilter.includes(s.segment));
+      if (!chosen.length) return [];
+      const combined = chosen.flatMap((seg) => [...seg.topGainers, ...seg.topLosers]);
       const seen = new Set<string>();
       merged = combined.filter((s) => {
         if (seen.has(s.symbol)) return false;
@@ -1850,7 +2444,7 @@ export default function App() {
   }, [sectorFilter, sectorOptions, market]);
 
   const stocks = useMemo(() => {
-    if (!segmentFilter) return [];
+    if (!segmentFilter || segmentFilter.length === 0) return [];
     let merged = baseMerged;
     if (sectorFilter !== 'all') {
       merged = merged.filter((s) => {
@@ -2019,6 +2613,28 @@ export default function App() {
     }
   };
 
+  const ensureThreeYearChartLoaded = useCallback(async (stock: Stock, id: string) => {
+    if (chartCache[id]?.['3y']) return chartCache[id]?.['3y'] ?? [];
+    const marketCode = stock.market || 'in';
+    setLoadingChartId(id);
+    try {
+      const res = await fetch(`${API}/chart/${stock.symbol}?period=3y&market=${marketCode}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const history = Array.isArray(data.history) ? data.history : [];
+      setChartCache((c) => ({
+        ...c,
+        [id]: { ...(c[id] ?? {}), '3y': history },
+      }));
+      return history;
+    } catch {
+      setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), '3y': [] } }));
+      return [];
+    } finally {
+      setLoadingChartId(null);
+    }
+  }, [chartCache]);
+
   const handleStockTap = (stock: Stock) => {
     const id = `${stock.symbol}-${stock.segment}`;
     if (activeStockId === id) {
@@ -2029,7 +2645,7 @@ export default function App() {
     const openTab = preferredTab || 'chart';
     setActiveStockId(id);
     setActiveTab(openTab);
-    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
+    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? preferredChartPeriod }));
     const market = stock.market || 'in';
 
     // Load fundamentals if not cached
@@ -2045,18 +2661,8 @@ export default function App() {
         .finally(() => setLoadingFundamentalsId(null));
     }
 
-    // Preload chart (1m) if not cached
-    if (!chartCache[id]?.['1m']) {
-      setLoadingChartId(id);
-      fetch(`${API}/chart/${stock.symbol}?period=1m&market=${market}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.error) throw new Error(data.error);
-          setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), '1m': data.history ?? [] } }));
-        })
-        .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), '1m': [] } })))
-        .finally(() => setLoadingChartId(null));
-    }
+    // Preload single source of truth: 3Y chart
+    void ensureThreeYearChartLoaded(stock, id);
 
     // Preload pros-cons if not cached
     if (!analysisCache[id]) {
@@ -2073,21 +2679,7 @@ export default function App() {
     }
 
     if (openTab === 'chart') {
-      const period = chartPeriod[id] ?? '1y';
-      if (!chartCache[id]?.[period]) {
-        setLoadingChartId(id);
-        fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${market}`)
-          .then((r) => r.json())
-          .then((data) => {
-            if (data.error) throw new Error(data.error);
-            setChartCache((c) => ({
-              ...c,
-              [id]: { ...(c[id] ?? {}), [period]: data.history ?? [] },
-            }));
-          })
-          .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), [period]: [] } })))
-          .finally(() => setLoadingChartId(null));
-      }
+      void ensureThreeYearChartLoaded(stock, id);
     }
 
   };
@@ -2112,7 +2704,7 @@ export default function App() {
       return [match as Stock, ...next];
     });
     setMarket(mkt);
-    setSegmentFilter('all');
+    setSegmentFilter(['all', ...CAP_SEGMENT_VALUES]);
     setSectorFilter('all');
     setPreferredTab('chart');
     const id = `${match.symbol}-${match.segment}`;
@@ -2120,7 +2712,7 @@ export default function App() {
     setTimeout(() => {
       setHighlightedSearchId((prev) => (prev === id ? null : prev));
     }, 1500);
-    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
+    setChartPeriod((p) => ({ ...p, [id]: p[id] ?? preferredChartPeriod }));
     const marketCode = match.market || 'in';
     if (!fundamentalsCache[id]) {
       setLoadingFundamentalsId(id);
@@ -2208,7 +2800,9 @@ export default function App() {
 
   const handleTabClick = async (stock: Stock, tab: TabType) => {
     const id = `${stock.symbol}-${stock.segment}`;
-    setPreferredTab(tab);
+    if (tab !== 'prediction') {
+      setPreferredTab(tab);
+    }
     const isSameStock = activeStockId === id;
     const isSameTab = activeTab === tab;
     if (isSameStock && isSameTab) {
@@ -2251,23 +2845,57 @@ export default function App() {
     }
 
     if (tab === 'chart') {
-      setChartPeriod((p) => ({ ...p, [id]: p[id] ?? '1y' }));
-      const period = chartPeriod[id] ?? '1y';
-      if (!chartCache[id]?.[period]) {
-        setLoadingChartId(id);
-        fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${stock.market || 'in'}`)
-          .then((r) => r.json())
-          .then((data) => {
-            if (data.error) throw new Error(data.error);
-            setChartCache((c) => ({
-              ...c,
-              [id]: { ...(c[id] ?? {}), [period]: data.history ?? [] },
-            }));
-          })
-          .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), [period]: [] } })))
-          .finally(() => setLoadingChartId(null));
-      }
+      setChartPeriod((p) => ({ ...p, [id]: p[id] ?? preferredChartPeriod }));
+      await ensureThreeYearChartLoaded(stock, id);
     }
+
+    if (tab === 'prediction') {
+      const period = predictionPeriod[id] ?? '7d';
+      await loadPrediction(stock, id, period, predictionLevel);
+    }
+  };
+
+  const loadPrediction = async (stock: Stock, id: string, period: PredictionPeriod, level: PredictionLevel = predictionLevel) => {
+    const cacheKey = `${id}-${period}-${level}`;
+    if (predictionCache[cacheKey]) return;
+    const periodDays = PREDICTION_PERIODS.find((p) => p.value === period)?.days ?? 7;
+    setLoadingPredictionId(id);
+    try {
+      const history3y = chartCache[id]?.['3y'] ?? await ensureThreeYearChartLoaded(stock, id);
+      const res = await fetch(`${API}/predict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: stock.symbol,
+          market: stock.market || 'in',
+          stock,
+          periodDays,
+          predictionLevel: level,
+          fundamentals: fundamentalsCache[id] ?? null,
+          analysis: analysisCache[id] ?? null,
+          history3y: history3y ?? null,
+        }),
+      });
+      const data = await res.json();
+      setPredictionCache((c) => ({ ...c, [cacheKey]: data }));
+    } catch {
+      setPredictionCache((c) => ({ ...c, [cacheKey]: { currentPrice: 0, predictedPrices: [], trend: 'neutral', confidence: 0, summary: '', keyFactors: [], support: null, resistance: null, disclaimer: '', error: 'Prediction failed. Try again.' } }));
+    } finally {
+      setLoadingPredictionId(null);
+    }
+  };
+
+  const handlePredictionLevelChange = (stock: Stock, level: PredictionLevel) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    setPredictionLevel(level);
+    const period = predictionPeriod[id] ?? '7d';
+    void loadPrediction(stock, id, period, level);
+  };
+
+  const handlePredictionPeriodChange = (stock: Stock, period: PredictionPeriod) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    setPredictionPeriod((p) => ({ ...p, [id]: period }));
+    void loadPrediction(stock, id, period, predictionLevel);
   };
 
   const handleProceed = async () => {
@@ -2401,21 +3029,9 @@ export default function App() {
 
   const handleChartPeriodChange = (stock: Stock, period: ChartPeriod) => {
     const id = `${stock.symbol}-${stock.segment}`;
+    setPreferredChartPeriod(period); // sticky: new stocks open with same period
     setChartPeriod((p) => ({ ...p, [id]: period }));
-    if (!chartCache[id]?.[period]) {
-      setLoadingChartId(id);
-      fetch(`${API}/chart/${stock.symbol}?period=${period}&market=${stock.market || 'in'}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.error) throw new Error(data.error);
-          setChartCache((c) => ({
-            ...c,
-            [id]: { ...(c[id] ?? {}), [period]: data.history ?? [] },
-          }));
-        })
-        .catch(() => setChartCache((c) => ({ ...c, [id]: { ...(c[id] ?? {}), [period]: [] } })))
-        .finally(() => setLoadingChartId(null));
-    }
+    void ensureThreeYearChartLoaded(stock, id);
   };
 
   if (error) {
@@ -2519,18 +3135,84 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <select
-              className="segment-picker"
-              value={segmentFilter}
-              onChange={(e) => setSegmentFilter(e.target.value)}
-              title="Cap category"
-            >
-              {SEGMENT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+            <div className="segment-dropdown" ref={segmentMenuRef}>
+              <button
+                type="button"
+                className="segment-dropdown-trigger"
+                ref={segmentMenuTriggerRef}
+                onClick={() => setSegmentMenuOpen((v) => !v)}
+                title="Cap category"
+                aria-haspopup="menu"
+                aria-expanded={segmentMenuOpen}
+              >
+                {segmentFilter.includes('all')
+                  ? 'All Cap'
+                  : segmentFilter.length > 0
+                    ? `${segmentFilter.length} selected`
+                    : 'Select cap type'}
+                <span className="segment-dropdown-caret" aria-hidden>▾</span>
+              </button>
+            </div>
+            {segmentMenuOpen && segmentMenuPos
+              ? createPortal(
+                  <div
+                    className="segment-dropdown-menu"
+                    ref={segmentMenuPopupRef}
+                    role="menu"
+                    aria-label="Cap type filter options"
+                    style={{
+                      position: 'fixed',
+                      top: `${segmentMenuPos.top}px`,
+                      left: `${segmentMenuPos.left}px`,
+                      minWidth: `${segmentMenuPos.minWidth}px`,
+                    }}
+                  >
+                    {SEGMENT_OPTIONS.map((opt) => {
+                      const readyMap = segmentReadyByMarket[market] || {};
+                      const readySegments = CAP_SEGMENT_VALUES.filter((v) => readyMap[v]);
+                      const isAll = opt.value === 'all';
+                      const allCapsReady = CAP_SEGMENT_VALUES.every((v) => readyMap[v]);
+                      const isReady = isAll ? allCapsReady : !!readyMap[opt.value];
+                      const allChecked = readySegments.length > 0 && readySegments.every((v) => segmentFilter.includes(v));
+                      const checked = segmentFilter.includes(opt.value);
+                      return (
+                        <label key={opt.value} className={`segment-checkbox-item ${!isReady ? 'segment-checkbox-item-disabled' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={isAll ? allChecked : checked}
+                            disabled={!isReady}
+                            onChange={(e) => {
+                              if (!isReady) return;
+                              if (opt.value === 'all') {
+                                if (e.target.checked) {
+                                  setSegmentFilter(['all', ...readySegments]);
+                                } else {
+                                  setSegmentFilter([]);
+                                }
+                                return;
+                              }
+                              const nextSet = new Set(segmentFilter.filter((v) => v !== 'all'));
+                              if (e.target.checked) {
+                                nextSet.add(opt.value);
+                              } else {
+                                nextSet.delete(opt.value);
+                              }
+                              const allSelected = readySegments.length > 0 && readySegments.every((v) => nextSet.has(v));
+                              if (allSelected) {
+                                setSegmentFilter(['all', ...readySegments]);
+                              } else {
+                                setSegmentFilter([...nextSet]);
+                              }
+                            }}
+                          />
+                          <span>{opt.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>,
+                  document.body
+                )
+              : null}
             <select
               className="limit-picker"
               value={displayLimit}
@@ -3473,7 +4155,7 @@ export default function App() {
             <span className="refresh-spinner" aria-hidden />
             <span>Loading stocks…</span>
           </div>
-        ) : !segmentFilter ? (
+        ) : !segmentFilter || segmentFilter.length === 0 ? (
           <div className="select-category-placeholder">
             Select a cap category from the dropdown to view stocks
           </div>
@@ -3506,6 +4188,13 @@ export default function App() {
             highlightedSearchId={highlightedSearchId}
             financialsOpenId={financialsOpenId}
             onFinancialsOpenChange={setFinancialsOpenId}
+            predictionCache={predictionCache}
+            loadingPredictionId={loadingPredictionId}
+            predictionPeriod={predictionPeriod}
+            predictionLevel={predictionLevel}
+            onPredictionPeriodChange={handlePredictionPeriodChange}
+            onPredictionLevelChange={handlePredictionLevelChange}
+            defaultChartPeriod={preferredChartPeriod}
           />
         )}
       </main>
