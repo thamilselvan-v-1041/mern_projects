@@ -294,7 +294,7 @@ type Analysis = {
 type TabType = 'fundamentals' | 'chart' | 'proscons' | 'prediction';
 
 type PredictionDay = { day: number; date: string; price: number; changePercent: number; };
-type PredictionPeriod = '7d' | '1m' | '3m' | '6m' | '1y';
+type PredictionPeriod = '7d' | '14d' | '1m' | '2m';
 type PredictionLevel = 'low' | 'medium' | 'high';
 type Prediction = {
   currentPrice: number;
@@ -310,16 +310,27 @@ type Prediction = {
 };
 const PREDICTION_PERIODS: { value: PredictionPeriod; label: string; days: number }[] = [
   { value: '7d',  label: '7 Days',  days: 7  },
+  { value: '14d', label: '14 Days', days: 14 },
   { value: '1m',  label: '1 Month', days: 30 },
-  { value: '3m',  label: '3 Months',days: 90 },
-  { value: '6m',  label: '6 Months',days: 180},
-  { value: '1y',  label: '1 Year',  days: 365},
+  { value: '2m',  label: '2 Months',days: 60 },
 ];
 const PREDICTION_LEVELS: { value: PredictionLevel; label: string; desc: string; icon: string }[] = [
   { value: 'low',    label: 'Low',    desc: 'Quick signal — RSI, ATR, 14d price',                       icon: '⚡' },
   { value: 'medium', label: 'Medium', desc: '',                                                           icon: '⚖️' },
   { value: 'high',   label: 'High',   desc: 'Deep analysis — full data + live macro + analyst targets',  icon: '🔬' },
 ];
+
+function allowedPredictionLevels(period: PredictionPeriod): PredictionLevel[] {
+  if (period === '7d' || period === '14d') return ['low', 'medium', 'high'];
+  return ['low'];
+}
+
+function normalizePredictionLevelForPeriod(period: PredictionPeriod, level: PredictionLevel): PredictionLevel {
+  const allowed = allowedPredictionLevels(period);
+  if (allowed.includes(level)) return level;
+  if (allowed.includes('low')) return 'low';
+  return allowed[0];
+}
 
 type QuarterlyProfitRow = {
   periodEnd: string;
@@ -379,6 +390,7 @@ const CHART_PERIOD_LABELS: Record<ChartPeriod, string> = {
   '3y': '3Y',
   '5y': '5Y',
 };
+const INDEX_SYMBOLS = new Set(['^NSEI', '^BSESN']);
 
 const MAX_CHART_BARS = 120;
 const CHART_PERIOD_TRADING_DAYS: Partial<Record<ChartPeriod, number>> = {
@@ -407,6 +419,34 @@ function chartDataForPeriodFromThreeYear(
   const days = CHART_PERIOD_TRADING_DAYS[period];
   if (!days) return rows; // 3y / 5y
   return rows.slice(-days);
+}
+
+function buildIndexFundamentals(symbol: string, price: number | null | undefined, indicesIn: {
+  nifty: { price: number | null; change: number; changePercent: number } | null;
+  sensex: { price: number | null; change: number; changePercent: number } | null;
+  fetchedAt?: string;
+} | null) {
+  const isNifty = symbol === '^NSEI';
+  const row = isNifty ? indicesIn?.nifty : indicesIn?.sensex;
+  const p = Number.isFinite(Number(price)) ? Number(price) : (row?.price ?? null);
+  return {
+    price: p != null ? Number(p).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—',
+    sector: 'Index',
+    marketCap: '—',
+    volume: '—',
+    avgVolume: '—',
+    pe: '—',
+    forwardPE: '—',
+    eps: '—',
+    dividendYield: '—',
+    open: '—',
+    fiftyTwoWeekLow: '—',
+    fiftyTwoWeekHigh: '—',
+    dayLow: '—',
+    dayHigh: '—',
+    change: row ? `${row.change >= 0 ? '+' : ''}${row.change.toFixed(2)}` : '—',
+    changePercent: row ? `${row.changePercent >= 0 ? '+' : ''}${row.changePercent.toFixed(2)}%` : '—',
+  };
 }
 
 type BestSaleSignal = {
@@ -923,10 +963,71 @@ function StockItem({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(resetDrill, [predictionPeriod, predictionLevel, prediction?.currentPrice]);
 
-  // Group PredictionDay[] into chunks of `size`
-  const chunkDays = (arr: PredictionDay[], size: number): PredictionDay[][] => {
-    const out: PredictionDay[][] = [];
-    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  const toValidDate = (s: string): Date | null => {
+    const d = new Date(s);
+    return Number.isFinite(d.getTime()) ? d : null;
+  };
+
+  // Build deterministic prediction calendar date from D+N (skip weekends),
+  // so grouping logic does not depend on localized display strings.
+  const dateFromPredictionDay = (predictionDay: number): Date => {
+    const target = Math.max(1, Number(predictionDay) || 1);
+    const d = new Date();
+    let added = 0;
+    let safe = 0;
+    while (added < target && safe < 800) {
+      safe += 1;
+      d.setDate(d.getDate() + 1);
+      const dow = d.getDay();
+      if (dow === 0 || dow === 6) continue;
+      added += 1;
+    }
+    return d;
+  };
+
+  const ordinal = (n: number): string => {
+    const v = Math.abs(n) % 100;
+    if (v >= 11 && v <= 13) return `${n}th`;
+    const rem = n % 10;
+    if (rem === 1) return `${n}st`;
+    if (rem === 2) return `${n}nd`;
+    if (rem === 3) return `${n}rd`;
+    return `${n}th`;
+  };
+
+  const isoWeekYear = (date: Date) => {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const day = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return { year: d.getUTCFullYear(), week };
+  };
+
+  const buildWeekGroups = (arr: PredictionDay[]) => {
+    const out: Array<{ label: string; days: PredictionDay[] }> = [];
+    for (const item of arr) {
+      const parsed = dateFromPredictionDay(item.day) || toValidDate(item.date) || new Date();
+      const { year, week } = isoWeekYear(parsed);
+      const label = `${ordinal(week)} Week of ${year}`;
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.days.push(item);
+      else out.push({ label, days: [item] });
+    }
+    return out;
+  };
+
+  const buildMonthGroups = (arr: PredictionDay[]) => {
+    const out: Array<{ label: string; days: PredictionDay[] }> = [];
+    for (const item of arr) {
+      const parsed = dateFromPredictionDay(item.day) || toValidDate(item.date);
+      const label = parsed
+        ? parsed.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+        : `Month ${out.length + 1}`;
+      const last = out[out.length - 1];
+      if (last && last.label === label) last.days.push(item);
+      else out.push({ label, days: [item] });
+    }
     return out;
   };
 
@@ -1282,15 +1383,21 @@ function StockItem({
                 </div>
                 <div className="prediction-filter-group">
                   <label className="prediction-filter-label">Severity</label>
+                  {(() => {
+                    const allowedLevels = allowedPredictionLevels(predictionPeriod);
+                    const selectedLevel = normalizePredictionLevelForPeriod(predictionPeriod, predictionLevel);
+                    return (
                   <select
                     className="prediction-filter-select"
-                    value={predictionLevel}
+                    value={selectedLevel}
                     onChange={(e) => onPredictionLevelChange(e.target.value as PredictionLevel)}
                   >
-                    {PREDICTION_LEVELS.map((l) => (
+                    {PREDICTION_LEVELS.filter((l) => allowedLevels.includes(l.value)).map((l) => (
                       <option key={l.value} value={l.value}>{l.icon} {l.label}</option>
                     ))}
                   </select>
+                    );
+                  })()}
                 </div>
                 {PREDICTION_LEVELS.find((l) => l.value === predictionLevel)?.desc ? (
                   <span className="prediction-level-desc">
@@ -1348,15 +1455,15 @@ function StockItem({
 
                   // 1m → weeks drill (top: weeks, drill: days)
                   if (predictionPeriod === '1m') {
-                    const weeks = chunkDays(all, 5);
+                    const weeks = buildWeekGroups(all);
                     if (drillLevel === 'days' && drillWeekIdx !== null) {
-                      const wDays = weeks[drillWeekIdx] ?? [];
+                      const wDays = weeks[drillWeekIdx]?.days ?? [];
                       const s = groupSummary(wDays);
                       return (
                         <div className="prediction-table-wrap">
                           <div className="pred-drill-breadcrumb">
                             <button className="pred-drill-back" onClick={() => { setDrillLevel('months'); setDrillWeekIdx(null); }}>◀ Weeks</button>
-                            <span>Week {drillWeekIdx + 1}</span>
+                            <span>{weeks[drillWeekIdx]?.label || `Week ${drillWeekIdx + 1}`}</span>
                           </div>
                           <table className="prediction-table">
                             <thead><tr><th>Day</th><th>Date</th><th>Price</th><th>vs Entry</th></tr></thead>
@@ -1383,12 +1490,12 @@ function StockItem({
                           <thead><tr><th>Week</th><th>Range</th><th>Open → Close</th><th>Change</th><th></th></tr></thead>
                           <tbody>
                             {weeks.map((wk, wi) => {
-                              const s = groupSummary(wk);
+                              const s = groupSummary(wk.days);
                               return (
                                 <tr key={wi} className={`pred-group-row ${s.changePct >= 0 ? 'pred-up' : 'pred-down'}`}
                                   onClick={() => { setDrillWeekIdx(wi); setDrillLevel('days'); }}>
                                   <td><strong>Wk {wi + 1}</strong></td>
-                                  <td className="pred-range">{wk[0]?.date} – {wk[wk.length-1]?.date}</td>
+                                  <td className="pred-range">{wk.label}</td>
                                   <td>{currency}{fmt(s.open)} → <strong>{currency}{fmt(s.close)}</strong></td>
                                   <td className={s.changePct >= 0 ? 'up' : 'down'}>{s.changePct >= 0 ? '+' : ''}{s.changePct.toFixed(2)}%</td>
                                   <td className="pred-drill-arrow">›</td>
@@ -1402,23 +1509,22 @@ function StockItem({
                   }
 
                   // 3m / 6m / 1y → months → weeks → days drill
-                  const months = chunkDays(all, 21);
-                  const allWeeks = chunkDays(all, 5);
+                  const months = buildMonthGroups(all);
 
                   // Level: days (deepest)
-                  if (drillLevel === 'days' && drillWeekIdx !== null) {
-                    const wDays = allWeeks[drillWeekIdx] ?? [];
+                  if (drillLevel === 'days' && drillWeekIdx !== null && drillMonthIdx !== null) {
+                    const mDays = months[drillMonthIdx]?.days ?? [];
+                    const mWeeks = buildWeekGroups(mDays);
+                    const wDays = mWeeks[drillWeekIdx]?.days ?? [];
                     const s = groupSummary(wDays);
-                    // which month does this week belong to?
-                    const mIdx = drillMonthIdx ?? Math.floor((drillWeekIdx * 5) / 21);
                     return (
                       <div className="prediction-table-wrap">
                         <div className="pred-drill-breadcrumb">
                           <button className="pred-drill-back" onClick={() => { setDrillLevel('months'); setDrillMonthIdx(null); setDrillWeekIdx(null); }}>◀ Months</button>
                           <span className="pred-drill-sep">›</span>
-                          <button className="pred-drill-back" onClick={() => { setDrillLevel('weeks'); setDrillWeekIdx(null); }}>Month {mIdx + 1}</button>
+                          <button className="pred-drill-back" onClick={() => { setDrillLevel('weeks'); setDrillWeekIdx(null); }}>{months[drillMonthIdx]?.label || `Month ${drillMonthIdx + 1}`}</button>
                           <span className="pred-drill-sep">›</span>
-                          <span>Week {(drillWeekIdx - Math.floor(mIdx * 21 / 5)) + 1}</span>
+                          <span>{mWeeks[drillWeekIdx]?.label || `Week ${drillWeekIdx + 1}`}</span>
                         </div>
                         <table className="prediction-table">
                           <thead><tr><th>Day</th><th>Date</th><th>Price</th><th>vs Entry</th></tr></thead>
@@ -1441,27 +1547,25 @@ function StockItem({
 
                   // Level: weeks (inside a month)
                   if (drillLevel === 'weeks' && drillMonthIdx !== null) {
-                    const mDays = months[drillMonthIdx] ?? [];
-                    const mWeeks = chunkDays(mDays, 5);
-                    const globalWeekOffset = Math.floor((drillMonthIdx * 21) / 5);
+                    const mDays = months[drillMonthIdx];
+                    const mWeeks = buildWeekGroups(mDays?.days ?? []);
                     return (
                       <div className="prediction-table-wrap">
                         <div className="pred-drill-breadcrumb">
                           <button className="pred-drill-back" onClick={() => { setDrillLevel('months'); setDrillMonthIdx(null); }}>◀ Months</button>
                           <span className="pred-drill-sep">›</span>
-                          <span>Month {drillMonthIdx + 1}</span>
+                          <span>{mDays?.label || `Month ${drillMonthIdx + 1}`}</span>
                         </div>
                         <table className="prediction-table pred-group-table">
                           <thead><tr><th>Week</th><th>Range</th><th>Open → Close</th><th>Change</th><th></th></tr></thead>
                           <tbody>
                             {mWeeks.map((wk, wi) => {
-                              const s = groupSummary(wk);
-                              const globalWi = globalWeekOffset + wi;
+                              const s = groupSummary(wk.days);
                               return (
                                 <tr key={wi} className={`pred-group-row ${s.changePct >= 0 ? 'pred-up' : 'pred-down'}`}
-                                  onClick={() => { setDrillWeekIdx(globalWi); setDrillLevel('days'); }}>
+                                  onClick={() => { setDrillWeekIdx(wi); setDrillLevel('days'); }}>
                                   <td><strong>Wk {wi + 1}</strong></td>
-                                  <td className="pred-range">{wk[0]?.date} – {wk[wk.length-1]?.date}</td>
+                                  <td className="pred-range">{wk.label}</td>
                                   <td>{currency}{fmt(s.open)} → <strong>{currency}{fmt(s.close)}</strong></td>
                                   <td className={s.changePct >= 0 ? 'up' : 'down'}>{s.changePct >= 0 ? '+' : ''}{s.changePct.toFixed(2)}%</td>
                                   <td className="pred-drill-arrow">›</td>
@@ -1481,12 +1585,12 @@ function StockItem({
                         <thead><tr><th>Month</th><th>Range</th><th>Open → Close</th><th>Change</th><th></th></tr></thead>
                         <tbody>
                           {months.map((mo, mi) => {
-                            const s = groupSummary(mo);
+                            const s = groupSummary(mo.days);
                             return (
                               <tr key={mi} className={`pred-group-row ${s.changePct >= 0 ? 'pred-up' : 'pred-down'}`}
                                 onClick={() => { setDrillMonthIdx(mi); setDrillWeekIdx(null); setDrillLevel('weeks'); }}>
                                 <td><strong>Mo {mi + 1}</strong></td>
-                                <td className="pred-range">{mo[0]?.date} – {mo[mo.length-1]?.date}</td>
+                                <td className="pred-range">{mo.label}</td>
                                 <td>{currency}{fmt(s.open)} → <strong>{currency}{fmt(s.close)}</strong></td>
                                 <td className={s.changePct >= 0 ? 'up' : 'down'}>{s.changePct >= 0 ? '+' : ''}{s.changePct.toFixed(2)}%</td>
                                 <td className="pred-drill-arrow">›</td>
@@ -1737,7 +1841,7 @@ export default function App() {
   const [predictionCache, setPredictionCache] = useState<Record<string, Prediction>>({});
   const [loadingPredictionId, setLoadingPredictionId] = useState<string | null>(null);
   const [predictionPeriod, setPredictionPeriod] = useState<Record<string, PredictionPeriod>>({});
-  const [predictionLevel, setPredictionLevel] = useState<PredictionLevel>('medium');
+  const [predictionLevel, setPredictionLevel] = useState<PredictionLevel>('low');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [market, setMarket] = useState<string>('in');
   const [displayLimit, setDisplayLimit] = useState<50 | 100 | 150>(150);
@@ -2650,6 +2754,12 @@ export default function App() {
 
     // Load fundamentals if not cached
     if (!fundamentalsCache[id]) {
+      if (INDEX_SYMBOLS.has(stock.symbol)) {
+        setFundamentalsCache((c) => ({
+          ...c,
+          [id]: buildIndexFundamentals(stock.symbol, stock.price, indicesIn) as unknown as Record<string, string>,
+        }));
+      } else {
       setLoadingFundamentalsId(id);
       fetch(`${API}/fundamentals/${stock.symbol}?market=${market}`)
         .then((r) => r.json())
@@ -2659,6 +2769,7 @@ export default function App() {
         })
         .catch(() => { /* no fallback - live data only */ })
         .finally(() => setLoadingFundamentalsId(null));
+      }
     }
 
     // Preload single source of truth: 3Y chart
@@ -2748,6 +2859,39 @@ export default function App() {
       .catch(() => { /* ignore */ });
   };
 
+  const handleAddIndexToList = useCallback((key: 'nifty' | 'sensex') => {
+    if (!indicesIn || !indicesIn[key] || indicesIn[key]?.price == null) return;
+    const row = indicesIn[key]!;
+    const symbol = key === 'nifty' ? '^NSEI' : '^BSESN';
+    const name = key === 'nifty' ? 'NIFTY 50' : 'SENSEX';
+    const seg = `search-index-${key}`;
+    const match: Stock = {
+      symbol,
+      name,
+      price: Number(row.price) || 0,
+      change: Number(row.change) || 0,
+      changePercent: Number(row.changePercent) || 0,
+      segment: seg,
+      segmentName: 'Search',
+      rank: 0,
+      market: 'in',
+      history: [],
+    };
+    const pinKey = `${symbol}|in`;
+    setSearchPinnedStocks((prev) => {
+      const next = prev.filter((s) => `${s.symbol}|${s.market || 'in'}` !== pinKey);
+      return [match, ...next];
+    });
+    setMarket('in');
+    setSegmentFilter(['all', ...CAP_SEGMENT_VALUES]);
+    setSectorFilter('all');
+    const id = `${match.symbol}-${match.segment}`;
+    setHighlightedSearchId(id);
+    setTimeout(() => {
+      setHighlightedSearchId((prev) => (prev === id ? null : prev));
+    }, 1500);
+  }, [indicesIn]);
+
   const handleRemoteSearch = useCallback(async (query: string) => {
     const raw = String(query || '').trim();
     const q = raw
@@ -2831,6 +2975,12 @@ export default function App() {
     }
 
     if (tab === 'fundamentals' && !fundamentalsCache[id]) {
+      if (INDEX_SYMBOLS.has(stock.symbol)) {
+        setFundamentalsCache((c) => ({
+          ...c,
+          [id]: buildIndexFundamentals(stock.symbol, stock.price, indicesIn) as unknown as Record<string, string>,
+        }));
+      } else {
       setLoadingFundamentalsId(id);
       try {
         const res = await fetch(`${API}/fundamentals/${stock.symbol}?market=${stock.market || 'in'}`);
@@ -2842,6 +2992,7 @@ export default function App() {
       } finally {
         setLoadingFundamentalsId(null);
       }
+      }
     }
 
     if (tab === 'chart') {
@@ -2851,7 +3002,9 @@ export default function App() {
 
     if (tab === 'prediction') {
       const period = predictionPeriod[id] ?? '7d';
-      await loadPrediction(stock, id, period, predictionLevel);
+      const normalized = normalizePredictionLevelForPeriod(period, predictionLevel);
+      if (normalized !== predictionLevel) setPredictionLevel(normalized);
+      await loadPrediction(stock, id, period, normalized);
     }
   };
 
@@ -2887,15 +3040,18 @@ export default function App() {
 
   const handlePredictionLevelChange = (stock: Stock, level: PredictionLevel) => {
     const id = `${stock.symbol}-${stock.segment}`;
-    setPredictionLevel(level);
     const period = predictionPeriod[id] ?? '7d';
-    void loadPrediction(stock, id, period, level);
+    const normalized = normalizePredictionLevelForPeriod(period, level);
+    setPredictionLevel(normalized);
+    void loadPrediction(stock, id, period, normalized);
   };
 
   const handlePredictionPeriodChange = (stock: Stock, period: PredictionPeriod) => {
     const id = `${stock.symbol}-${stock.segment}`;
     setPredictionPeriod((p) => ({ ...p, [id]: period }));
-    void loadPrediction(stock, id, period, predictionLevel);
+    const normalized = normalizePredictionLevelForPeriod(period, predictionLevel);
+    if (normalized !== predictionLevel) setPredictionLevel(normalized);
+    void loadPrediction(stock, id, period, normalized);
   };
 
   const handleProceed = async () => {
@@ -3101,7 +3257,13 @@ export default function App() {
                       const sign = pts > 0 ? '+' : '';
                       const tone = pts > 0 ? 'up' : pts < 0 ? 'down' : 'flat';
                       return (
-                        <span key={key} className="header-index-item">
+                        <button
+                          key={key}
+                          type="button"
+                          className="header-index-item header-index-item-link"
+                          onClick={() => handleAddIndexToList(key)}
+                          title={`Add ${label} to stock list`}
+                        >
                           <span className="header-index-label">{label}</span>
                           <span className="header-index-values">
                             <span className="header-index-price">
@@ -3112,7 +3274,7 @@ export default function App() {
                               {new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(pts)}
                             </span>
                           </span>
-                        </span>
+                        </button>
                       );
                     })}
                   </>

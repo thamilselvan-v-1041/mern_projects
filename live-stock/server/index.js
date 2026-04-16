@@ -200,6 +200,7 @@ function sleep(ms) {
 }
 
 function toYahooSymbol(symbol, market) {
+  if (typeof symbol === 'string' && symbol.startsWith('^')) return symbol; // indices: ^NSEI, ^BSESN
   if (market === 'us') return symbol;
   return symbol.endsWith('.NS') || symbol.endsWith('.BO') ? symbol : `${symbol}.NS`;
 }

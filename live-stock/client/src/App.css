@@ -329,6 +329,13 @@
   text-align: left;
 }
 
+.header-index-item-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
 .header-index-item + .header-index-item {
   border-left: 1px solid #d4d4d8;
   padding-left: 0.65rem;
@@ -376,6 +383,13 @@
 
 .header-index-points--flat {
   color: #71717a;
+}
+
+.header-index-points-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
 
 .stock-search-panel {
