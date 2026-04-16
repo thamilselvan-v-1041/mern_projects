@@ -1000,33 +1000,33 @@ async function computeAndCacheTopStocksBySegment(limit = DEFAULT_LIMIT, segmentF
   if (inFlight) return inFlight;
 
   stocksCacheInFlight[cacheKey] = (async () => {
-    // 1. Individual quotes via v8 chart (no cookies) + NSE/Yahoo fallback - most reliable
-    const lists = market === 'us' ? getStockListsForUS() : await getStockListsBySegment();
+  // 1. Individual quotes via v8 chart (no cookies) + NSE/Yahoo fallback - most reliable
+  const lists = market === 'us' ? getStockListsForUS() : await getStockListsBySegment();
     const listsToUse = Array.isArray(segmentFilter)
       ? Object.fromEntries(segmentFilter.map((s) => [s, lists[s] || []]))
       : segmentFilter && SEGMENTS.includes(segmentFilter)
-        ? { [segmentFilter]: lists[segmentFilter] || [] }
-        : lists;
-    let segmentData = await processAllSegmentsDeduplicated(listsToUse, limit, market);
+    ? { [segmentFilter]: lists[segmentFilter] || [] }
+    : lists;
+  let segmentData = await processAllSegmentsDeduplicated(listsToUse, limit, market);
 
-    const hasData = SEGMENTS.some((seg) =>
-      (segmentData[seg]?.topGainers?.length || 0) + (segmentData[seg]?.topLosers?.length || 0) > 0
-    );
+  const hasData = SEGMENTS.some((seg) =>
+    (segmentData[seg]?.topGainers?.length || 0) + (segmentData[seg]?.topLosers?.length || 0) > 0
+  );
 
-    // 2. Try Yahoo screener only if individual fetches returned nothing
-    if (!hasData) {
-      const screenerData = await getStocksViaScreener(market, Math.min(limit, 50));
-      if (screenerData) segmentData = screenerData;
+  // 2. Try Yahoo screener only if individual fetches returned nothing
+  if (!hasData) {
+    const screenerData = await getStocksViaScreener(market, Math.min(limit, 50));
+    if (screenerData) segmentData = screenerData;
+  }
+
+  SEGMENTS.forEach((seg) => {
+    if (!segmentData[seg]) {
+      segmentData[seg] = { topGainers: [], topLosers: [] };
     }
-
-    SEGMENTS.forEach((seg) => {
-      if (!segmentData[seg]) {
-        segmentData[seg] = { topGainers: [], topLosers: [] };
-      }
-    });
-    stocksCacheByLimit[cacheKey] = segmentData;
-    stocksCacheTimeByLimit[cacheKey] = Date.now();
-    return segmentData;
+  });
+  stocksCacheByLimit[cacheKey] = segmentData;
+  stocksCacheTimeByLimit[cacheKey] = Date.now();
+  return segmentData;
   })();
 
   try {
@@ -1820,6 +1820,7 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
     // 2. Try Alpha Vantage when API key is set (US stocks or fallback)
     let result = market === 'in' ? await getFundamentalsViaScreener(yfSymbol, fmt, fmtPct, fmtIndian) : null;
     if (!result) result = await getFundamentalsViaAlphaVantage(yfSymbol, market);
+    const advanced = await fetchAdvancedFundamentals(symbol, market).catch(() => null);
     // 2. Get chart data (volume, day range, price) - merge or use as fallback
     const chartData = await getFundamentalsViaChart(yfSymbol);
     if (chartData) {
@@ -1836,6 +1837,26 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
       result.symbol = result.symbol || chartData.symbol || symbol;
     }
     if (!result) result = chartData;
+    if (advanced) {
+      result = result || {};
+      const useAdv = (v) => v != null && v !== '';
+      if (useAdv(advanced.bookValue)) result.bookValue = fmt(advanced.bookValue);
+      if (useAdv(advanced.priceToBook)) result.priceToBook = fmt(advanced.priceToBook);
+      if (useAdv(advanced.returnOnEquity)) result.returnOnEquity = `${Number(advanced.returnOnEquity).toFixed(2)}%`;
+      if (useAdv(advanced.returnOnAssets)) result.returnOnAssets = `${Number(advanced.returnOnAssets).toFixed(2)}%`;
+      if (useAdv(advanced.debtToEquity)) result.debtToEquity = fmt(advanced.debtToEquity);
+      if (useAdv(advanced.revenueGrowth)) result.revenueGrowth = `${Number(advanced.revenueGrowth).toFixed(2)}%`;
+      if (useAdv(advanced.earningsGrowth)) result.earningsGrowth = `${Number(advanced.earningsGrowth).toFixed(2)}%`;
+      if (useAdv(advanced.operatingMargins)) result.operatingMargins = `${Number(advanced.operatingMargins).toFixed(2)}%`;
+      if (useAdv(advanced.profitMargins)) result.profitMargins = `${Number(advanced.profitMargins).toFixed(2)}%`;
+      if (useAdv(advanced.currentRatio)) result.currentRatio = fmt(advanced.currentRatio);
+      if (useAdv(advanced.quickRatio)) result.quickRatio = fmt(advanced.quickRatio);
+      if (useAdv(advanced.freeCashflow)) result.freeCashflow = String(advanced.freeCashflow);
+      if (useAdv(advanced.payoutRatio)) result.payoutRatio = `${Number(advanced.payoutRatio).toFixed(2)}%`;
+      if (useAdv(advanced.fiveYearAvgDividendYield)) result.fiveYearAvgDividendYield = fmt(advanced.fiveYearAvgDividendYield);
+      if (useAdv(advanced.beta)) result.beta = fmt(advanced.beta);
+      if (useAdv(advanced.shortRatio)) result.shortRatio = fmt(advanced.shortRatio);
+    }
     if (!result) return res.status(500).json({ error: 'Could not fetch fundamentals' });
     res.json(result);
   } catch (err) {
@@ -3434,15 +3455,532 @@ function computeDeterministicNextDayPrice(currentPrice, momentum7d, atrPct, emaT
   return +(base * (1 + boundedPct / 100)).toFixed(2);
 }
 
-async function getStockPrediction(symbol, market, stockMeta, periodDays = 7, clientFundamentals = null, clientAnalysis = null, clientHistory3y = null, predictionLevel = 'medium') {
-  if (!groq) {
-    return { error: 'Prediction requires GROQ_API_KEY in .env' };
+function parseLooseNumber(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(String(v).replace(/[^\d.-]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function parseMarketCapValue(raw, market = 'in') {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s) return null;
+  const num = Number(s.replace(/,/g, '').replace(/[^\d.-]/g, ''));
+  if (!Number.isFinite(num)) return null;
+  if (/cr\b/i.test(s)) return num * 1e7;
+  if (/l\b/i.test(s)) return num * 1e5;
+  if (/b\b/i.test(s)) return num * 1e9;
+  if (/m\b/i.test(s)) return num * 1e6;
+  if (/k\b/i.test(s)) return num * 1e3;
+  if (market === 'in' && num < 1000000) return num * 1e7;
+  return num;
+}
+
+function getCapProfile(marketCapRaw, market = 'in') {
+  const marketCap = parseMarketCapValue(marketCapRaw, market);
+  if (!Number.isFinite(marketCap) || marketCap <= 0) {
+    return {
+      bucket: 'unknown',
+      peGood: 20,
+      peRich: 34,
+      pbGood: 2,
+      pbRich: 4.5,
+      revGrowthGood: 10,
+      earnGrowthGood: 12,
+      roeGood: 14,
+      opMarginGood: 14,
+      debtRisk: 1.25,
+      betaRisk: 1.8,
+      moveCap: 1,
+      confidenceBias: 0,
+    };
   }
 
-  const yfSymbol = toYahooSymbol(symbol, market);
+  if (market === 'in') {
+    const crore = marketCap / 1e7;
+    if (crore >= 20000) {
+      return {
+        bucket: 'large',
+        peGood: 22,
+        peRich: 34,
+        pbGood: 3.2,
+        pbRich: 6,
+        revGrowthGood: 8,
+        earnGrowthGood: 10,
+        roeGood: 14,
+        opMarginGood: 15,
+        debtRisk: 1.2,
+        betaRisk: 1.4,
+        moveCap: 0.75,
+        confidenceBias: 6,
+      };
+    }
+    if (crore >= 5000) {
+      return {
+        bucket: 'mid',
+        peGood: 24,
+        peRich: 38,
+        pbGood: 3,
+        pbRich: 5.8,
+        revGrowthGood: 10,
+        earnGrowthGood: 12,
+        roeGood: 14,
+        opMarginGood: 14,
+        debtRisk: 1.35,
+        betaRisk: 1.6,
+        moveCap: 0.9,
+        confidenceBias: 3,
+      };
+    }
+    if (crore >= 1000) {
+      return {
+        bucket: 'small',
+        peGood: 28,
+        peRich: 45,
+        pbGood: 3.8,
+        pbRich: 7,
+        revGrowthGood: 12,
+        earnGrowthGood: 15,
+        roeGood: 15,
+        opMarginGood: 13,
+        debtRisk: 1.5,
+        betaRisk: 1.9,
+        moveCap: 1.1,
+        confidenceBias: -1,
+      };
+    }
+    return {
+      bucket: 'micro',
+      peGood: 32,
+      peRich: 52,
+      pbGood: 4.5,
+      pbRich: 8,
+      revGrowthGood: 14,
+      earnGrowthGood: 18,
+      roeGood: 16,
+      opMarginGood: 12,
+      debtRisk: 1.7,
+      betaRisk: 2.2,
+      moveCap: 1.2,
+      confidenceBias: -5,
+    };
+  }
 
-  // 1. Use client-supplied 3Y chart data if available (already cached, no re-fetch needed)
-  //    Otherwise fetch from Yahoo Finance
+  if (marketCap >= 1e10) {
+    return { bucket: 'large', peGood: 24, peRich: 36, pbGood: 4, pbRich: 7, revGrowthGood: 8, earnGrowthGood: 10, roeGood: 14, opMarginGood: 16, debtRisk: 1.2, betaRisk: 1.5, moveCap: 0.8, confidenceBias: 5 };
+  }
+  if (marketCap >= 2e9) {
+    return { bucket: 'mid', peGood: 26, peRich: 40, pbGood: 4, pbRich: 7.5, revGrowthGood: 10, earnGrowthGood: 12, roeGood: 14, opMarginGood: 14, debtRisk: 1.35, betaRisk: 1.7, moveCap: 0.95, confidenceBias: 2 };
+  }
+  if (marketCap >= 3e8) {
+    return { bucket: 'small', peGood: 30, peRich: 48, pbGood: 4.5, pbRich: 8, revGrowthGood: 12, earnGrowthGood: 15, roeGood: 15, opMarginGood: 13, debtRisk: 1.5, betaRisk: 2, moveCap: 1.1, confidenceBias: -2 };
+  }
+  return { bucket: 'micro', peGood: 34, peRich: 55, pbGood: 5, pbRich: 9, revGrowthGood: 15, earnGrowthGood: 18, roeGood: 16, opMarginGood: 12, debtRisk: 1.7, betaRisk: 2.4, moveCap: 1.25, confidenceBias: -6 };
+}
+
+function getSectorProfile(sectorRaw) {
+  const sector = String(sectorRaw || '').trim();
+  switch (sector) {
+    case 'Financials':
+      return {
+        peDelta: -1,
+        pbDelta: 1.6,
+        revGrowthDelta: -2,
+        earnGrowthDelta: -1,
+        roeDelta: 2,
+        opMarginDelta: -2,
+        debtRiskDelta: 0.9,
+        betaRiskDelta: -0.1,
+        moveCapDelta: 0.05,
+        confidenceBias: 2,
+        posHighPenaltyAt: 0.86,
+        rsiOverboughtDelta: -2,
+        rsiOversoldDelta: 1,
+      };
+    case 'Consumption':
+      return {
+        peDelta: 4,
+        pbDelta: 1.2,
+        revGrowthDelta: -1,
+        earnGrowthDelta: -1,
+        roeDelta: 1,
+        opMarginDelta: 1,
+        debtRiskDelta: -0.1,
+        betaRiskDelta: -0.15,
+        moveCapDelta: -0.08,
+        confidenceBias: 3,
+        posHighPenaltyAt: 0.9,
+        rsiOverboughtDelta: 2,
+        rsiOversoldDelta: 0,
+      };
+    case 'Tech & Communication':
+      return {
+        peDelta: 5,
+        pbDelta: 1.5,
+        revGrowthDelta: 2,
+        earnGrowthDelta: 2,
+        roeDelta: 1,
+        opMarginDelta: 2,
+        debtRiskDelta: -0.25,
+        betaRiskDelta: 0.1,
+        moveCapDelta: 0,
+        confidenceBias: 1,
+        posHighPenaltyAt: 0.92,
+        rsiOverboughtDelta: 1,
+        rsiOversoldDelta: -1,
+      };
+    case 'Energy & Utilities':
+      return {
+        peDelta: -3,
+        pbDelta: -0.2,
+        revGrowthDelta: -1,
+        earnGrowthDelta: -1,
+        roeDelta: 0,
+        opMarginDelta: 1,
+        debtRiskDelta: 0.35,
+        betaRiskDelta: 0.05,
+        moveCapDelta: 0.02,
+        confidenceBias: 0,
+        posHighPenaltyAt: 0.84,
+        rsiOverboughtDelta: -1,
+        rsiOversoldDelta: 1,
+      };
+    case 'Healthcare':
+      return {
+        peDelta: 3,
+        pbDelta: 1,
+        revGrowthDelta: 1,
+        earnGrowthDelta: 1,
+        roeDelta: 1,
+        opMarginDelta: 1,
+        debtRiskDelta: -0.2,
+        betaRiskDelta: -0.05,
+        moveCapDelta: -0.02,
+        confidenceBias: 1,
+        posHighPenaltyAt: 0.9,
+        rsiOverboughtDelta: 0,
+        rsiOversoldDelta: 0,
+      };
+    case 'Industrials':
+      return {
+        peDelta: 1,
+        pbDelta: 0.3,
+        revGrowthDelta: 1,
+        earnGrowthDelta: 1,
+        roeDelta: 0,
+        opMarginDelta: 0,
+        debtRiskDelta: 0.15,
+        betaRiskDelta: 0.15,
+        moveCapDelta: 0.08,
+        confidenceBias: 0,
+        posHighPenaltyAt: 0.88,
+        rsiOverboughtDelta: 0,
+        rsiOversoldDelta: 0,
+      };
+    case 'Services':
+      return {
+        peDelta: 1,
+        pbDelta: 0.5,
+        revGrowthDelta: 0,
+        earnGrowthDelta: 0,
+        roeDelta: 0,
+        opMarginDelta: 0,
+        debtRiskDelta: 0,
+        betaRiskDelta: 0,
+        moveCapDelta: 0,
+        confidenceBias: 0,
+        posHighPenaltyAt: 0.88,
+        rsiOverboughtDelta: 0,
+        rsiOversoldDelta: 0,
+      };
+    default:
+      return {
+        peDelta: 0,
+        pbDelta: 0,
+        revGrowthDelta: 0,
+        earnGrowthDelta: 0,
+        roeDelta: 0,
+        opMarginDelta: 0,
+        debtRiskDelta: 0,
+        betaRiskDelta: 0,
+        moveCapDelta: 0,
+        confidenceBias: 0,
+        posHighPenaltyAt: 0.88,
+        rsiOverboughtDelta: 0,
+        rsiOversoldDelta: 0,
+      };
+  }
+}
+
+function scoreNewsSentiment(text) {
+  const raw = String(text || '').toLowerCase();
+  if (!raw.trim()) {
+    return { score: 0, label: 'neutral', hits: [] };
+  }
+
+  const positivePhrases = [
+    'beats estimates', 'beat estimates', 'strong demand', 'order win', 'new order',
+    'contract win', 'approval', 'approves', 'upgrade', 'outperform', 'buy rating',
+    'record profit', 'profit rises', 'margin expansion', 'growth accelerates',
+    'guidance raised', 'capex plan', 'market share gains', 'healthy outlook',
+    'bullish', 'recovery', 'turnaround', 'strong earnings', 'stake increase',
+    'dividend hike', 'bonus issue', 'debt reduction', 'robust demand'
+  ];
+  const negativePhrases = [
+    'misses estimates', 'missed estimates', 'downgrade', 'underperform', 'sell rating',
+    'profit falls', 'margin pressure', 'weak demand', 'investigation', 'penalty',
+    'lawsuit', 'default', 'debt concern', 'guidance cut', 'stake sale', 'pledge',
+    'regulatory action', 'warning letter', 'loss widens', 'bearish', 'fraud',
+    'delay', 'cancellation', 'outflow', 'slump', 'headwinds', 'cost pressure'
+  ];
+
+  let score = 0;
+  const hits = [];
+  for (const phrase of positivePhrases) {
+    if (raw.includes(phrase)) {
+      score += 1;
+      if (hits.length < 4) hits.push(`+ ${phrase}`);
+    }
+  }
+  for (const phrase of negativePhrases) {
+    if (raw.includes(phrase)) {
+      score -= 1;
+      if (hits.length < 4) hits.push(`- ${phrase}`);
+    }
+  }
+
+  const bounded = Math.max(-4, Math.min(4, score));
+  const label = bounded >= 2 ? 'positive' : bounded <= -2 ? 'negative' : 'neutral';
+  return { score: bounded, label, hits };
+}
+
+function extractNewsLines(text, maxItems = 6) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 20)
+    .filter((line) => /^(summary:|answer:|definition:|search snippet:|result:)/i.test(line))
+    .slice(0, maxItems);
+}
+
+function buildTickertapeStylePrediction(args) {
+  const {
+    currentPrice,
+    clampedDays,
+    predictionLevel,
+    momentum7d,
+    cagr3y,
+    fundamentals,
+    advFundamentals,
+    emaData,
+    rsi,
+    macd,
+    bollinger,
+    atr,
+    srLevels,
+    cycleAnalysis,
+    marketIndexContext,
+    market,
+    marketCapRaw,
+    sector,
+    newsSentiment,
+  } = args;
+
+  const pe = parseLooseNumber(fundamentals?.pe);
+  const fpe = parseLooseNumber(fundamentals?.forwardPE);
+  const divY = parseLooseNumber(fundamentals?.dividendYield);
+  const high52 = parseLooseNumber(fundamentals?.fiftyTwoWeekHigh);
+  const low52 = parseLooseNumber(fundamentals?.fiftyTwoWeekLow);
+  const pb = parseLooseNumber(advFundamentals?.priceToBook);
+  const roe = parseLooseNumber(advFundamentals?.returnOnEquity);
+  const revGrowth = parseLooseNumber(advFundamentals?.revenueGrowth);
+  const earnGrowth = parseLooseNumber(advFundamentals?.earningsGrowth);
+  const opMargin = parseLooseNumber(advFundamentals?.operatingMargins);
+  const profitMargin = parseLooseNumber(advFundamentals?.profitMargins);
+  const debtToEquity = parseLooseNumber(advFundamentals?.debtToEquity);
+  const currentRatio = parseLooseNumber(advFundamentals?.currentRatio);
+  const payoutRatio = parseLooseNumber(advFundamentals?.payoutRatio);
+  const beta = parseLooseNumber(advFundamentals?.beta);
+  const capProfile = getCapProfile(marketCapRaw ?? fundamentals?.marketCap, market);
+  const sectorProfile = getSectorProfile(sector);
+  const companyNewsScore = Number(newsSentiment?.company?.score || 0);
+  const sectorNewsScore = Number(newsSentiment?.sector?.score || 0);
+  const macroNewsScore = Number(newsSentiment?.macro?.score || 0);
+  const blendedNewsScore = (companyNewsScore * 0.5) + (sectorNewsScore * 0.3) + (macroNewsScore * 0.2);
+  const pos52 = currentPrice > 0 && low52 != null && high52 != null && high52 > low52
+    ? (currentPrice - low52) / (high52 - low52)
+    : 0.5;
+
+  let valuationScore = 0;
+  if (pe != null) {
+    if (pe <= (capProfile.peGood + sectorProfile.peDelta)) valuationScore += 1.2;
+    else if (pe >= (capProfile.peRich + sectorProfile.peDelta)) valuationScore -= 1.2;
+  }
+  if (fpe != null && pe != null) {
+    if (fpe < pe) valuationScore += 0.6;
+    else if (fpe > pe * 1.12) valuationScore -= 0.5;
+  }
+  if (pb != null) {
+    if (pb <= (capProfile.pbGood + sectorProfile.pbDelta)) valuationScore += 0.6;
+    else if (pb >= (capProfile.pbRich + sectorProfile.pbDelta)) valuationScore -= 0.6;
+  }
+  if (divY != null) {
+    if (divY >= 3) valuationScore += 0.4;
+    else if (divY === 0 && (pe ?? 0) > (capProfile.peGood + sectorProfile.peDelta + 8)) valuationScore -= 0.3;
+  }
+  if (pos52 <= 0.28) valuationScore += 0.85;
+  else if (pos52 >= (sectorProfile.posHighPenaltyAt ?? (capProfile.bucket === 'large' ? 0.82 : 0.88))) valuationScore -= 0.65;
+
+  let growthScore = 0;
+  if (revGrowth != null) {
+    if (revGrowth >= (capProfile.revGrowthGood + sectorProfile.revGrowthDelta)) growthScore += 0.8;
+    else if (revGrowth < 0) growthScore -= 0.8;
+  }
+  if (earnGrowth != null) {
+    if (earnGrowth >= (capProfile.earnGrowthGood + sectorProfile.earnGrowthDelta)) growthScore += 1.3;
+    else if (earnGrowth >= 5) growthScore += 0.6;
+    else if (earnGrowth < 0) growthScore -= 1.2;
+  }
+  if (cagr3y != null) {
+    if (cagr3y >= (capProfile.bucket === 'large' ? 12 : capProfile.bucket === 'mid' ? 14 : 16)) growthScore += 0.8;
+    else if (cagr3y < 3) growthScore -= 0.5;
+  }
+
+  let profitabilityScore = 0;
+  if (roe != null) {
+    if (roe >= (capProfile.roeGood + sectorProfile.roeDelta)) profitabilityScore += 1.2;
+    else if (roe >= 10) profitabilityScore += 0.6;
+    else if (roe < 6) profitabilityScore -= 0.7;
+  }
+  if (opMargin != null) {
+    if (opMargin >= (capProfile.opMarginGood + sectorProfile.opMarginDelta)) profitabilityScore += 0.8;
+    else if (opMargin < 8) profitabilityScore -= 0.5;
+  }
+  if (profitMargin != null) {
+    if (profitMargin >= 10) profitabilityScore += 0.8;
+    else if (profitMargin < 5) profitabilityScore -= 0.6;
+  }
+  if (debtToEquity != null) {
+    if (debtToEquity >= (capProfile.debtRisk + sectorProfile.debtRiskDelta)) profitabilityScore -= 1.0;
+    else if (debtToEquity <= 0.5) profitabilityScore += 0.3;
+  }
+
+  let technicalScore = 0;
+  if (emaData?.trend?.toLowerCase().includes('bull')) technicalScore += 0.9;
+  if (emaData?.trend?.toLowerCase().includes('bear')) technicalScore -= 0.9;
+  if (Number.isFinite(Number(momentum7d))) {
+    const momentumTrigger = capProfile.bucket === 'large' ? 1.2 : capProfile.bucket === 'mid' ? 1.6 : 2.2;
+    if (momentum7d >= momentumTrigger) technicalScore += 0.8;
+    else if (momentum7d <= -momentumTrigger) technicalScore -= 0.8;
+  }
+  if (rsi?.value != null) {
+    const oversold = capProfile.bucket === 'large' ? 38 : 34;
+    const overbought = capProfile.bucket === 'large' ? 68 : 72;
+    if (rsi.value <= (oversold + sectorProfile.rsiOversoldDelta)) technicalScore += 0.6;
+    else if (rsi.value >= (overbought + sectorProfile.rsiOverboughtDelta)) technicalScore -= 0.8;
+    else if (rsi.value >= 45 && rsi.value <= 60) technicalScore += 0.2;
+  }
+  if (macd?.trend?.toLowerCase().includes('bull')) technicalScore += 0.4;
+  if (macd?.trend?.toLowerCase().includes('bear')) technicalScore -= 0.4;
+  if (bollinger?.zone?.toLowerCase().includes('lower')) technicalScore += 0.3;
+  if (bollinger?.zone?.toLowerCase().includes('upper')) technicalScore -= 0.3;
+  if (cycleAnalysis?.regime === 'bullish') technicalScore += 0.4;
+  if (cycleAnalysis?.regime === 'bearish') technicalScore -= 0.4;
+  if (marketIndexContext.includes('Nifty50:+') || marketIndexContext.includes('Sensex:+')) technicalScore += 0.15;
+  if (marketIndexContext.includes('Nifty50:-') || marketIndexContext.includes('Sensex:-')) technicalScore -= 0.15;
+  technicalScore += Math.max(-0.55, Math.min(0.55, blendedNewsScore * 0.18));
+
+  const composite =
+    (valuationScore * 0.28) +
+    (growthScore * 0.28) +
+    (profitabilityScore * 0.22) +
+    (technicalScore * 0.22);
+
+  const annualizedExpectedPct = Math.max(-18, Math.min(24, composite * 5.2));
+  const horizonPctBase = annualizedExpectedPct * (clampedDays / 252);
+  const levelMultiplier = predictionLevel === 'low' ? 0.8 : predictionLevel === 'high' ? 1.12 : 1;
+  const horizonPct = horizonPctBase * levelMultiplier;
+  const atrCap = Math.max(1.2, Math.min(12, Number(atr?.atrPct ?? 1.2) * Math.sqrt(Math.max(1, clampedDays)) * (capProfile.moveCap + sectorProfile.moveCapDelta)));
+  const boundedTargetPct = Math.max(-atrCap, Math.min(atrCap, horizonPct));
+  const targetPrice = currentPrice * (1 + (boundedTargetPct / 100));
+
+  const series = [];
+  let prev = currentPrice;
+  const baseDailyPct = boundedTargetPct / Math.max(1, clampedDays);
+  for (let day = 1; day <= clampedDays; day += 1) {
+    const progress = day / clampedDays;
+    let dailyPct = baseDailyPct;
+    if (rsi?.value >= 72 && day <= Math.min(4, clampedDays)) dailyPct -= 0.12;
+    if (rsi?.value <= 32 && day <= Math.min(4, clampedDays)) dailyPct += 0.12;
+    if (cycleAnalysis?.currentPhase === 'decline') dailyPct -= 0.03;
+    if (cycleAnalysis?.currentPhase === 'rally') dailyPct += 0.03;
+    dailyPct += (progress - 0.5) * 0.02;
+    const maxDailyMove = Math.max(0.2, Math.min(2.4, Number(atr?.atrPct ?? 1.2) * (capProfile.moveCap + sectorProfile.moveCapDelta)));
+    dailyPct = Math.max(-maxDailyMove, Math.min(maxDailyMove, dailyPct));
+    prev = +(prev * (1 + dailyPct / 100)).toFixed(2);
+    series.push(prev);
+  }
+  if (series.length) series[series.length - 1] = +targetPrice.toFixed(2);
+
+  const summaryParts = [];
+  if (boundedTargetPct > 1.5) summaryParts.push(`Forecast leans bullish with an estimated ${boundedTargetPct.toFixed(2)}% move over the selected period`);
+  else if (boundedTargetPct < -1.5) summaryParts.push(`Forecast leans bearish with an estimated ${boundedTargetPct.toFixed(2)}% move over the selected period`);
+  else summaryParts.push(`Forecast remains balanced with a muted ${boundedTargetPct.toFixed(2)}% expected move over the selected period`);
+  if (valuationScore > 0.8) summaryParts.push(`${capProfile.bucket} cap ${sector ? sector.toLowerCase() : ''} valuation and current price positioning support the outlook`.replace(/\s+/g, ' ').trim());
+  else if (valuationScore < -0.8) summaryParts.push(`${capProfile.bucket} cap ${sector ? sector.toLowerCase() : ''} valuation looks rich and price location near highs limits upside`.replace(/\s+/g, ' ').trim());
+  else if (growthScore > 0.8) summaryParts.push('forward growth signals remain supportive');
+  else if (technicalScore < -0.6) summaryParts.push('technical conditions remain cautious');
+  if (blendedNewsScore >= 1.5) summaryParts.push('recent live news flow is supportive');
+  else if (blendedNewsScore <= -1.5) summaryParts.push('recent live news flow is cautious');
+
+  const keyFactors = [
+    valuationScore > 0.8 ? 'Valuation supportive: multiples and 52W position look favorable' : null,
+    valuationScore < -0.8 ? 'Valuation stretched: price is near highs or multiples are rich' : null,
+    growthScore > 0.8 ? 'Growth tailwind: revenue and earnings trends support forward expectations' : null,
+    growthScore < -0.8 ? 'Growth drag: forward revenue and earnings trends are weak' : null,
+    profitabilityScore > 0.8 ? 'Profitability stable: ROE, margins, and balance-sheet quality remain supportive' : null,
+    profitabilityScore < -0.8 ? 'Profitability risk: leverage or weak margins reduce conviction' : null,
+    technicalScore > 0.8 ? 'Technical setup constructive: momentum, EMA trend, and RSI support upside' : null,
+    technicalScore < -0.8 ? 'Technical setup weak: RSI, momentum, or trend warn of caution' : null,
+    (currentRatio != null && currentRatio < 1) ? 'Liquidity remains tight with current ratio below 1' : null,
+    (beta != null && beta >= (capProfile.betaRisk + sectorProfile.betaRiskDelta)) ? 'Volatility remains elevated versus the broader market' : null,
+    (payoutRatio != null && payoutRatio > 90) ? 'Very high payout ratio may limit reinvestment flexibility' : null,
+    blendedNewsScore >= 1.5 ? 'Live news sentiment is supportive across company, sector, or market context' : null,
+    blendedNewsScore <= -1.5 ? 'Live news sentiment is weak across company, sector, or market context' : null,
+    capProfile.bucket !== 'unknown' ? `Profile applied: ${capProfile.bucket}-cap${sector ? `, ${sector}` : ''} thresholds are used` : null,
+  ].filter(Boolean).slice(0, 4);
+
+  const trend = boundedTargetPct > 0.8 ? 'bullish' : boundedTargetPct < -0.8 ? 'bearish' : 'neutral';
+  const confidenceBase = 48
+    + Math.min(18, Math.abs(composite) * 6)
+    + (valuationScore * growthScore > 0 ? 6 : 0)
+    + (technicalScore * growthScore > 0 ? 4 : 0)
+    - ((rsi?.value >= 75 || rsi?.value <= 25) ? 4 : 0)
+    + capProfile.confidenceBias
+    + sectorProfile.confidenceBias
+    + Math.max(-4, Math.min(4, blendedNewsScore * 1.2));
+  const confidence = Math.max(35, Math.min(82, Math.round(confidenceBase)));
+
+  return {
+    predictedPrices: series,
+    trend,
+    confidence,
+    summary: `${summaryParts.join('. ')}.`,
+    keyFactors,
+    support: srLevels?.supports?.[0] ?? null,
+    resistance: srLevels?.resistances?.[0] ?? null,
+  };
+}
+
+async function getStockPrediction(symbol, market, stockMeta, periodDays = 7, clientFundamentals = null, clientAnalysis = null, clientHistory3y = null, predictionLevel = 'medium') {
+  const yfSymbol = toYahooSymbol(symbol, market);
+  const companyName = String(stockMeta?.name || symbol).trim();
+  const sector = String(stockMeta?.sector || clientFundamentals?.sector || '').trim();
+
   let history = [];
   if (Array.isArray(clientHistory3y) && clientHistory3y.length > 100) {
     history = clientHistory3y;
@@ -3454,7 +3992,6 @@ async function getStockPrediction(symbol, market, stockMeta, periodDays = 7, cli
     }
   }
 
-  // 2. Use client-provided fundamentals (already fetched & rich) or fall back to a quick fetch
   let fundamentals = clientFundamentals;
   if (!fundamentals || Object.keys(fundamentals).length === 0) {
     try {
@@ -3487,92 +4024,36 @@ async function getStockPrediction(symbol, market, stockMeta, periodDays = 7, cli
     }
   }
 
-  // 3. Fetch sector/company news context (DuckDuckGo — last 3 months context)
-  const sector = stockMeta?.sector || '';
-  const companyName = stockMeta?.name || symbol;
-  const newsQuery = `${companyName} ${sector} stock news outlook 2025`;
-  let newsContext = '';
-  try {
-    const ddgParts = await fetchDuckDuckGoContextForCompany(newsQuery);
-    newsContext = (Array.isArray(ddgParts) ? ddgParts : [ddgParts])
-      .filter(Boolean)
-      .slice(0, 12)
-      .join('\n');
-  } catch (e) {
-    console.warn('[predict] news fetch failed:', e.message);
-  }
-
-  // 4. Summarise price data for Groq (last 90 days + annual stats)
   const recentHistory = history.slice(-90);
   const prices = recentHistory.map((h) => h.close);
   const currentPrice = stockMeta?.price ?? prices[prices.length - 1] ?? 0;
-  const avg90 = prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : currentPrice;
-  const max90 = prices.length ? Math.max(...prices) : currentPrice;
-  const min90 = prices.length ? Math.min(...prices) : currentPrice;
-
-  // Simple momentum: last 7 days vs prior 7 days
   const last7 = prices.slice(-7);
   const prev7 = prices.slice(-14, -7);
   const last7Avg = last7.length ? last7.reduce((a, b) => a + b, 0) / last7.length : currentPrice;
   const prev7Avg = prev7.length ? prev7.reduce((a, b) => a + b, 0) / prev7.length : currentPrice;
   const momentum7d = prev7Avg > 0 ? ((last7Avg - prev7Avg) / prev7Avg) * 100 : 0;
-
-  // 3-year CAGR
   const oldest = history[0]?.close;
   const newest = history[history.length - 1]?.close ?? currentPrice;
   const years = history.length / 252;
   const cagr3y = oldest && years > 0 ? ((newest / oldest) ** (1 / years) - 1) * 100 : null;
-
-  // Adaptive price sample — daily for short-term, weekly for long-term (saves tokens)
-  // ─── Trading day count ───────────────────────────────────────────────────────
   const tradingDaysPerMonth = 21;
   const totalDays = Math.round((periodDays / 30) * tradingDaysPerMonth);
   const clampedDays = Math.max(7, Math.min(260, totalDays));
 
-  // ─── Shared computed stats ────────────────────────────────────────────────────
-  const priceNow = Number(currentPrice).toFixed(2);
-  const pctFrom52High = fundamentals?.fiftyTwoWeekHigh
-    ? (((currentPrice - parseFloat(fundamentals.fiftyTwoWeekHigh)) / parseFloat(fundamentals.fiftyTwoWeekHigh)) * 100).toFixed(1)
-    : null;
-  const pctFrom52Low = fundamentals?.fiftyTwoWeekLow
-    ? (((currentPrice - parseFloat(fundamentals.fiftyTwoWeekLow)) / parseFloat(fundamentals.fiftyTwoWeekLow)) * 100).toFixed(1)
-    : null;
-
-  // ─── Worst drawdowns (3Y) ─────────────────────────────────────────────────────
-  let worstDrawdowns = 'N/A';
-  if (history.length > 20) {
-    const closes3y = history.map((h) => h.close);
-    const drawdowns = [];
-    let peak = closes3y[0];
-    let peakIdx = 0;
-    for (let i = 1; i < closes3y.length; i++) {
-      if (closes3y[i] > peak) { peak = closes3y[i]; peakIdx = i; }
-      const dd = ((closes3y[i] - peak) / peak) * 100;
-      drawdowns.push({ dd, date: history[i].date, peakDate: history[peakIdx].date });
-    }
-    drawdowns.sort((a, b) => a.dd - b.dd);
-    worstDrawdowns = drawdowns.slice(0, 3).map((d) => `${d.peakDate}\u2192${d.date}:${d.dd.toFixed(1)}%`).join(' | ');
-  }
-
-  // ─── All technical indicators + cycle + advanced fundamentals ─────────────────
   const closes = history.map((h) => Number(h.close)).filter(Number.isFinite);
-
   const [cycleAnalysis, advFundamentals] = await Promise.all([
     Promise.resolve(computePriceCycleAnalysis(history, fundamentals)),
-    predictionLevel !== 'low' ? fetchAdvancedFundamentals(symbol, market) : Promise.resolve(null),
+    fetchAdvancedFundamentals(symbol, market).catch(() => null),
   ]);
+  const emaData = computeAllEMAs(closes);
+  const rsi = computeRSI(closes);
+  const macd = computeMACD(closes);
+  const bollinger = computeBollingerBands(closes);
+  const atr = computeATR(history);
+  const srLevels = computeSupportResistanceLevels(history);
 
-  const emaData   = computeAllEMAs(closes);
-  const rsi       = computeRSI(closes);
-  const macd      = predictionLevel !== 'low' ? computeMACD(closes)              : null;
-  const bollinger = predictionLevel !== 'low' ? computeBollingerBands(closes)    : null;
-  const atr       = computeATR(history);
-  const volumeData= predictionLevel !== 'low' ? computeVolumeAnalysis(history)   : null;
-  const srLevels  = computeSupportResistanceLevels(history);
-
-  // ─── Market index (Nifty/Sensex) — medium & high only ─────────────────────────
   let marketIndexContext = '';
-  if (market !== 'us' && predictionLevel !== 'low') {
+  if (market !== 'us') {
     try {
       const [niftyQ, sensexQ] = await Promise.all([
         fetchQuote('^NSEI').catch(() => null),
@@ -3582,221 +4063,69 @@ async function getStockPrediction(symbol, market, stockMeta, periodDays = 7, cli
         ? `${name}:${q.regularMarketChangePercent >= 0 ? '+' : ''}${Number(q.regularMarketChangePercent).toFixed(2)}%`
         : null;
       marketIndexContext = [fmtIndex(niftyQ, 'Nifty50'), fmtIndex(sensexQ, 'Sensex')].filter(Boolean).join(' ');
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
-  // ─── HIGH level: fetch extra internet context (macro + analyst targets) ────────
-  let extraHighContext = '';
-  if (predictionLevel === 'high') {
+  let newsSentiment = {
+    company: { score: 0, label: 'neutral', hits: [] },
+    sector: { score: 0, label: 'neutral', hits: [] },
+    macro: { score: 0, label: 'neutral', hits: [] },
+  };
+  let liveNews = {
+    company: [] ,
+    sector: [],
+    macro: [],
+  };
+  if (predictionLevel !== 'low') {
     try {
-      const [macroNews, analystNews] = await Promise.all([
-        fetchDuckDuckGoContextForCompany(`${market === 'in' ? 'India' : 'US'} stock market outlook macro 2025`).catch(() => ''),
-        fetchDuckDuckGoContextForCompany(`${companyName} analyst target price forecast 2025`).catch(() => ''),
+      const companyQuery = `${companyName} stock news results outlook`;
+      const sectorQuery = `${sector || 'India stock sector'} sector news outlook ${market === 'in' ? 'India' : 'US'}`;
+      const macroQuery = `${market === 'in' ? 'India stock market news outlook nifty sensex' : 'US stock market news outlook s&p 500 nasdaq'}`;
+      const [companyNews, sectorNews, macroNews] = await Promise.all([
+        fetchDuckDuckGoContextForCompany(companyQuery).catch(() => ({ used: false, text: '' })),
+        fetchDuckDuckGoContextForCompany(sectorQuery).catch(() => ({ used: false, text: '' })),
+        fetchDuckDuckGoContextForCompany(macroQuery).catch(() => ({ used: false, text: '' })),
       ]);
-      const fmtExtra = (raw, label, n, len) => {
-        const items = (Array.isArray(raw) ? raw : [raw]).join('\n').split('\n').filter(Boolean).slice(0, n);
-        return items.length ? `${label}: ${items.map((s) => s.slice(0, len)).join(' | ')}` : '';
+      newsSentiment = {
+        company: scoreNewsSentiment(companyNews?.text || ''),
+        sector: scoreNewsSentiment(sectorNews?.text || ''),
+        macro: scoreNewsSentiment(macroNews?.text || ''),
       };
-      extraHighContext = [
-        fmtExtra(macroNews, 'MACRO', 3, 200),
-        fmtExtra(analystNews, 'ANALYST_TARGETS', 3, 220),
-      ].filter(Boolean).join('\n');
-    } catch { /* ignore */ }
+      liveNews = {
+        company: extractNewsLines(companyNews?.text || '', 8),
+        sector: extractNewsLines(sectorNews?.text || '', 6),
+        macro: extractNewsLines(macroNews?.text || '', 6),
+      };
+    } catch {
+      // ignore live news sentiment failure; prediction should still work
+    }
   }
-
-  // ─── Build level-specific strings ─────────────────────────────────────────────
-
-  // Price sample: LOW=14d, MEDIUM=30d/90dWeekly, HIGH=60d daily
-  const weeklyLowCandles3y = buildWeeklyLowestCandles(history, 156);
-  const sampleSlice = predictionLevel === 'low'
-    ? history.slice(-14)
-    : predictionLevel === 'high'
-      ? weeklyLowCandles3y
-      : (periodDays <= 30 ? history.slice(-30) : weeklyLowCandles3y);
-  const priceSample = sampleSlice
-    .map((h) => `${h.date}:${Number((h.low ?? h.close)).toFixed(2)}`)
-    .join(', ');
-  const ohlcvSummary = summarizeOhlcvWindow(
-    history,
-    predictionLevel === 'high' ? 252 : 180
-  );
-
-  // Fundamentals strings
-  const basicFundKeys = predictionLevel === 'low'
-    ? ['pe','fiftyTwoWeekHigh','fiftyTwoWeekLow','marketCap']
-    : ['pe','forwardPE','eps','dividendYield','marketCap','fiftyTwoWeekHigh','fiftyTwoWeekLow'];
-  const basicFundStr = fundamentals && Object.keys(fundamentals).length > 0
-    ? Object.entries(fundamentals)
-        .filter(([k, v]) => v != null && v !== '\u2014' && v !== '' && basicFundKeys.includes(k))
-        .map(([k, v]) => `${k}:${v}`).join(' ')
-    : 'N/A';
-
-  const advFundKeys = predictionLevel === 'high'
-    ? null  // null = include ALL non-null fields
-    : ['roe','debtToEquity','revenueGrowth','earningsGrowth','currentRatio','freeCashflow','operatingMargins'];
-  const advFundStr = advFundamentals
-    ? Object.entries(advFundamentals)
-        .filter(([k, v]) => v != null && (advFundKeys === null || advFundKeys.includes(k)))
-        .map(([k, v]) => `${k}:${v}`).join(' ')
-    : 'N/A';
-
-  // News: LOW=none, MEDIUM=top3/180chars, HIGH=top5/300chars
-  const newsLines = newsContext ? newsContext.split('\n').filter(Boolean) : [];
-  const compactNews = predictionLevel === 'low'
-    ? 'N/A'
-    : predictionLevel === 'high'
-      ? newsLines.slice(0, 3).map((n) => n.slice(0, 160)).join(' | ') || 'N/A'
-      : newsLines.slice(0, 2).map((n) => n.slice(0, 140)).join(' | ') || 'N/A';
-
-  // Pros/Cons: LOW=none, MEDIUM=top3, HIGH=top5
-  const prosLimit = predictionLevel === 'low' ? 0 : 3;
-  const consLimit = prosLimit;
-  const prosStr = clientAnalysis?.pros?.length > 0 && prosLimit > 0
-    ? clientAnalysis.pros.slice(0, prosLimit).join(' | ') : 'N/A';
-  const consStr = clientAnalysis?.cons?.length > 0 && consLimit > 0
-    ? clientAnalysis.cons.slice(0, consLimit).join(' | ') : 'N/A';
-  const outputPoints = clampedDays > 90 ? Math.min(52, Math.ceil(clampedDays / 5)) : clampedDays;
-  const smartSignals = [
-    `EMA:${emaData?.trend ?? 'N/A'}`,
-    rsi ? `RSI:${rsi.value}(${rsi.zone})` : null,
-    macd ? `MACD:${macd.trend}` : null,
-    bollinger ? `BB:${bollinger.zone}` : null,
-    atr ? `ATR:${atr.atr}(${atr.atrPct}%/d)` : null,
-    volumeData ? `VOL:${volumeData.signal} ${volumeData.volumeRatio}x` : null,
-    cycleAnalysis ? `Cycle:${cycleAnalysis.currentPhase}` : null,
-    cycleAnalysis ? `Regime:${cycleAnalysis.regime}(${cycleAnalysis.regimeScore})` : null,
-    marketIndexContext ? `Index:${marketIndexContext}` : null,
-  ].filter(Boolean).join(' | ');
-
-  // ─── Build prompt by level ────────────────────────────────────────────────────
-
-  let prompt;
-
-  if (predictionLevel === 'low') {
-    // ── LOW: Quick Signal ──────────────────────────────────────────────────────
-    // ~300 input tokens. Fast direction signal using only price + RSI + ATR.
-    prompt = `Quant analyst. Output JSON only. Derive everything from the data below.
-RULES: ①ATR(${atr?.atr ?? '?'}) = max daily move. ②If RSI>70 = likely pullback, RSI<30 = likely bounce. ③No invented reversals. ④Fractional prices only.
-
-${symbol}|${market === 'in' ? 'NSE' : 'US'}|${sector || '?'}|CMP:${priceNow}|${clampedDays}td${pctFrom52High !== null ? `|52H:${pctFrom52High}%` : ''}${pctFrom52Low !== null ? `|52L:+${pctFrom52Low}%` : ''}
-PRICE: CAGR:${cagr3y != null ? cagr3y.toFixed(2) + '%' : 'N/A'}|90d H/L:${max90.toFixed(2)}/${min90.toFixed(2)}|7dMom:${momentum7d.toFixed(2)}%
-Last 14d closes: ${priceSample}
-RSI:${rsi ? `${rsi.value}(${rsi.zone})` : 'N/A'} | ATR:${atr ? `${atr.atr}(${atr.atrPct}%/d)` : 'N/A'} | EMA:${emaData?.ema20 ?? '?'}/${emaData?.ema50 ?? '?'}(${emaData?.trend ?? '?'})
-S/R: Sup:${srLevels?.supports?.join(',') || 'N/A'} Res:${srLevels?.resistances?.join(',') || 'N/A'}
-FUNDAMENTALS: ${basicFundStr}
-
-Output JSON (predictedPrices = ${outputPoints} plain numbers):
-{"predictedPrices":[<${outputPoints} numbers>],"trend":"bullish|bearish|neutral","confidence":<0-100>,"summary":"<1 sentence citing price level and momentum>","keyFactors":["<f1>","<f2>","<f3>"],"support":<n>,"resistance":<n>}`;
-
-  } else if (predictionLevel === 'high') {
-    // Compact high mode: data-dense points, lower token usage.
-
-    prompt = `Strict quant analyst. JSON only.
-RULES: ATR(${atr?.atr ?? '?'}) is max daily move cap. Follow cycle direction unless explicit contradictory signals. Use fractional prices.
-
-${symbol}|${market === 'in' ? 'NSE' : 'US'}|${sector || '?'}|CMP:${priceNow}|Period:${clampedDays}td(${periodDays}cd)
-PRICE: Days:${history.length}|CAGR:${cagr3y != null ? cagr3y.toFixed(2) + '%' : 'N/A'}|90d H/L/Avg:${max90.toFixed(2)}/${min90.toFixed(2)}/${avg90.toFixed(2)}|7dMom:${momentum7d.toFixed(2)}%|DD:${worstDrawdowns}
-OHLCV:${ohlcvSummary}
-WEEKLY_LOW_3Y(max156): ${priceSample}
-SMART_SIGNALS: ${smartSignals}
-FUNDAMENTALS: ${basicFundStr}
-HEALTH: ${advFundStr.split(' ').slice(0, 12).join(' ') || 'N/A'}
-BULLISH: ${prosStr}
-BEARISH: ${consStr}
-NEWS: ${compactNews}
-
-Output exactly this JSON (predictedPrices = array of ${outputPoints} plain price numbers, no objects):
-{"predictedPrices":[<${outputPoints} numbers>],"trend":"bullish|bearish|neutral","confidence":<0-100>,"summary":"<2 short sentences with specific price/% levels>","keyFactors":["<f1>","<f2>","<f3>"],"support":<n>,"resistance":<n>}`;
-
-  } else {
-    // ── MEDIUM: Balanced (default) ─────────────────────────────────────────────
-    // ~900 input tokens.
-    const cycleStr = cycleAnalysis ? [
-      `Cycles:${cycleAnalysis.summary.totalCycles}`,
-      `AvgRally:+${cycleAnalysis.summary.avgRallyPct ?? '?'}%/${cycleAnalysis.summary.avgRallyDays ?? '?'}d`,
-      `AvgDecline:${cycleAnalysis.summary.avgDeclinePct ?? '?'}%/${cycleAnalysis.summary.avgDeclineDays ?? '?'}d`,
-      `TopFalls:${cycleAnalysis.summary.topFalls.slice(0,2).join('|') || 'N/A'}`,
-      `Phase:${cycleAnalysis.currentPhase} ${cycleAnalysis.daysInPhase}d ${cycleAnalysis.phasePctMoved > 0 ? '+' : ''}${cycleAnalysis.phasePctMoved}%moved`,
-      `Remaining:${cycleAnalysis.phaseRemainingEstimate ?? 'unknown'}`,
-      `Regime:${cycleAnalysis.regime}(${cycleAnalysis.regimeScore})`,
-      `Band:${cycleAnalysis.inUpperBand ? 'UPPER' : cycleAnalysis.inLowerBand ? 'LOWER' : 'MID'}`,
-      `Mom7d:${cycleAnalysis.momentum7d}% Mom21d:${cycleAnalysis.momentum21d}%`,
-      `DD1y:${cycleAnalysis.drawdownFromHigh1y}%`,
-      cycleAnalysis.seasonalLine ?? '',
-    ].filter(Boolean).join(' | ') : 'N/A';
-
-    const techStr = [
-      `EMA:${emaData?.ema20 ?? '?'}/${emaData?.ema50 ?? '?'}/${emaData?.ema200 ?? '?'}(${emaData?.trend ?? '?'})`,
-      `PvsE20:${emaData?.priceVsEma20 != null ? (emaData.priceVsEma20 > 0 ? '+' : '') + emaData.priceVsEma20 + '%' : '?'}`,
-      `PvsE200:${emaData?.priceVsEma200 != null ? (emaData.priceVsEma200 > 0 ? '+' : '') + emaData.priceVsEma200 + '%' : '?'}`,
-      rsi ? `RSI:${rsi.value}(${rsi.zone})` : '',
-      macd ? `MACD:${macd.trend} H=${macd.histogram}` : '',
-      bollinger ? `BB:${bollinger.zone} %B=${bollinger.pctB}% BW=${bollinger.bandWidth}%` : '',
-      atr ? `ATR:${atr.atr}(${atr.atrPct}%/d)` : '',
-      volumeData ? `Vol:${volumeData.signal} ${volumeData.volumeRatio}x` : '',
-      srLevels?.supports?.length  ? `Sup:${srLevels.supports.join(',')}` : '',
-      srLevels?.resistances?.length ? `Res:${srLevels.resistances.join(',')}` : '',
-      marketIndexContext,
-    ].filter(Boolean).join(' | ');
-
-    prompt = `Strict quant analyst. Output JSON only. Real investors use this for buy/sell decisions.
-RULES:\u2460ATR(${atr?.atr ?? '?'}) is max daily move cap.\u2461Follow current phase direction\u2014no invented reversals.\u2462Confidence:55-70% strong,35-55% mixed,25-40% contradictory.\u2463Use fractional prices,not round numbers.\u2464If momentum negative+price<90dAvg\u2192predict downside unless specific reversal data exists.\u2465Summary must cite specific price levels or %.
-
-${symbol}|${market === 'in' ? 'NSE' : 'US'}|${sector || '?'}|CMP:${priceNow}|Period:${clampedDays}td(${periodDays}cd)${pctFrom52High !== null ? `|52H:${pctFrom52High}%` : ''}${pctFrom52Low !== null ? `|52L:+${pctFrom52Low}%` : ''}
-
-PRICE(3Y): Days:${history.length}|CAGR:${cagr3y != null ? cagr3y.toFixed(2) + '%' : 'N/A'}|90d H/L/Avg:${max90.toFixed(2)}/${min90.toFixed(2)}/${avg90.toFixed(2)}|7dMom:${momentum7d.toFixed(2)}%|Drawdowns:${worstDrawdowns}
-OHLCV SUMMARY (derived server-side): ${ohlcvSummary}
-${sampleSlice.length <= 30 ? 'Last 30d closes' : 'Weekly lowest candles (3Y, max 156)'}: ${priceSample}
-
-CYCLE: ${cycleStr}
-
-TECHNICALS: ${techStr}
-
-FUNDAMENTALS: ${basicFundStr}
-HEALTH: ${advFundStr}
-BULLISH: ${prosStr}
-BEARISH: ${consStr}
-NEWS: ${compactNews}
-
-Output exactly this JSON (predictedPrices = array of ${outputPoints} price numbers only, no objects):
-{"predictedPrices":[<${outputPoints} plain numbers>],"trend":"bullish|bearish|neutral","confidence":<0-100>,"summary":"<2 sentences with specific price/% data>","keyFactors":["<f1>","<f2>","<f3>"],"support":<n>,"resistance":<n>}`;
-  }
-
-  // ─── Token budget per level × period ─────────────────────────────────────────
-  const maxTokens = (() => {
-    const base = predictionLevel === 'low' ? [180, 260, 420, 520] :
-                 predictionLevel === 'high' ? [400, 650, 1000, 1400] :
-                 /* medium */                 [260, 420, 700, 900];
-    if (clampedDays <= 7)  return base[0];
-    if (clampedDays <= 30) return base[1];
-    if (clampedDays <= 90) return base[2];
-    return base[3];
-  })();
-
-  const modelFallbacks = ['llama-3.1-8b-instant'];
 
   try {
-    let completion = null;
-    let lastModelErr = null;
-    for (const model of modelFallbacks) {
-      try {
-        completion = await groq.chat.completions.create({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: predictionLevel === 'high' ? 0.05 : 0.1, // stricter for high
-          max_tokens: maxTokens,
-        });
-        break;
-      } catch (modelErr) {
-        lastModelErr = modelErr;
-        if (!isGroqRateLimitError(modelErr)) throw modelErr;
-      }
-    }
-    if (!completion) throw lastModelErr || new Error('Prediction model unavailable');
-    const text = completion.choices[0]?.message?.content || '{}';
-    const parsed = parsePredictionJsonFromModelText(text);
+    const parsed = buildTickertapeStylePrediction({
+      currentPrice,
+      clampedDays,
+      predictionLevel,
+      momentum7d,
+      cagr3y,
+      market,
+      marketCapRaw: stockMeta?.marketCap ?? fundamentals?.marketCap ?? advFundamentals?.marketCap,
+      sector: stockMeta?.sector ?? fundamentals?.sector ?? '',
+      newsSentiment,
+      fundamentals,
+      advFundamentals,
+      emaData,
+      rsi,
+      macd,
+      bollinger,
+      atr,
+      srLevels,
+      cycleAnalysis,
+      marketIndexContext,
+    });
 
-    // Attach dates (skip weekends)
     const days = expandPredictedSeries(parsed.predictedPrices, currentPrice, clampedDays);
     const deterministicTomorrow = computeDeterministicNextDayPrice(
       currentPrice,
@@ -3808,19 +4137,19 @@ Output exactly this JSON (predictedPrices = array of ${outputPoints} price numbe
     if (days.length > 0 && Number.isFinite(deterministicTomorrow) && deterministicTomorrow > 0) {
       days[0] = deterministicTomorrow;
     }
+
     const datedPrices = [];
     let date = new Date();
     let added = 0;
     let safeLimit = 0;
     let prevPrice = Number(currentPrice);
     while (added < clampedDays && safeLimit < 600) {
-      safeLimit++;
+      safeLimit += 1;
       date = new Date(date);
       date.setDate(date.getDate() + 1);
       const dow = date.getDay();
-      if (dow === 0 || dow === 6) continue; // skip weekends
+      if (dow === 0 || dow === 6) continue;
       const predicted = days[added];
-      // Support both plain numbers (new compact format) and legacy {price:N} objects
       const price = Number(typeof predicted === 'object' ? (predicted?.price ?? currentPrice) : (predicted ?? currentPrice));
       const dayChangePercent = prevPrice > 0 ? ((price - prevPrice) / prevPrice * 100) : 0;
       const entryChangePercent = currentPrice > 0 ? ((price - currentPrice) / currentPrice * 100) : 0;
@@ -3832,42 +4161,33 @@ Output exactly this JSON (predictedPrices = array of ${outputPoints} price numbe
         entryChangePercent: +entryChangePercent.toFixed(2),
       });
       prevPrice = price;
-      added++;
+      added += 1;
     }
-
-    const derived = deriveTrendAndConfidenceFromSeries(days, currentPrice);
-    const parsedTrend = ['bullish', 'bearish', 'neutral'].includes(String(parsed.trend)) ? String(parsed.trend) : null;
-    const parsedConfidenceRaw = Number(parsed.confidence);
-    const parsedConfidence = Number.isFinite(parsedConfidenceRaw)
-      ? Math.min(100, Math.max(0, parsedConfidenceRaw))
-      : null;
-    const netMove = ((days[days.length - 1] - currentPrice) / currentPrice) * 100;
-    const conflict = (parsedTrend === 'bullish' && netMove < -0.2) || (parsedTrend === 'bearish' && netMove > 0.2);
-    const finalTrend = conflict ? derived.trend : (parsedTrend || derived.trend);
-    const finalConfidence = conflict || parsedConfidence == null ? derived.confidence : parsedConfidence;
 
     return {
       currentPrice: +currentPrice.toFixed(2),
       predictedPrices: datedPrices,
-      trend: finalTrend,
-      confidence: finalConfidence,
+      trend: parsed.trend,
+      confidence: parsed.confidence,
       summary: String(parsed.summary || ''),
       keyFactors: Array.isArray(parsed.keyFactors) ? parsed.keyFactors.slice(0, 4) : [],
       support: parsed.support ? +Number(parsed.support).toFixed(2) : null,
       resistance: parsed.resistance ? +Number(parsed.resistance).toFixed(2) : null,
-      disclaimer: 'AI prediction only. Not financial advice. Past patterns do not guarantee future results.',
+      sentimentSummary: {
+        company: newsSentiment.company.label,
+        sector: newsSentiment.sector.label,
+        market: newsSentiment.macro.label,
+      },
+      sentimentReasons: {
+        company: newsSentiment.company.hits?.[0] || 'No strong company-news trigger found.',
+        sector: newsSentiment.sector.hits?.[0] || 'No strong sector-news trigger found.',
+        market: newsSentiment.macro.hits?.[0] || 'No strong market-news trigger found.',
+      },
+      liveNews,
+      disclaimer: 'System-generated forecast using fundamentals, growth, valuation, and technical signals. Not financial advice.',
     };
   } catch (err) {
-    console.error('[predict] Groq error:', err.message);
-    if (isGroqRateLimitError(err)) {
-      const retryAfterSeconds = parseGroqRetryAfterSeconds(err);
-      const retryHint = retryAfterSeconds ? `Retry in ~${retryAfterSeconds}s.` : 'Retry shortly.';
-      return {
-        error: `Prediction rate-limited by AI provider. ${retryHint} Tip: use low/medium level or shorter period.`,
-        code: 'rate_limit_exceeded',
-        retryAfterSeconds,
-      };
-    }
+    console.error('[predict] deterministic engine error:', err.message);
     return { error: 'Prediction failed: ' + err.message };
   }
 }

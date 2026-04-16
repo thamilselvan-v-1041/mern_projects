@@ -228,7 +228,11 @@ function scoreBandClass(v: ScorecardBand): string {
   return 'fair';
 }
 
-function scorecardFromFundamentals(fundamentals: Record<string, string> | null): {
+function scorecardFromFundamentals(
+  fundamentals: Record<string, string> | null,
+  stock?: Stock,
+  historyIn?: Array<{ date: string; close: number }> | null
+): {
   performance: ScorecardBand;
   valuation: ScorecardBand;
   growth: ScorecardBand;
@@ -246,20 +250,54 @@ function scorecardFromFundamentals(fundamentals: Record<string, string> | null):
   const dayHigh = toNumberOrNull(fundamentals?.dayHigh);
   const low52 = toNumberOrNull(fundamentals?.fiftyTwoWeekLow);
   const high52 = toNumberOrNull(fundamentals?.fiftyTwoWeekHigh);
+  const pb = toNumberOrNull(fundamentals?.priceToBook);
+  const roe = toNumberOrNull(fundamentals?.returnOnEquity);
+  const debtToEquity = toNumberOrNull(fundamentals?.debtToEquity);
+  const revenueGrowth = toNumberOrNull(fundamentals?.revenueGrowth);
+  const earningsGrowth = toNumberOrNull(fundamentals?.earningsGrowth);
+  const operatingMargins = toNumberOrNull(fundamentals?.operatingMargins);
+  const profitMargins = toNumberOrNull(fundamentals?.profitMargins);
+  const currentRatio = toNumberOrNull(fundamentals?.currentRatio);
+  const payoutRatio = toNumberOrNull(fundamentals?.payoutRatio);
+  const beta = toNumberOrNull(fundamentals?.beta);
+  const history = Array.isArray(historyIn) ? historyIn : [];
   const pos52 = price != null && low52 != null && high52 != null && high52 > low52
     ? (price - low52) / (high52 - low52)
     : null;
+  const oneYearReturn = (() => {
+    if (history.length >= 200) {
+      const first = Number(history[Math.max(0, history.length - 252)]?.close);
+      const last = Number(history[history.length - 1]?.close);
+      if (Number.isFinite(first) && first > 0 && Number.isFinite(last)) {
+        return ((last - first) / first) * 100;
+      }
+    }
+    if (price != null && low52 != null && high52 != null && high52 > low52) {
+      return ((price - ((low52 + high52) / 2)) / ((low52 + high52) / 2)) * 100;
+    }
+    return toNumberOrNull(stock?.changePercent) ?? null;
+  })();
 
   const perf = (() => {
-    if (price == null || open == null || open <= 0) return 'avg';
-    const dayMove = ((price - open) / open) * 100;
-    if (dayMove >= 1) return 'high';
-    if (dayMove <= -1) return 'low';
+    let score = 0;
+    if (oneYearReturn != null) {
+      if (oneYearReturn >= 20) score += 2;
+      else if (oneYearReturn >= 8) score += 1;
+      else if (oneYearReturn <= -10) score -= 2;
+      else if (oneYearReturn <= 0) score -= 1;
+    }
+    if (price != null && open != null && open > 0) {
+      const dayMove = ((price - open) / open) * 100;
+      if (dayMove >= 1) score += 1;
+      else if (dayMove <= -1) score -= 1;
+    }
+    if (score >= 2) return 'high';
+    if (score <= -1) return 'low';
     return 'avg';
   })();
 
   const valuation = (() => {
-    if (pos52 == null && pe == null && fpe == null) return 'avg';
+    if (pos52 == null && pe == null && fpe == null && pb == null) return 'avg';
     const p = pe ?? fpe;
     let score = 0;
     if (pos52 != null) {
@@ -272,17 +310,26 @@ function scorecardFromFundamentals(fundamentals: Record<string, string> | null):
       if (p <= 18) score += 1;
       else if (p >= 35) score -= 1;
     }
+    if (pb != null) {
+      if (pb <= 1.5) score += 1;
+      else if (pb >= 4) score -= 1;
+    }
+    if ((div ?? 0) >= 3) score += 1;
     if (score >= 2) return 'high';
     if (score <= -1) return 'low';
     return 'avg';
   })();
 
   const growth = (() => {
-    if (eps == null && pe == null && fpe == null) return 'avg';
+    if (eps == null && pe == null && fpe == null && revenueGrowth == null && earningsGrowth == null) return 'avg';
     let score = 0;
     if ((eps ?? 0) > 0) score += 1;
     if (pe != null && fpe != null && fpe < pe) score += 1;
-    if ((div ?? 0) >= 1) score += 1;
+    if ((revenueGrowth ?? 0) >= 8) score += 1;
+    if ((earningsGrowth ?? 0) >= 10) score += 2;
+    else if ((earningsGrowth ?? 0) >= 4) score += 1;
+    if ((revenueGrowth ?? 0) < 0) score -= 1;
+    if ((earningsGrowth ?? 0) < 0) score -= 2;
     if (score >= 2) return 'high';
     if (score <= 0) return 'low';
     return 'avg';
@@ -291,10 +338,14 @@ function scorecardFromFundamentals(fundamentals: Record<string, string> | null):
   const profitability = (() => {
     let score = 0;
     if ((eps ?? 0) > 0) score += 1;
-    if ((div ?? 0) >= 0.7) score += 1;
+    if ((roe ?? 0) >= 15) score += 2;
+    else if ((roe ?? 0) >= 10) score += 1;
+    if ((profitMargins ?? 0) >= 12) score += 1;
+    if ((operatingMargins ?? 0) >= 15) score += 1;
     if (pe != null && pe > 0 && pe <= 30) score += 1;
-    if (score >= 2) return 'high';
+    if (score >= 3) return 'high';
     if (score === 1) return 'fair';
+    if (score === 2) return 'fair';
     return 'low';
   })();
 
@@ -304,8 +355,9 @@ function scorecardFromFundamentals(fundamentals: Record<string, string> | null):
     const intradayTop = dayHigh != null && dayLow != null && dayHigh > dayLow
       ? (price - dayLow) / (dayHigh - dayLow)
       : 0.5;
-    if (pos <= 0.35 && intradayTop <= 0.75) return 'good';
-    if (pos >= 0.75 || intradayTop >= 0.9) return 'bad';
+    const attractiveValuation = (pe != null && pe <= 18) || (pb != null && pb <= 1.5) || (div ?? 0) >= 3;
+    if (pos <= 0.35 && intradayTop <= 0.75 && attractiveValuation) return 'good';
+    if (pos >= 0.75 || intradayTop >= 0.9 || ((pe ?? 0) >= 35) || ((pb ?? 0) >= 4)) return 'bad';
     return 'fair';
   })();
 
@@ -317,6 +369,13 @@ function scorecardFromFundamentals(fundamentals: Record<string, string> | null):
     if ((pe ?? 0) > 45) risk += 2;
     if (fpe != null && pe != null && fpe > pe * 1.2) risk += 1;
     if ((div ?? 0) === 0 && (pe ?? 0) > 30) risk += 1;
+    if ((debtToEquity ?? 0) >= 1.5) risk += 2;
+    else if ((debtToEquity ?? 0) >= 0.8) risk += 1;
+    if ((earningsGrowth ?? 0) < -10) risk += 2;
+    else if ((earningsGrowth ?? 0) < 0) risk += 1;
+    if ((currentRatio ?? 0) > 0 && (currentRatio ?? 0) < 1) risk += 1;
+    if ((beta ?? 0) >= 1.8) risk += 1;
+    if ((payoutRatio ?? 0) > 90) risk += 1;
     if (risk >= 3) return 'high';
     if (risk >= 1) return 'fair';
     return 'low';
@@ -401,6 +460,21 @@ type TabType = 'fundamentals' | 'chart' | 'proscons' | 'prediction';
 type PredictionDay = { day: number; date: string; price: number; changePercent: number; };
 type PredictionPeriod = '7d' | '14d' | '1m' | '2m';
 type PredictionLevel = 'low' | 'medium' | 'high';
+type PredictionLiveNews = {
+  company: string[];
+  sector: string[];
+  macro: string[];
+};
+type PredictionSentimentSummary = {
+  company: 'positive' | 'neutral' | 'negative';
+  sector: 'positive' | 'neutral' | 'negative';
+  market: 'positive' | 'neutral' | 'negative';
+};
+type PredictionSentimentReasons = {
+  company: string;
+  sector: string;
+  market: string;
+};
 type Prediction = {
   currentPrice: number;
   predictedPrices: PredictionDay[];
@@ -410,6 +484,9 @@ type Prediction = {
   keyFactors: string[];
   support: number | null;
   resistance: number | null;
+  sentimentSummary?: PredictionSentimentSummary;
+  sentimentReasons?: PredictionSentimentReasons;
+  liveNews?: PredictionLiveNews;
   disclaimer: string;
   error?: string;
 };
@@ -1374,7 +1451,7 @@ function StockItem({
                   ) : (
                     <div className="fund-scorecard">
                       {(() => {
-                        const score = scorecardFromFundamentals(fundamentals);
+                        const score = scorecardFromFundamentals(fundamentals, stock, history);
                         const rows: Array<{ label: string; value: ScorecardBand }> = [
                           { label: 'Performance', value: score.performance },
                           { label: 'Valuation', value: score.valuation },
@@ -1794,6 +1871,70 @@ function StockItem({
                       {prediction.keyFactors.map((f, i) => <li key={i}>{f}</li>)}
                     </ul>
                   </div>
+                )}
+
+                {prediction.sentimentSummary && (
+                  <div className="prediction-sentiment-summary">
+                    <span className="prediction-factors-label">Live Sentiment:</span>
+                    <div className="prediction-sentiment-grid">
+                      <div className="prediction-sentiment-item">
+                        <span className={`prediction-sentiment-badge sentiment-${prediction.sentimentSummary.company}`}>
+                          Company: {prediction.sentimentSummary.company}
+                        </span>
+                        {prediction.sentimentReasons?.company && (
+                          <div className="prediction-sentiment-reason">{prediction.sentimentReasons.company}</div>
+                        )}
+                      </div>
+                      <div className="prediction-sentiment-item">
+                        <span className={`prediction-sentiment-badge sentiment-${prediction.sentimentSummary.sector}`}>
+                          Sector: {prediction.sentimentSummary.sector}
+                        </span>
+                        {prediction.sentimentReasons?.sector && (
+                          <div className="prediction-sentiment-reason">{prediction.sentimentReasons.sector}</div>
+                        )}
+                      </div>
+                      <div className="prediction-sentiment-item">
+                        <span className={`prediction-sentiment-badge sentiment-${prediction.sentimentSummary.market}`}>
+                          Market: {prediction.sentimentSummary.market}
+                        </span>
+                        {prediction.sentimentReasons?.market && (
+                          <div className="prediction-sentiment-reason">{prediction.sentimentReasons.market}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {((prediction.liveNews?.company?.length ?? 0) > 0 ||
+                  (prediction.liveNews?.sector?.length ?? 0) > 0 ||
+                  (prediction.liveNews?.macro?.length ?? 0) > 0) && (
+                  <details className="prediction-live-news">
+                    <summary>Live News</summary>
+                    {(prediction.liveNews?.company?.length ?? 0) > 0 && (
+                      <div className="prediction-live-news-group">
+                        <div className="prediction-live-news-title">Stock</div>
+                        <ul>
+                          {prediction.liveNews?.company.map((item, i) => <li key={`company-${i}`}>{item}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {(prediction.liveNews?.sector?.length ?? 0) > 0 && (
+                      <div className="prediction-live-news-group">
+                        <div className="prediction-live-news-title">Sector</div>
+                        <ul>
+                          {prediction.liveNews?.sector.map((item, i) => <li key={`sector-${i}`}>{item}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                    {(prediction.liveNews?.macro?.length ?? 0) > 0 && (
+                      <div className="prediction-live-news-group">
+                        <div className="prediction-live-news-title">Market</div>
+                        <ul>
+                          {prediction.liveNews?.macro.map((item, i) => <li key={`macro-${i}`}>{item}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </details>
                 )}
 
 
@@ -2316,6 +2457,7 @@ export default function App() {
   }, [market, segmentsByMarket.us, fetchForMarket]);
 
   const backgroundRefreshRunningRef = useRef<Record<string, boolean>>({});
+  const lastBackgroundRefreshAtRef = useRef<Record<string, number>>({});
   const areAllCapSegmentsLoaded = useCallback((m: string) => {
     const loaded = loadedSegmentsRef.current?.[m];
     return CAP_SEGMENT_VALUES.every((seg) => loaded?.has(seg));
@@ -2328,18 +2470,26 @@ export default function App() {
       for (const group of FETCH_GROUPS) {
         await fetchSegmentGroupForMarket(m, group, true, true);
       }
+      lastBackgroundRefreshAtRef.current[m] = Date.now();
     } finally {
       backgroundRefreshRunningRef.current[m] = false;
     }
   }, [fetchSegmentGroupForMarket]);
 
   useEffect(() => {
-    if (!areAllCapSegmentsLoaded(market)) return;
-    const intervalId = window.setInterval(() => {
-      void refreshMarketInBackground(market);
-    }, 15 * 60 * 1000);
+    const marketsToRefresh = ['in', 'us'] as const;
+    const FIFTEEN_MIN_MS = 15 * 60 * 1000;
+    const tick = () => {
+      for (const m of marketsToRefresh) {
+        if (!areAllCapSegmentsLoaded(m)) continue;
+        const lastAt = lastBackgroundRefreshAtRef.current[m] || 0;
+        if (Date.now() - lastAt < FIFTEEN_MIN_MS) continue;
+        void refreshMarketInBackground(m);
+      }
+    };
+    const intervalId = window.setInterval(tick, FIFTEEN_MIN_MS);
     return () => window.clearInterval(intervalId);
-  }, [market, areAllCapSegmentsLoaded, refreshMarketInBackground]);
+  }, [areAllCapSegmentsLoaded, refreshMarketInBackground]);
 
   useEffect(() => {
     setActiveStockId(null);
