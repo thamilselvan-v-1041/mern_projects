@@ -2765,7 +2765,7 @@ app.get('/api/kite/holdings', async (req, res) => {
       const qty = h.quantity ?? 0;
       const avg = h.average_price ?? 0;
       const last = h.last_price ?? 0;
-      const close = h.close_price ?? last;
+      const close = h.close_price ?? 0;
       let pnl = h.pnl;
       if (pnl == null && qty > 0 && avg > 0) {
         pnl = qty * (last - avg);
@@ -2774,11 +2774,13 @@ app.get('/api/kite/holdings', async (req, res) => {
       if (dayChangePct == null && close > 0) {
         dayChangePct = ((last - close) / close) * 100;
       }
-      // When day change is 0 (e.g. market closed), show overall return % from avg price
-      if ((dayChangePct == null || Math.abs(dayChangePct) < 0.001) && avg > 0) {
-        dayChangePct = ((last - avg) / avg) * 100;
-      }
-      return { ...h, pnl, day_change_percentage: dayChangePct };
+      const overallReturnPct = avg > 0 ? ((last - avg) / avg) * 100 : null;
+      return {
+        ...h,
+        pnl,
+        day_change_percentage: dayChangePct,
+        overall_return_percentage: overallReturnPct,
+      };
     });
     res.setHeader('Content-Type', 'application/json');
     res.json({ holdings });

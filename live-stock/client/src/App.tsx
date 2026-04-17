@@ -60,9 +60,36 @@ type HoldingRow = {
   average_price: number;
   last_price: number;
   pnl?: number;
+  /** Today's move vs prev close (Kite). */
   day_change_percentage?: number;
+  /** Unrealized return % vs cost (avg buy). */
+  overall_return_percentage?: number;
   purchase_date?: string;
 };
+
+/** P&L % vs invested amount (qty × average_price); matches Zerodha-style unrealized return %. */
+function holdingOverallReturnPct(h: {
+  quantity?: number;
+  average_price?: number;
+  last_price?: number;
+  pnl?: number;
+  overall_return_percentage?: number;
+}): number | null {
+  if (h.overall_return_percentage != null && Number.isFinite(h.overall_return_percentage)) {
+    return h.overall_return_percentage;
+  }
+  const qty = Number(h.quantity ?? 0);
+  const avg = Number(h.average_price ?? 0);
+  const last = Number(h.last_price ?? 0);
+  if (qty <= 0 || avg <= 0 || !Number.isFinite(avg)) return null;
+  const invested = qty * avg;
+  const pnl = h.pnl;
+  if (pnl != null && Number.isFinite(pnl)) {
+    return (pnl / invested) * 100;
+  }
+  if (!Number.isFinite(last)) return null;
+  return ((last - avg) / avg) * 100;
+}
 
 function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
   return new Promise((resolve, reject) => {
@@ -128,6 +155,7 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
               if (!isNaN(d.getTime())) purchaseDate = d.toISOString().slice(0, 10);
             }
           }
+          const overallPct = avg > 0 ? ((ltp - avg) / avg) * 100 : undefined;
           holdings.push({
             tradingsymbol: sym.replace(/\.(NS|BO|NSE|BSE)$/i, ''),
             exchange: ex || 'NSE',
@@ -135,7 +163,8 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
             average_price: avg || ltp,
             last_price: ltp,
             pnl,
-            day_change_percentage: avg > 0 ? ((ltp - avg) / avg) * 100 : undefined,
+            overall_return_percentage: overallPct,
+            day_change_percentage: overallPct,
             purchase_date: purchaseDate,
           });
         }
@@ -2233,6 +2262,7 @@ export default function App() {
     last_price: number;
     pnl?: number;
     day_change_percentage?: number;
+    overall_return_percentage?: number;
   }>>([]);
   const [kiteHoldingsLoading, setKiteHoldingsLoading] = useState(false);
   const [kiteHoldingsError, setKiteHoldingsError] = useState<string | null>(null);
@@ -2792,7 +2822,7 @@ export default function App() {
   useEffect(() => {
     if (historyModalOpen && (ordersModalTab === 'portfolio' || ordersModalTab === 'analyse')) {
       setKiteHoldingsLoading(true);
-      fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
+      fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number; overall_return_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
         headers: kiteHeaders(kiteForm),
       })
         .then((data) => {
@@ -4390,6 +4420,7 @@ export default function App() {
                       <ul className="proceed-history-list kite-holdings-list">
                       {kiteHoldings.map((h) => {
                         const hk = kiteHoldingKey(h);
+                        const retPct = holdingOverallReturnPct(h);
                         return (
                         <li key={hk} className="holding-item">
                           <input
@@ -4429,9 +4460,12 @@ export default function App() {
                                 P&L ₹{h.pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                               </span>
                             )}
-                            {h.day_change_percentage != null && (
-                              <span className={h.day_change_percentage >= 0 ? 'pnl-up' : 'pnl-down'}>
-                                {h.day_change_percentage >= 0 ? '+' : ''}{h.day_change_percentage.toFixed(2)}%
+                            {retPct != null && (
+                              <span
+                                className={retPct >= 0 ? 'pnl-up' : 'pnl-down'}
+                                title="Unrealized return vs invested amount (average buy × quantity)"
+                              >
+                                {retPct >= 0 ? '+' : ''}{retPct.toFixed(2)}%
                               </span>
                             )}
                           </div>
