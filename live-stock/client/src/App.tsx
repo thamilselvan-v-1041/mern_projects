@@ -306,6 +306,15 @@ function scorecardFromFundamentals(
     }
     return toNumberOrNull(stock?.changePercent) ?? null;
   })();
+  const weekChange = toNumberOrNull(stock?.weekChange);
+  const monthChange = toNumberOrNull(stock?.monthChange);
+  const dayChangePct = toNumberOrNull(stock?.changePercent);
+  const turnoverPct = (() => {
+    const vol = toNumberOrNull(stock?.volume);
+    const mcap = toNumberOrNull(stock?.marketCap);
+    if (vol == null || mcap == null || mcap <= 0) return null;
+    return (vol / mcap) * 100;
+  })();
 
   const perf = (() => {
     let score = 0;
@@ -319,6 +328,14 @@ function scorecardFromFundamentals(
       const dayMove = ((price - open) / open) * 100;
       if (dayMove >= 1) score += 1;
       else if (dayMove <= -1) score -= 1;
+    }
+    if (weekChange != null) {
+      if (weekChange >= 3) score += 1;
+      else if (weekChange <= -3) score -= 1;
+    }
+    if (monthChange != null) {
+      if (monthChange >= 6) score += 1;
+      else if (monthChange <= -6) score -= 1;
     }
     if (score >= 2) return 'high';
     if (score <= -1) return 'low';
@@ -344,6 +361,10 @@ function scorecardFromFundamentals(
       else if (pb >= 4) score -= 1;
     }
     if ((div ?? 0) >= 3) score += 1;
+    if (turnoverPct != null) {
+      if (turnoverPct >= 0.25) score -= 1; // high churn often tracks short-term froth
+      else if (turnoverPct <= 0.05) score += 1;
+    }
     if (score >= 2) return 'high';
     if (score <= -1) return 'low';
     return 'avg';
@@ -359,6 +380,10 @@ function scorecardFromFundamentals(
     else if ((earningsGrowth ?? 0) >= 4) score += 1;
     if ((revenueGrowth ?? 0) < 0) score -= 1;
     if ((earningsGrowth ?? 0) < 0) score -= 2;
+    if (monthChange != null) {
+      if (monthChange >= 8) score += 1; // momentum confirmation
+      else if (monthChange <= -8) score -= 1;
+    }
     if (score >= 2) return 'high';
     if (score <= 0) return 'low';
     return 'avg';
@@ -372,9 +397,10 @@ function scorecardFromFundamentals(
     if ((profitMargins ?? 0) >= 12) score += 1;
     if ((operatingMargins ?? 0) >= 15) score += 1;
     if (pe != null && pe > 0 && pe <= 30) score += 1;
-    if (score >= 3) return 'high';
-    if (score === 1) return 'fair';
-    if (score === 2) return 'fair';
+    if ((profitMargins ?? 0) >= 18) score += 1;
+    if ((operatingMargins ?? 0) >= 22) score += 1;
+    if (score >= 5) return 'high';
+    if (score >= 2) return 'fair';
     return 'low';
   })();
 
@@ -384,6 +410,13 @@ function scorecardFromFundamentals(
     const intradayTop = dayHigh != null && dayLow != null && dayHigh > dayLow
       ? (price - dayLow) / (dayHigh - dayLow)
       : 0.5;
+    const valuationMissing = pe == null && pb == null && div == null;
+    if (valuationMissing) {
+      // Some providers omit PE/PB/dividend intermittently; keep entry signal usable.
+      if (pos <= 0.35 && intradayTop <= 0.82) return 'good';
+      if (pos >= 0.75 || intradayTop >= 0.9) return 'bad';
+      return 'fair';
+    }
     const attractiveValuation = (pe != null && pe <= 18) || (pb != null && pb <= 1.5) || (div ?? 0) >= 3;
     if (pos <= 0.35 && intradayTop <= 0.75 && attractiveValuation) return 'good';
     if (pos >= 0.75 || intradayTop >= 0.9 || ((pe ?? 0) >= 35) || ((pb ?? 0) >= 4)) return 'bad';
@@ -405,12 +438,196 @@ function scorecardFromFundamentals(
     if ((currentRatio ?? 0) > 0 && (currentRatio ?? 0) < 1) risk += 1;
     if ((beta ?? 0) >= 1.8) risk += 1;
     if ((payoutRatio ?? 0) > 90) risk += 1;
+    if (dayChangePct != null && dayChangePct <= -4) risk += 1;
+    if (monthChange != null && monthChange <= -12) risk += 1;
+    if (turnoverPct != null && turnoverPct >= 0.35) risk += 1;
     if (risk >= 3) return 'high';
     if (risk >= 1) return 'fair';
     return 'low';
   })();
 
   return { performance: perf, valuation, growth, profitability, entryPoint, redFlags };
+}
+
+function bestEntryScoreFromFundamentals(
+  fundamentals: Record<string, string> | null,
+  stock?: Stock,
+  historyIn?: Array<{ date: string; close: number }> | null
+): number {
+  const scorecard = scorecardFromFundamentals(fundamentals, stock, historyIn);
+  const asPoints = (band: ScorecardBand): number => {
+    if (band === 'high' || band === 'good') return 1;
+    if (band === 'fair' || band === 'avg') return 0.5;
+    return 0;
+  };
+
+  const entryPoints = scorecard.entryPoint === 'good' ? 1 : scorecard.entryPoint === 'fair' ? 0.5 : 0;
+  const qualityPoints =
+    asPoints(scorecard.valuation) * 0.3 +
+    asPoints(scorecard.growth) * 0.2 +
+    asPoints(scorecard.profitability) * 0.25 +
+    asPoints(scorecard.performance) * 0.15 +
+    asPoints(scorecard.redFlags === 'low' ? 'good' : scorecard.redFlags === 'fair' ? 'fair' : 'bad') * 0.1;
+
+  const pe = toNumberOrNull(fundamentals?.pe);
+  const pb = toNumberOrNull(fundamentals?.priceToBook);
+  const div = toNumberOrNull(fundamentals?.dividendYield);
+  const price = toNumberOrNull(fundamentals?.price);
+  const low52 = toNumberOrNull(fundamentals?.fiftyTwoWeekLow);
+  const high52 = toNumberOrNull(fundamentals?.fiftyTwoWeekHigh);
+
+  const rangeBonus = (() => {
+    if (price == null || low52 == null || high52 == null || high52 <= low52) return 0;
+    const pos = (price - low52) / (high52 - low52);
+    return Math.max(0, Math.min(1, (0.7 - pos) / 0.7));
+  })();
+
+  const valuationBonus = (() => {
+    let v = 0;
+    if (pe != null && pe > 0) {
+      if (pe <= 18) v += 0.5;
+      else if (pe >= 35) v -= 0.4;
+    }
+    if (pb != null && pb > 0) {
+      if (pb <= 1.5) v += 0.3;
+      else if (pb >= 4) v -= 0.25;
+    }
+    if ((div ?? 0) >= 3) v += 0.2;
+    return Math.max(-0.5, Math.min(1, v));
+  })();
+
+  const finalScore =
+    entryPoints * 45 +
+    qualityPoints * 35 +
+    rangeBonus * 12 +
+    valuationBonus * 8;
+  return Math.max(0, Math.min(100, Math.round(finalScore)));
+}
+
+function tacticalOpportunityScoreFromStock(stock: Stock): number {
+  const changePct = toNumberOrNull(stock.changePercent) ?? 0;
+  const week = toNumberOrNull(stock.weekChange) ?? 0;
+  const month = toNumberOrNull(stock.monthChange) ?? 0;
+  const price = toNumberOrNull(stock.price);
+  const low52 = toNumberOrNull(stock.fiftyTwoWeekLow);
+  const high52 = toNumberOrNull(stock.fiftyTwoWeekHigh);
+  const volume = toNumberOrNull(stock.volume);
+  const marketCap = toNumberOrNull(stock.marketCap);
+
+  // Prefer mild-to-moderate dips as better entries than sharp falling knives.
+  const dipMagnitude = Math.max(0, -changePct);
+  const dipQuality = Math.max(0, 1 - Math.abs(dipMagnitude - 2.5) / 4.5); // peak near -2.5%
+  const trendPenalty =
+    (week <= -8 ? 0.2 : week <= -4 ? 0.1 : 0) +
+    (month <= -15 ? 0.25 : month <= -8 ? 0.1 : 0);
+
+  const rangeOpportunity = (() => {
+    if (price == null || low52 == null || high52 == null || high52 <= low52) return 0.45;
+    const pos = (price - low52) / (high52 - low52);
+    return Math.max(0, Math.min(1, (0.78 - pos) / 0.78));
+  })();
+
+  const liquidity = (() => {
+    if (volume == null || marketCap == null || marketCap <= 0) return 0.5;
+    const turnover = volume / marketCap;
+    const ln = Math.log10(Math.max(turnover * 1e6, 1));
+    return Math.max(0, Math.min(1, ln / 8));
+  })();
+
+  const raw =
+    dipQuality * 38 +
+    rangeOpportunity * 37 +
+    liquidity * 10 +
+    Math.max(0, 1 - trendPenalty) * 15;
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
+function fundamentalsFromStockRow(stock: Stock): Record<string, string> {
+  const row = stock as Record<string, unknown>;
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const v = row[key];
+      if (v == null || v === '') continue;
+      return String(v);
+    }
+    return undefined;
+  };
+  const toFund = (v: unknown) => {
+    if (v == null || v === '') return '—';
+    return String(v);
+  };
+  return {
+    price: toFund(stock.price ?? pick('price')),
+    fiftyTwoWeekLow: toFund(stock.fiftyTwoWeekLow ?? pick('fiftyTwoWeekLow', '52WeekLow')),
+    fiftyTwoWeekHigh: toFund(stock.fiftyTwoWeekHigh ?? pick('fiftyTwoWeekHigh', '52WeekHigh')),
+    dayLow: toFund(pick('dayLow')),
+    dayHigh: toFund(pick('dayHigh')),
+    pe: toFund(stock.pe ?? pick('pe', 'trailingPE')),
+    forwardPE: toFund(pick('forwardPE', 'forwardPe', 'fwdPE')),
+    eps: toFund(pick('eps', 'trailingEps', 'epsTrailingTwelveMonths')),
+    open: toFund(pick('open', 'regularMarketOpen')),
+    priceToBook: toFund(stock.priceToBook ?? pick('priceToBook', 'pb')),
+    dividendYield: toFund(stock.dividendYield ?? pick('dividendYield')),
+  };
+}
+
+function normalizeFundamentalsRecord(raw: Record<string, unknown> | null | undefined): Record<string, string> {
+  const row = (raw || {}) as Record<string, unknown>;
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = row[key];
+      if (value == null || value === '') continue;
+      return value;
+    }
+    return undefined;
+  };
+  const toFund = (v: unknown) => (v == null || v === '' ? '—' : String(v));
+  return {
+    symbol: toFund(pick('symbol')),
+    price: toFund(pick('price', 'regularMarketPrice')),
+    marketCap: toFund(pick('marketCap', 'market_cap', 'market cap')),
+    volume: toFund(pick('volume', 'regularMarketVolume')),
+    avgVolume: toFund(pick('avgVolume', 'avg_volume', 'averageVolume')),
+    pe: toFund(pick('pe', 'trailingPE', 'trailing_pe')),
+    forwardPE: toFund(pick('forwardPE', 'forwardPe', 'fwdPE', 'forward_pe', 'forward_p/e')),
+    eps: toFund(pick('eps', 'trailingEps', 'epsTrailingTwelveMonths', 'eps_ttm')),
+    dividendYield: toFund(pick('dividendYield', 'dividend_yield', 'dividendYieldPct')),
+    open: toFund(pick('open', 'regularMarketOpen')),
+    fiftyTwoWeekLow: toFund(pick('fiftyTwoWeekLow', '52WeekLow', 'fifty_two_week_low')),
+    fiftyTwoWeekHigh: toFund(pick('fiftyTwoWeekHigh', '52WeekHigh', 'fifty_two_week_high')),
+    dayLow: toFund(pick('dayLow', 'day_low')),
+    dayHigh: toFund(pick('dayHigh', 'day_high')),
+    sector: toFund(pick('sector')),
+    priceToBook: toFund(pick('priceToBook', 'price_to_book', 'pb')),
+  };
+}
+
+function scorecardInputFromDetails(
+  fundamentals: Record<string, string> | null,
+  stock: Stock,
+): Record<string, string> {
+  if (!fundamentals) return {};
+  // Keep scorecard tied to the same values shown in the "Details" tab.
+  return {
+    price: fundamentals.price ?? String(stock.price ?? '—'),
+    marketCap: fundamentals.marketCap ?? '—',
+    volume: fundamentals.volume ?? '—',
+    avgVolume: fundamentals.avgVolume ?? '—',
+    pe: fundamentals.pe ?? '—',
+    forwardPE: fundamentals.forwardPE ?? '—',
+    eps: fundamentals.eps ?? '—',
+    dividendYield: fundamentals.dividendYield ?? '—',
+    open: fundamentals.open ?? '—',
+    fiftyTwoWeekLow: fundamentals.fiftyTwoWeekLow ?? '—',
+    fiftyTwoWeekHigh: fundamentals.fiftyTwoWeekHigh ?? '—',
+    dayLow: fundamentals.dayLow ?? '—',
+    dayHigh: fundamentals.dayHigh ?? '—',
+    sector: stock.sector?.trim() || fundamentals.sector || '—',
+  };
+}
+
+function entryPointFromStockRow(stock: Stock): ScorecardBand {
+  return scorecardFromFundamentals(fundamentalsFromStockRow(stock), stock, stock.history ?? null).entryPoint;
 }
 
 async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promise<T> {
@@ -426,6 +643,22 @@ async function fetchJson<T = unknown>(url: string, options?: RequestInit): Promi
     throw new Error(res.ok
       ? `Invalid server response. ${hint}`
       : `Server error (${res.status}). Make sure the backend is running.`);
+  }
+}
+
+async function fetchJsonWithDevApiFallback<T = unknown>(url: string, options?: RequestInit): Promise<T> {
+  try {
+    return await fetchJson<T>(url, options);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const shouldRetryDirect =
+      typeof window !== 'undefined' &&
+      /^\/api\//.test(url) &&
+      /Failed to fetch/i.test(msg);
+    if (!shouldRetryDirect) throw e;
+    const host = window.location.hostname || '127.0.0.1';
+    const direct = `http://${host}:3001${url}`;
+    return fetchJson<T>(direct, options);
   }
 }
 
@@ -467,7 +700,13 @@ type Stock = {
   history?: { date: string; close: number }[];
   volume?: number;
   marketCap?: number;
+  pe?: number;
+  priceToBook?: number;
+  dividendYield?: number;
   bestRank?: number;
+  entryPoint?: ScorecardBand;
+  bestEntryScore?: number;
+  tacticalEntryScore?: number;
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
 };
@@ -665,6 +904,32 @@ type BestSaleSignal = {
   score: number;
   reason: string;
 };
+
+type WatchlistItem = Stock & {
+  id: string;
+  watchAddedPrice?: number;
+  watchAddedAt?: string;
+};
+
+const DEFAULT_WATCHLIST_TABS = ['Watchlist 1', 'Watchlist 2', 'Watchlist 3'] as const;
+type WatchlistTab = string;
+const WATCHLISTS_STORAGE_KEY = 'live-stock-watchlists-v1';
+
+function watchlistsStorageKeyForApiKey(apiKey: string): string | null {
+  const normalized = apiKey.trim();
+  if (!normalized) return null;
+  return `${WATCHLISTS_STORAGE_KEY}:${normalized}`;
+}
+
+function formatWatchAddedDate(v?: string): string {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '—';
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = d.toLocaleString('en-US', { month: 'short' });
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${day}${month}'${yy}`;
+}
 
 function toNum(v: unknown): number | null {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -1123,6 +1388,8 @@ function StockItem({
   onPredictionLevelChange,
   fundamentalsSubTab,
   onFundamentalsSubTabChange,
+  showBestEntryTag,
+  showWatchDelta,
 }: {
   stock: Stock;
   expanded: boolean;
@@ -1142,6 +1409,8 @@ function StockItem({
   onPredictionLevelChange: (level: PredictionLevel) => void;
   fundamentalsSubTab: 'details' | 'scorecard';
   onFundamentalsSubTabChange: (tab: 'details' | 'scorecard') => void;
+  showBestEntryTag?: boolean;
+  showWatchDelta?: boolean;
   quarterlyProfit: QuarterlyProfitPayload | null;
   loadingQuarterlyProfit: boolean;
   stockInfo: StockInfoResponse | null;
@@ -1287,6 +1556,26 @@ function StockItem({
   const isSearchHighlighted = isSearchPinned && highlightedSearchId === `${stock.symbol}-${stock.segment}`;
   const displayName = isSearchPinned ? String(stock.name || '').replace(/\.NS$/i, '') : stock.name;
   const displaySymbol = isSearchPinned ? String(stock.symbol || '').replace(/\.NS$/i, '') : stock.symbol;
+  const resolvedEntryPoint: ScorecardBand = scorecardFromFundamentals(
+    scorecardInputFromDetails(fundamentals ?? fundamentalsFromStockRow(stock), stock),
+    stock,
+    history,
+  ).entryPoint;
+  const resolvedBestEntryScore =
+    typeof stock.bestEntryScore === 'number' && Number.isFinite(stock.bestEntryScore)
+      ? stock.bestEntryScore
+      : bestEntryScoreFromFundamentals(
+          scorecardInputFromDetails(fundamentals ?? fundamentalsFromStockRow(stock), stock),
+          stock,
+          history,
+        );
+  const addedPrice = typeof (stock as WatchlistItem).watchAddedPrice === 'number' ? (stock as WatchlistItem).watchAddedPrice : null;
+  const todayPrice = typeof stock.price === 'number' && Number.isFinite(stock.price) ? stock.price : null;
+  const watchDeltaPct =
+    showWatchDelta && addedPrice != null && addedPrice > 0 && todayPrice != null
+      ? ((todayPrice - addedPrice) / addedPrice) * 100
+      : null;
+  const watchAddedOn = showWatchDelta ? formatWatchAddedDate((stock as WatchlistItem).watchAddedAt) : null;
 
   return (
     <div className={`stock-item ${isSearchPinned ? 'search-stock-item' : ''} ${isSearchHighlighted ? 'search-stock-item-highlight' : ''}`}>
@@ -1323,7 +1612,7 @@ function StockItem({
               `#${stock.rank}`
             )}
           </span>
-          <div>
+          <div className="stock-main-text">
             <div className="stock-name">{displayName}</div>
             <div className="stock-symbol-row">
               <span className="stock-symbol">{displaySymbol}</span>
@@ -1332,7 +1621,27 @@ function StockItem({
                   Best #{stock.bestRank}
                 </span>
               )}
+              {showBestEntryTag && (
+                <span
+                  className={`stock-best-tag stock-entry-tag stock-entry-${resolvedEntryPoint ?? 'fair'}`}
+                  title="Best entry score from scorecard"
+                >
+                  Score: {resolvedBestEntryScore}
+                </span>
+              )}
             </div>
+            {showWatchDelta && (
+              <div className="watch-delta-row">
+                <span className="watch-delta-price">Added ₹{addedPrice != null ? addedPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</span>
+                <span className="watch-delta-price">On {watchAddedOn}</span>
+                <span className="watch-delta-price">Today ₹{todayPrice != null ? todayPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</span>
+                {watchDeltaPct != null && (
+                  <span className={`watch-delta-change ${watchDeltaPct >= 0 ? 'up' : 'down'}`}>
+                    {watchDeltaPct >= 0 ? '+' : ''}{watchDeltaPct.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="stock-price">
@@ -1448,7 +1757,7 @@ function StockItem({
                         <div key={label} className="fund-row">
                           <span className="fund-label">{label}</span>
                           <span className="fund-value">
-                            {val}
+                            {val ?? '—'}
                             {cap && <span className="fund-cap-type"> ({cap})</span>}
                           </span>
                         </div>
@@ -1480,7 +1789,11 @@ function StockItem({
                   ) : (
                     <div className="fund-scorecard">
                       {(() => {
-                        const score = scorecardFromFundamentals(fundamentals, stock, history);
+                        const score = scorecardFromFundamentals(
+                          scorecardInputFromDetails(fundamentals, stock),
+                          stock,
+                          history,
+                        );
                         const rows: Array<{ label: string; value: ScorecardBand }> = [
                           { label: 'Performance', value: score.performance },
                           { label: 'Valuation', value: score.valuation },
@@ -1506,6 +1819,19 @@ function StockItem({
                           </div>
                         ));
                       })()}
+                      <div className="fund-row fund-best-score-row">
+                        <span
+                          className={`stock-best-tag stock-entry-tag stock-entry-${
+                            resolvedBestEntryScore >= 75
+                              ? "good"
+                              : resolvedBestEntryScore >= 50
+                                ? "fair"
+                                : "low"
+                          }`}
+                        >
+                          {`Score: #${resolvedBestEntryScore}`}
+                        </span>
+                      </div>
                     </div>
                   )}
                 </>
@@ -2014,7 +2340,7 @@ function StockItem({
   );
 }
 
-type SortOrder = 'asc' | 'desc' | 'best' | 'bestprice';
+type SortOrder = 'asc' | 'desc' | 'best' | 'bestprice' | 'bestentry';
 
 function StockListSection({
   stocks,
@@ -2053,6 +2379,8 @@ function StockListSection({
   defaultChartPeriod,
   fundamentalsSubTab,
   onFundamentalsSubTabChange,
+  sortOrder,
+  showWatchDelta,
 }: {
   stocks: Stock[];
   activeStockId: string | null;
@@ -2090,6 +2418,8 @@ function StockListSection({
   defaultChartPeriod: ChartPeriod;
   fundamentalsSubTab: 'details' | 'scorecard';
   onFundamentalsSubTabChange: (tab: 'details' | 'scorecard') => void;
+  sortOrder: SortOrder;
+  showWatchDelta?: boolean;
 }) {
   return (
     <section className="stock-list-section">
@@ -2144,6 +2474,8 @@ function StockListSection({
               onPredictionLevelChange={(l) => onPredictionLevelChange(stock, l)}
               fundamentalsSubTab={fundamentalsSubTab}
               onFundamentalsSubTabChange={onFundamentalsSubTabChange}
+              showBestEntryTag={sortOrder === 'bestentry'}
+              showWatchDelta={showWatchDelta}
             />
           );
         })}
@@ -2172,7 +2504,11 @@ export default function App() {
   const [fundamentalsCache, setFundamentalsCache] = useState<Record<string, Record<string, string>>>(() => {
     try {
       const s = sessionStorage.getItem(FUNDAMENTALS_CACHE_KEY);
-      return s ? JSON.parse(s) : {};
+      if (!s) return {};
+      const parsed = JSON.parse(s) as Record<string, Record<string, unknown>>;
+      return Object.fromEntries(
+        Object.entries(parsed || {}).map(([id, value]) => [id, normalizeFundamentalsRecord(value)]),
+      );
     } catch {
       return {};
     }
@@ -2218,7 +2554,7 @@ export default function App() {
   });
   /** `__none__` = stocks with no sector label */
   const [sectorFilter, setSectorFilter] = useState<string>('all');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('best');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('bestentry');
   const [autoTradeLoading, setAutoTradeLoading] = useState(false);
   const [proceedErrorPopup, setProceedErrorPopup] = useState<string | null>(null);
   const [selectedStockIds, setSelectedStockIds] = useState<Set<string>>(new Set());
@@ -2315,6 +2651,23 @@ export default function App() {
     error?: string;
     orders?: { symbol: string; name?: string; status: string; orderId?: string; error?: string }[];
   } | null>(null);
+  const [watchPageOpen, setWatchPageOpen] = useState(false);
+  const [watchTabs, setWatchTabs] = useState<WatchlistTab[]>([...DEFAULT_WATCHLIST_TABS]);
+  const [activeWatchTab, setActiveWatchTab] = useState<WatchlistTab>('Watchlist 1');
+  const [watchMoveTargetTab, setWatchMoveTargetTab] = useState<WatchlistTab>('Watchlist 2');
+  const [watchCapFilter, setWatchCapFilter] = useState<string[]>(['all']);
+  const [watchSortFilter, setWatchSortFilter] = useState<'desc' | 'asc' | 'best' | 'bestentry' | 'bestprice'>('bestentry');
+  const [watchSectorFilter, setWatchSectorFilter] = useState<string>('all');
+  const [watchCapMenuOpen, setWatchCapMenuOpen] = useState(false);
+  const [watchSelectionIds, setWatchSelectionIds] = useState<Set<string>>(new Set());
+  const [watchActiveStockId, setWatchActiveStockId] = useState<string | null>(null);
+  const [watchActiveTab, setWatchActiveTab] = useState<TabType | null>(null);
+  const [watchlistsReadyForPersistence, setWatchlistsReadyForPersistence] = useState(false);
+  const [watchlists, setWatchlists] = useState<Record<WatchlistTab, WatchlistItem[]>>({
+    'Watchlist 1': [],
+    'Watchlist 2': [],
+    'Watchlist 3': [],
+  });
   const [failedOrdersFromTrade, setFailedOrdersFromTrade] = useState<Array<{
     order_id: string;
     tradingsymbol: string;
@@ -2327,6 +2680,7 @@ export default function App() {
     status_message?: string;
     average_price?: number;
   }>>([]);
+  const watchCapMenuRef = useRef<HTMLDivElement>(null);
 
   const mergeSegmentRows = useCallback((existing: SegmentData[], incoming: SegmentData[]) => {
     const map = new Map<string, SegmentData>();
@@ -2463,11 +2817,16 @@ export default function App() {
         catch { throw new Error('Invalid response. Make sure the server is running.'); }
       })
       .then((data) => {
+        const normalizedSegments: SegmentData[] = (data.segments || []).map((seg: SegmentData) => ({
+          ...seg,
+          topGainers: (seg.topGainers || []).map((s) => ({ ...s, entryPoint: s.entryPoint ?? entryPointFromStockRow(s) })),
+          topLosers: (seg.topLosers || []).map((s) => ({ ...s, entryPoint: s.entryPoint ?? entryPointFromStockRow(s) })),
+        }));
         const shouldDeferViewUpdate =
           silent &&
           activeStockIdRef.current != null &&
           activeTabRef.current === 'fundamentals';
-        upsertSegmentsForMarket(m, data.segments || [], { applyToView: !shouldDeferViewUpdate });
+        upsertSegmentsForMarket(m, normalizedSegments, { applyToView: !shouldDeferViewUpdate });
         if (!loadedSegmentsRef.current[m]) loadedSegmentsRef.current[m] = new Set();
         segments.forEach((s) => loadedSegmentsRef.current[m].add(s));
         setSegmentReadyByMarket((prev) => ({
@@ -2672,12 +3031,12 @@ export default function App() {
   }, [fundamentalsCache]);
 
   useEffect(() => {
-    if (historyModalOpen || reportFullscreen || goldPageOpen) {
+    if (historyModalOpen || reportFullscreen || goldPageOpen || watchPageOpen) {
       const prev = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
       return () => { document.body.style.overflow = prev; };
     }
-  }, [historyModalOpen, reportFullscreen, goldPageOpen]);
+  }, [historyModalOpen, reportFullscreen, goldPageOpen, watchPageOpen]);
 
   useEffect(() => {
     if (!goldPageOpen) return;
@@ -2800,7 +3159,7 @@ export default function App() {
     if (historyModalOpen) {
       setKiteOrdersError(null);
       setKiteOrdersLoading(true);
-      fetchJson<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`, {
+      fetchJsonWithDevApiFallback<{ orders?: Array<{ order_id: string; tradingsymbol: string; exchange: string; status: string; transaction_type: string; quantity: number; average_price?: number; order_timestamp?: string; status_message?: string | null }>; error?: string }>(`${API}/kite/orders`, {
         headers: kiteHeaders(kiteForm),
       })
         .then((data) => {
@@ -2822,7 +3181,7 @@ export default function App() {
   useEffect(() => {
     if (historyModalOpen && (ordersModalTab === 'portfolio' || ordersModalTab === 'analyse')) {
       setKiteHoldingsLoading(true);
-      fetchJson<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number; overall_return_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
+      fetchJsonWithDevApiFallback<{ holdings?: Array<{ tradingsymbol: string; exchange: string; quantity: number; average_price: number; last_price: number; pnl?: number; day_change_percentage?: number; overall_return_percentage?: number }>; error?: string }>(`${API}/kite/holdings`, {
         headers: kiteHeaders(kiteForm),
       })
         .then((data) => {
@@ -2910,6 +3269,10 @@ export default function App() {
   }, [portfolioKiteSelectedHoldings]);
 
   const kiteConfigured = !!(kiteForm.apiKey && kiteForm.accessToken);
+  const watchlistsStorageKey = useMemo(
+    () => watchlistsStorageKeyForApiKey(kiteForm.apiKey),
+    [kiteForm.apiKey]
+  );
   const holdingsForAnalysis = analyseSource === 'xlsx' && xlsxHoldings.length > 0 ? xlsxHoldings : kiteHoldings;
 
   const canRunKiteAnalysis = !kiteHoldingsLoading && !kiteHoldingsError && kiteHoldings.length > 0;
@@ -3014,45 +3377,114 @@ export default function App() {
         return t === sectorFilter;
       });
     }
-    const byAbsoluteChange = [...merged].sort((a, b) => {
+    // Compute Entry Point up-front in the same pipeline that derives Best # rank.
+    const withEntryPoint = merged.map((s) => ({
+      ...s,
+      entryPoint: s.entryPoint ?? entryPointFromStockRow(s),
+    }));
+    const byAbsoluteChange = [...withEntryPoint].sort((a, b) => {
       const aAbs = Math.abs(a.changePercent ?? 0);
       const bAbs = Math.abs(b.changePercent ?? 0);
       return bAbs - aAbs;
     });
     const topListing = byAbsoluteChange.slice(0, displayLimit);
-    const losersInTopN = topListing.filter((s) => (s.changePercent ?? 0) < 0);
     const volumeLog = (v: number | undefined) => Math.log10(Math.max(v ?? 1, 1));
     const capLog = (v: number | undefined) => Math.log10(Math.max(v ?? 1, 1));
-    const scored = losersInTopN.map((s) => {
+    const scored = topListing.map((s) => {
+      const id = `${s.symbol}-${s.segment}`;
+      // Keep Best Rank stable across row-level fundamentals fetches.
+      // Using only list-level snapshot data avoids rank jumping when one row is opened.
+      const scorecardInput = fundamentalsFromStockRow(s);
+      const history = chartCache[id]?.['3y'] ?? s.history ?? null;
+      const fundamentalsScore = bestEntryScoreFromFundamentals(scorecardInput, s, history);
+      const tacticalScore = tacticalOpportunityScoreFromStock(s);
+
       const dip = -(s.changePercent ?? 0);
-      const vol = volumeLog(s.volume) * 0.3;
-      const week = (s.weekChange ?? 0) < 0 ? 0.5 : 0;
-      const month = (s.monthChange ?? 0) < 0 ? 0.3 : 0;
-      const cap = capLog(s.marketCap) * 0.2;
+      const dipQuality = Math.max(0, 1 - Math.abs(dip - 2.5) / 5); // best near ~-2.5%
+      const trendPenalty =
+        ((s.weekChange ?? 0) <= -8 ? 0.1 : 0) +
+        ((s.monthChange ?? 0) <= -15 ? 0.15 : 0) +
+        ((s.changePercent ?? 0) >= 3 ? 0.2 : 0); // avoid chasing spikes for entry ranking
+
+      const vol = volumeLog(s.volume) * 0.2;
+      const cap = capLog(s.marketCap) * 0.15;
       let fiftyTwoWScore = 0;
       const price = s.price ?? 0;
       const high = s.fiftyTwoWeekHigh;
       const low = s.fiftyTwoWeekLow;
       if (high != null && low != null && high > low && price > 0) {
         const upsideInRange = (high - price) / (high - low);
-        fiftyTwoWScore = Math.max(0, Math.min(1, upsideInRange)) * 2;
+        fiftyTwoWScore = Math.max(0, Math.min(1, upsideInRange)) * 1.5;
       }
       const mcap = s.marketCap ?? 1;
       const turnover = (s.volume ?? 0) / mcap;
-      const turnoverScore = Math.min(1, Math.log10(Math.max(turnover * 1e6, 1)) / 8) * 0.3;
-      const bestScore = dip * 2 + vol + week + month + cap + fiftyTwoWScore + turnoverScore;
-      return { ...s, _bestScore: bestScore };
+      const turnoverScore = Math.min(1, Math.log10(Math.max(turnover * 1e6, 1)) / 8) * 0.25;
+
+      const coverageFields = [
+        scorecardInput.pe,
+        scorecardInput.forwardPE,
+        scorecardInput.eps,
+        scorecardInput.dividendYield,
+        scorecardInput.fiftyTwoWeekLow,
+        scorecardInput.fiftyTwoWeekHigh,
+      ];
+      const coverage = coverageFields.filter((x) => x != null && x !== '' && x !== '—').length;
+      const confidence = 0.7 + (coverage / coverageFields.length) * 0.3; // 0.7..1.0
+
+      const blendedSignal =
+        (fundamentalsScore / 100) * 0.55 +
+        (tacticalScore / 100) * 0.35 +
+        dipQuality * 0.1;
+      const microStructure = vol + cap + fiftyTwoWScore + turnoverScore;
+      const bestScore = (blendedSignal * 10 + microStructure - trendPenalty) * confidence;
+
+      return { ...s, _bestScore: bestScore, _rankId: id };
     });
     scored.sort((a, b) => (b._bestScore ?? 0) - (a._bestScore ?? 0));
-    const symbolToBestRank: Record<string, number> = {};
+    const rowToBestRank: Record<string, number> = {};
     scored.forEach((s, i) => {
-      symbolToBestRank[s.symbol] = i + 1;
+      if (s._rankId) rowToBestRank[s._rankId] = i + 1;
     });
-    const topWithBestRank = topListing.map((s) => ({
-      ...s,
-      bestRank: symbolToBestRank[s.symbol],
-    }));
+    const topWithBestRank = topListing.map((s) => {
+      const id = `${s.symbol}-${s.segment}`;
+      const scorecardInput = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
+      const entryPoint = scorecardFromFundamentals(
+        scorecardInput,
+        s,
+        chartCache[id]?.['3y'] ?? s.history ?? null,
+      ).entryPoint;
+      const fundamentalsScore = bestEntryScoreFromFundamentals(
+        scorecardInput,
+        s,
+        chartCache[id]?.['3y'] ?? s.history ?? null,
+      );
+      const tacticalEntryScore = tacticalOpportunityScoreFromStock(s);
+      const bestRank = rowToBestRank[id];
+      const rankBoost = bestRank != null ? Math.max(0, 8 - (bestRank - 1) * 0.5) : 0;
+      // Blend quality with timing equally, then add a small shortlist-rank bonus.
+      const bestEntryScore = Math.round(
+        Math.max(0, Math.min(100, fundamentalsScore * 0.5 + tacticalEntryScore * 0.5 + rankBoost)),
+      );
+      return {
+        ...s,
+        bestRank,
+        entryPoint,
+        tacticalEntryScore,
+        bestEntryScore,
+      };
+    });
     const sorted = [...topWithBestRank].sort((a, b) => {
+      if (sortOrder === 'bestentry') {
+        const aScore = a.bestEntryScore ?? -1;
+        const bScore = b.bestEntryScore ?? -1;
+        if (aScore !== bScore) return bScore - aScore;
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        if (aBest !== bBest) return aBest - bBest;
+        const aPrice = a.price ?? Infinity;
+        const bPrice = b.price ?? Infinity;
+        return aPrice - bPrice;
+      }
       if (sortOrder === 'best') {
         const aBest = a.bestRank ?? 9999;
         const bBest = b.bestRank ?? 9999;
@@ -3075,7 +3507,7 @@ export default function App() {
       .filter((s) => (s.market || 'in') === market)
       .map((s) => ({ ...s, rank: 0 }));
     return [...pinnedForMarket, ...ranked];
-  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market]);
+  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market, fundamentalsCache, chartCache]);
 
   // After cap/segment list merges, row ids `${symbol}-${segment}` can drift while caches still use the old id.
   // Remap selection + caches so the expanded row (and fundamentals tab) stay attached to the visible stock.
@@ -3156,7 +3588,7 @@ export default function App() {
         const res = await fetch(`${API}/fundamentals/${encodeURIComponent(stock.symbol)}?market=${mkt}`);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
-        fund = data as Record<string, string>;
+        fund = normalizeFundamentalsRecord(data as Record<string, unknown>);
         setFundamentalsCache((c) => ({ ...c, [id]: fund! }));
       } catch {
         fund = {};
@@ -3314,7 +3746,7 @@ export default function App() {
         .then((r) => r.json())
         .then((data) => {
           if (data.error) throw new Error(data.error);
-          setFundamentalsCache((c) => ({ ...c, [id]: data }));
+          setFundamentalsCache((c) => ({ ...c, [id]: normalizeFundamentalsRecord(data as Record<string, unknown>) }));
         })
         .catch(() => { /* no fallback - live data only */ })
         .finally(() => setLoadingFundamentalsId(null));
@@ -3381,7 +3813,7 @@ export default function App() {
         .then((r) => r.json())
         .then((data) => {
           if (data.error) throw new Error(data.error);
-          setFundamentalsCache((c) => ({ ...c, [id]: data }));
+          setFundamentalsCache((c) => ({ ...c, [id]: normalizeFundamentalsRecord(data as Record<string, unknown>) }));
         })
         .catch(() => { /* live-only */ })
         .finally(() => setLoadingFundamentalsId(null));
@@ -3534,7 +3966,7 @@ export default function App() {
         const res = await fetch(`${API}/fundamentals/${stock.symbol}?market=${stock.market || 'in'}`);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
-        setFundamentalsCache((c) => ({ ...c, [id]: data }));
+        setFundamentalsCache((c) => ({ ...c, [id]: normalizeFundamentalsRecord(data as Record<string, unknown>) }));
       } catch {
         /* no fallback - live data only */
       } finally {
@@ -3654,6 +4086,147 @@ export default function App() {
     setBuyQuantityBySymbol(Object.fromEntries(stocksToBuy.map((s) => [s.symbol, 1])));
   };
 
+  const getSelectedStocksFromMainList = useCallback((): Stock[] => {
+    const inSegments = segmentsByMarket['in'] || [];
+    const selectedStocks: Stock[] = [];
+    const pinnedIn = searchPinnedStocks.filter((s) => (s.market || 'in') === 'in');
+    for (const id of selectedStockIds) {
+      const pinnedHit = pinnedIn.find((s) => `${s.symbol}-${s.segment}` === id);
+      if (pinnedHit) {
+        selectedStocks.push(pinnedHit);
+        continue;
+      }
+      for (const seg of inSegments) {
+        const found = [...(seg.topGainers || []), ...(seg.topLosers || [])].find(
+          (s) => `${s.symbol}-${seg.segment}` === id,
+        );
+        if (found) {
+          selectedStocks.push(found);
+          break;
+        }
+      }
+    }
+    return selectedStocks;
+  }, [segmentsByMarket, selectedStockIds, searchPinnedStocks]);
+
+  const handleWatchSelected = useCallback(() => {
+    if (!kiteConfigured) {
+      setHistoryModalOpen(true);
+      setOrdersModalTab('settings');
+      return;
+    }
+    const resetWatchViewDefaults = () => {
+      setWatchCapFilter(['all', ...CAP_SEGMENT_VALUES]);
+      setWatchSortFilter('bestentry');
+      setWatchSectorFilter('all');
+      setWatchCapMenuOpen(false);
+      setWatchSelectionIds(new Set());
+    };
+    const selectedStocks = getSelectedStocksFromMainList();
+    // Always allow opening watch page, even with no current selection.
+    if (!selectedStocks.length) {
+      resetWatchViewDefaults();
+      setWatchPageOpen(true);
+      return;
+    }
+    setWatchlists((prev) => {
+      const existing = prev[activeWatchTab] || [];
+      const map = new Map(existing.map((x) => [x.id, x]));
+      selectedStocks.forEach((s) => {
+        const id = `${s.symbol}-${s.segment}`;
+        const existingItem = map.get(id);
+        map.set(id, {
+          ...(existingItem || {}),
+          ...s,
+          id,
+          market: s.market || 'in',
+          watchAddedPrice:
+            existingItem?.watchAddedPrice != null
+              ? existingItem.watchAddedPrice
+              : (typeof s.price === 'number' && Number.isFinite(s.price) ? s.price : undefined),
+          watchAddedAt: existingItem?.watchAddedAt ?? new Date().toISOString(),
+        });
+      });
+      return { ...prev, [activeWatchTab]: Array.from(map.values()) };
+    });
+    resetWatchViewDefaults();
+    setWatchPageOpen(true);
+  }, [activeWatchTab, getSelectedStocksFromMainList, kiteConfigured]);
+
+  const handleMoveWatchSelected = useCallback((targetTab?: WatchlistTab) => {
+    const resolvedTarget = targetTab ?? watchMoveTargetTab;
+    if (!watchSelectionIds.size || resolvedTarget === activeWatchTab) return;
+    setWatchlists((prev) => {
+      const source = prev[activeWatchTab] || [];
+      const target = prev[resolvedTarget] || [];
+      const moving = source.filter((x) => watchSelectionIds.has(x.id));
+      if (!moving.length) return prev;
+      const sourceNext = source.filter((x) => !watchSelectionIds.has(x.id));
+      const targetMap = new Map(target.map((x) => [x.id, x]));
+      moving.forEach((x) => targetMap.set(x.id, x));
+      return {
+        ...prev,
+        [activeWatchTab]: sourceNext,
+        [resolvedTarget]: Array.from(targetMap.values()),
+      };
+    });
+    setWatchSelectionIds(new Set());
+  }, [watchSelectionIds, watchMoveTargetTab, activeWatchTab]);
+
+  const handleRemoveWatchItem = useCallback((id: string) => {
+    setWatchlists((prev) => ({
+      ...prev,
+      [activeWatchTab]: (prev[activeWatchTab] || []).filter((x) => x.id !== id),
+    }));
+    setWatchSelectionIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, [activeWatchTab]);
+
+  const handleAddWatchlistTab = useCallback(() => {
+    const nums = watchTabs
+      .map((tab) => {
+        const m = tab.match(/^Watchlist\s+(\d+)$/i);
+        return m ? Number(m[1]) : 0;
+      })
+      .filter((n) => Number.isFinite(n));
+    const nextNum = (nums.length ? Math.max(...nums) : 0) + 1;
+    const nextTab = `Watchlist ${nextNum}`;
+    setWatchTabs((prev) => [...prev, nextTab]);
+    setWatchlists((prev) => ({ ...prev, [nextTab]: prev[nextTab] || [] }));
+    setActiveWatchTab(nextTab);
+    const fallback = watchTabs[0] || 'Watchlist 1';
+    setWatchMoveTargetTab(fallback === nextTab ? 'Watchlist 1' : fallback);
+  }, [watchTabs]);
+
+  const handleDeleteWatchlistTab = useCallback(() => {
+    const rows = watchlists[activeWatchTab] || [];
+    if (rows.length > 0) return;
+    if (watchTabs.length <= 1) return;
+    if (!window.confirm(`Delete ${activeWatchTab}?`)) return;
+
+    const remainingTabs = watchTabs.filter((tab) => tab !== activeWatchTab);
+    const fallbackTab = remainingTabs[0] || 'Watchlist 1';
+
+    setWatchTabs(remainingTabs);
+    setWatchlists((prev) => {
+      const next = { ...prev };
+      delete next[activeWatchTab];
+      return next;
+    });
+    setActiveWatchTab(fallbackTab);
+    setWatchMoveTargetTab((prevTarget) => {
+      if (prevTarget === activeWatchTab || !remainingTabs.includes(prevTarget)) {
+        const alt = remainingTabs.find((t) => t !== fallbackTab) || fallbackTab;
+        return alt;
+      }
+      return prevTarget;
+    });
+  }, [activeWatchTab, watchTabs, watchlists]);
+
   const handleCancelTrade = () => {
     setTradeConfirmModal(null);
   };
@@ -3739,6 +4312,290 @@ export default function App() {
     void ensureChartLoadedForPeriod(stock, id, period);
   };
 
+  useEffect(() => {
+    setWatchSelectionIds(new Set());
+    setWatchActiveStockId(null);
+    setWatchActiveTab(null);
+    setWatchCapFilter(['all']);
+    setWatchSortFilter('bestentry');
+    setWatchSectorFilter('all');
+    setWatchCapMenuOpen(false);
+    if (watchMoveTargetTab === activeWatchTab) {
+      const fallback = watchTabs.find((x) => x !== activeWatchTab) || 'Watchlist 1';
+      setWatchMoveTargetTab(fallback);
+    }
+  }, [activeWatchTab, watchMoveTargetTab, watchTabs]);
+
+  useEffect(() => {
+    if (!watchCapMenuOpen) return;
+    const onDocDown = (e: MouseEvent) => {
+      const el = watchCapMenuRef.current;
+      if (!el) return;
+      if (!el.contains(e.target as Node)) setWatchCapMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [watchCapMenuOpen]);
+
+  useEffect(() => {
+    // Restore saved watchlists only after user provides a valid Zerodha session in current tab.
+    if (!kiteConfigured || !watchlistsStorageKey) {
+      setWatchlistsReadyForPersistence(false);
+      return;
+    }
+    setWatchlistsReadyForPersistence(false);
+    try {
+      const raw = localStorage.getItem(watchlistsStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<Record<WatchlistTab, WatchlistItem[]>>;
+        const parsedKeys = Object.keys(parsed || {}).filter((k) => /^Watchlist\s+\d+$/i.test(k));
+        const tabs =
+          parsedKeys.length > 0
+            ? Array.from(new Set([...DEFAULT_WATCHLIST_TABS, ...parsedKeys]))
+            : [...DEFAULT_WATCHLIST_TABS];
+        const next = tabs.reduce<Record<WatchlistTab, WatchlistItem[]>>((acc, tab) => {
+          acc[tab] = Array.isArray(parsed?.[tab]) ? (parsed[tab] as WatchlistItem[]) : [];
+          return acc;
+        }, {});
+        setWatchTabs(tabs);
+        setWatchlists(next);
+      } else {
+        setWatchTabs([...DEFAULT_WATCHLIST_TABS]);
+        setWatchlists({
+          'Watchlist 1': [],
+          'Watchlist 2': [],
+          'Watchlist 3': [],
+        });
+      }
+    } catch {
+      /* ignore corrupted local cache */
+    } finally {
+      setWatchlistsReadyForPersistence(true);
+    }
+  }, [kiteConfigured, watchlistsStorageKey]);
+
+  useEffect(() => {
+    if (!kiteConfigured || !watchlistsReadyForPersistence || !watchlistsStorageKey) return;
+    try {
+      localStorage.setItem(watchlistsStorageKey, JSON.stringify(watchlists));
+    } catch {
+      /* ignore storage quota errors */
+    }
+  }, [watchlists, kiteConfigured, watchlistsReadyForPersistence, watchlistsStorageKey]);
+
+  useEffect(() => {
+    // Keep watchlist "today price" fresh from current market snapshots, while retaining add price.
+    const byMarketSymbol = new Map<string, Stock>();
+    for (const [mkt, segs] of Object.entries(segmentsByMarket)) {
+      for (const seg of segs || []) {
+        for (const s of [...(seg.topGainers || []), ...(seg.topLosers || [])]) {
+          byMarketSymbol.set(`${mkt}|${s.symbol}`, s);
+        }
+      }
+    }
+    searchPinnedStocks.forEach((s) => byMarketSymbol.set(`${s.market || 'in'}|${s.symbol}`, s));
+    if (byMarketSymbol.size === 0) return;
+    setWatchlists((prev) => {
+      let changed = false;
+      const next: Record<WatchlistTab, WatchlistItem[]> = { ...prev };
+      watchTabs.forEach((tab) => {
+        const rows = prev[tab] || [];
+        const updated = rows.map((w) => {
+          const hit = byMarketSymbol.get(`${w.market || 'in'}|${w.symbol}`);
+          if (!hit) return w;
+          const merged: WatchlistItem = {
+            ...w,
+            ...hit,
+            id: w.id,
+            market: w.market || hit.market || 'in',
+            watchAddedPrice: w.watchAddedPrice,
+          };
+          if (
+            merged.price !== w.price ||
+            merged.changePercent !== w.changePercent ||
+            merged.weekChange !== w.weekChange ||
+            merged.monthChange !== w.monthChange
+          ) {
+            changed = true;
+          }
+          return merged;
+        });
+        next[tab] = updated;
+      });
+      return changed ? next : prev;
+    });
+  }, [segmentsByMarket, searchPinnedStocks, watchTabs]);
+
+  useEffect(() => {
+    if (!watchPageOpen) return;
+    const rows = watchlists[activeWatchTab] || [];
+    if (!rows.length) return;
+    let cancelled = false;
+
+    const run = async () => {
+      const updates = await Promise.all(rows.map(async (w) => {
+        const marketCode = w.market || 'in';
+        const id = `${w.symbol}-${w.segment}`;
+        const [quoteRes, fundamentalsRes] = await Promise.all([
+          fetch(`${API}/quote/${encodeURIComponent(w.symbol)}?market=${marketCode}`)
+            .then((r) => r.json())
+            .catch(() => null),
+          fundamentalsCache[id]
+            ? Promise.resolve(null)
+            : fetch(`${API}/fundamentals/${encodeURIComponent(w.symbol)}?market=${marketCode}`)
+                .then((r) => r.json())
+                .catch(() => null),
+        ]);
+
+        return {
+          id,
+          quote: quoteRes && !quoteRes.error ? quoteRes : null,
+          fundamentals: fundamentalsRes && !fundamentalsRes.error ? fundamentalsRes : null,
+        };
+      }));
+
+      if (cancelled) return;
+
+      const fundamentalsUpdates: Record<string, Record<string, string>> = {};
+      updates.forEach((u) => {
+        if (u.fundamentals) fundamentalsUpdates[u.id] = normalizeFundamentalsRecord(u.fundamentals as Record<string, unknown>);
+      });
+      if (Object.keys(fundamentalsUpdates).length) {
+        setFundamentalsCache((prev) => ({ ...prev, ...fundamentalsUpdates }));
+      }
+
+      setWatchlists((prev) => {
+        const src = prev[activeWatchTab] || [];
+        let changed = false;
+        const mapped = src.map((w) => {
+          const hit = updates.find((u) => u.id === w.id);
+          if (!hit?.quote) return w;
+          const next: WatchlistItem = {
+            ...w,
+            price: typeof hit.quote.price === 'number' ? hit.quote.price : w.price,
+            change: typeof hit.quote.change === 'number' ? hit.quote.change : w.change,
+            changePercent: typeof hit.quote.changePercent === 'number' ? hit.quote.changePercent : w.changePercent,
+            volume: typeof hit.quote.volume === 'number' ? hit.quote.volume : w.volume,
+            marketCap: typeof hit.quote.marketCap === 'number' ? hit.quote.marketCap : w.marketCap,
+          };
+          if (
+            next.price !== w.price ||
+            next.changePercent !== w.changePercent ||
+            next.volume !== w.volume ||
+            next.marketCap !== w.marketCap
+          ) {
+            changed = true;
+          }
+          return next;
+        });
+        if (!changed) return prev;
+        return { ...prev, [activeWatchTab]: mapped };
+      });
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [watchPageOpen, activeWatchTab, watchlists, fundamentalsCache]);
+
+  const handleWatchStockTap = useCallback((stock: Stock) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    if (watchActiveStockId === id) {
+      setWatchActiveStockId(null);
+      setWatchActiveTab(null);
+      return;
+    }
+    const openTab = preferredTab || 'chart';
+    setWatchActiveStockId(id);
+    setWatchActiveTab(openTab);
+    // Reuse existing preload logic to keep same behavior as main list.
+    handleStockTap(stock);
+  }, [watchActiveStockId, preferredTab, handleStockTap]);
+
+  const handleWatchTabClick = useCallback(async (stock: Stock, tab: TabType) => {
+    const id = `${stock.symbol}-${stock.segment}`;
+    setWatchActiveStockId(id);
+    setWatchActiveTab(tab);
+    await handleTabClick(stock, tab);
+  }, [handleTabClick]);
+
+  const watchRows = watchlists[activeWatchTab] || [];
+  const showWatchFilters = watchRows.length >= 6;
+  const watchSectorOptions = useMemo(() => {
+    const set = new Set<string>();
+    watchRows.forEach((s) => {
+      const sec = (s.sector || '').trim();
+      if (sec) set.add(sec);
+      else set.add('__none__');
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [watchRows]);
+
+  const filteredWatchRows = useMemo(() => {
+    const getScoreValue = (s: Stock): number => {
+      if (typeof s.bestEntryScore === 'number' && Number.isFinite(s.bestEntryScore)) {
+        return s.bestEntryScore;
+      }
+      const id = `${s.symbol}-${s.segment}`;
+      const scorecardInput = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
+      const history = chartCache[id]?.['3y'] ?? s.history ?? null;
+      return bestEntryScoreFromFundamentals(scorecardInput, s, history);
+    };
+
+    const afterFilter = watchRows.filter((s) => {
+      const id = `${s.symbol}-${s.segment}`;
+      const fund = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
+      const cap = (inferCapType(s, fund) || '').toLowerCase();
+      const segmentCap = String(s.segment || '').toLowerCase();
+      const effectiveCap = cap || (CAP_SEGMENT_VALUES.find((v) => segmentCap.includes(v)) || '');
+
+      if (!watchCapFilter.includes('all') && !watchCapFilter.includes(effectiveCap)) return false;
+
+      if (watchSectorFilter !== 'all') {
+        const sec = (s.sector || '').trim();
+        if (watchSectorFilter === '__none__') return !sec;
+        return sec === watchSectorFilter;
+      }
+      return true;
+    });
+
+    const sorted = [...afterFilter].sort((a, b) => {
+      if (watchSortFilter === 'best') {
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        return aBest - bBest;
+      }
+      if (watchSortFilter === 'bestentry') {
+        const aScore = getScoreValue(a);
+        const bScore = getScoreValue(b);
+        if (aScore !== bScore) return bScore - aScore;
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        return aBest - bBest;
+      }
+      if (watchSortFilter === 'bestprice') {
+        const aPrice = a.price ?? Infinity;
+        const bPrice = b.price ?? Infinity;
+        if (aPrice !== bPrice) return aPrice - bPrice;
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        return aBest - bBest;
+      }
+      const aVal = a.changePercent ?? 0;
+      const bVal = b.changePercent ?? 0;
+      return watchSortFilter === 'desc' ? bVal - aVal : aVal - bVal;
+    });
+    return sorted;
+  }, [
+    watchRows,
+    fundamentalsCache,
+    chartCache,
+    watchCapFilter,
+    watchSortFilter,
+    watchSectorFilter,
+  ]);
+
   if (error) {
     return (
       <div className="app">
@@ -3756,6 +4613,20 @@ export default function App() {
           <div className="proceed-area">
             <div className="proceed-area-primary">
               <div className="proceed-area-left">
+                <button
+                  className="history-btn watch-btn"
+                  onClick={handleWatchSelected}
+                  title={
+                    kiteConfigured
+                      ? "Add selected stocks to watchlist"
+                      : "Configure Kite in My Zerodha > Settings"
+                  }
+                >
+                  Watch
+                  {selectedStockIds.size > 0 && (
+                    <span className="proceed-badge"> ({selectedStockIds.size})</span>
+                  )}
+                </button>
                 <button
                   className="proceed-btn"
                   onClick={handleProceed}
@@ -3975,7 +4846,8 @@ export default function App() {
             >
               <option value="desc">Profit</option>
               <option value="asc">Loss</option>
-              <option value="best">Best</option>
+              <option value="best">Best Rank</option>
+              <option value="bestentry">Best Score</option>
               <option value="bestprice">Best Price</option>
             </select>
             <button
@@ -4142,6 +5014,249 @@ export default function App() {
                 )}
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {watchPageOpen && (
+        <div className="auto-trade-result" role="dialog" aria-label="Watchlists full screen">
+          <div className="auto-trade-result-inner trade-confirm-modal gold-page-modal watch-page-modal">
+            <div className="auto-trade-result-header orders-header-with-tabs">
+              <div className="orders-modal-tabs">
+                {watchTabs.map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    className={`orders-tab-btn ${activeWatchTab === tab ? 'active' : ''}`}
+                    onClick={() => setActiveWatchTab(tab)}
+                  >
+                    {tab}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="orders-tab-btn"
+                  onClick={handleAddWatchlistTab}
+                  title="Add watch list"
+                  aria-label="Add watch list"
+                >
+                  +
+                </button>
+              </div>
+              <button className="auto-trade-close" onClick={() => setWatchPageOpen(false)} aria-label="Close">×</button>
+            </div>
+            <div className="history-modal-content gold-modal-content watch-page-content">
+              {kiteConfigured && (showWatchFilters || (watchRows.length > 0 && filteredWatchRows.length === 0)) ? (
+                <div className="watchlist-filter-row">
+                  <div className="watch-cap-dropdown" ref={watchCapMenuRef}>
+                    <button
+                      type="button"
+                      className="segment-dropdown-trigger watchlist-filter-picker watch-cap-trigger"
+                      onClick={() => setWatchCapMenuOpen((v) => !v)}
+                      title="Filter by cap type"
+                      aria-haspopup="menu"
+                      aria-expanded={watchCapMenuOpen}
+                    >
+                      {watchCapFilter.includes('all')
+                        ? 'All Cap'
+                        : watchCapFilter.length > 0
+                          ? `${watchCapFilter.length} selected`
+                          : 'Cap Type'}
+                      <span className="segment-dropdown-caret" aria-hidden>▾</span>
+                    </button>
+                    {watchCapMenuOpen ? (
+                      <div className="segment-dropdown-menu watch-cap-menu" role="menu" aria-label="Watchlist cap type filters">
+                        {SEGMENT_OPTIONS.map((opt) => {
+                          const isAll = opt.value === 'all';
+                          const checked = isAll
+                            ? watchCapFilter.includes('all')
+                            : watchCapFilter.includes(opt.value);
+                          return (
+                            <label key={opt.value} className="segment-checkbox-item">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  if (isAll) {
+                                    if (e.target.checked) {
+                                      setWatchCapFilter(['all', ...CAP_SEGMENT_VALUES]);
+                                    } else {
+                                      setWatchCapFilter([]);
+                                    }
+                                    return;
+                                  }
+                                  const next = new Set(watchCapFilter.filter((v) => v !== 'all'));
+                                  if (e.target.checked) next.add(opt.value);
+                                  else next.delete(opt.value);
+                                  if (next.size === 0) {
+                                    setWatchCapFilter([]);
+                                  } else if (next.size === CAP_SEGMENT_VALUES.length) {
+                                    setWatchCapFilter(['all', ...CAP_SEGMENT_VALUES]);
+                                  } else {
+                                    setWatchCapFilter([...next]);
+                                  }
+                                }}
+                              />
+                              <span>{opt.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                  <select
+                    className="watchlist-filter-picker"
+                    value={watchSortFilter}
+                    onChange={(e) => setWatchSortFilter(e.target.value as 'desc' | 'asc' | 'best' | 'bestentry' | 'bestprice')}
+                    title="Profit/loss category"
+                  >
+                    <option value="desc">Profit</option>
+                    <option value="asc">Loss</option>
+                    <option value="best">Best Rank</option>
+                    <option value="bestentry">Best Score</option>
+                    <option value="bestprice">Best Price</option>
+                  </select>
+                  <select
+                    className="watchlist-filter-picker"
+                    value={watchSectorFilter}
+                    onChange={(e) => setWatchSectorFilter(e.target.value)}
+                    title="Filter by sector"
+                  >
+                    <option value="all">All Sectors</option>
+                    {watchSectorOptions.map((sec) => (
+                      <option key={sec} value={sec}>
+                        {sec === '__none__' ? 'Others' : sec}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              <div className="watchlist-move-bar">
+                {watchSelectionIds.size > 0 ? (
+                  <div className="watchlist-selection-actions">
+                    <span className="watchlist-move-title">
+                      {watchSelectionIds.size} selected
+                    </span>
+                    <button
+                      type="button"
+                      className="watch-action-btn watch-action-remove"
+                      onClick={() => {
+                        if (!window.confirm(`Remove ${watchSelectionIds.size} selected stock(s) from ${activeWatchTab}?`)) return;
+                        Array.from(watchSelectionIds).forEach((id) => handleRemoveWatchItem(id));
+                      }}
+                    >
+                      Remove
+                    </button>
+                    <span className="watch-action-separator" aria-hidden="true" />
+                    <select
+                      className="watchlist-target-picker"
+                      value={watchMoveTargetTab}
+                      onChange={(e) => {
+                        const target = e.target.value as WatchlistTab;
+                        setWatchMoveTargetTab(target);
+                      }}
+                    >
+                      {watchTabs.filter((tab) => tab !== activeWatchTab).map((tab) => (
+                        <option key={tab} value={tab}>{tab}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="watch-action-btn watch-action-move-confirm"
+                      onClick={() => handleMoveWatchSelected(watchMoveTargetTab)}
+                    >
+                      Move
+                    </button>
+                  </div>
+                ) : null}
+                {!kiteConfigured && (
+                  <button
+                    type="button"
+                    className="proceed-btn"
+                    onClick={() => {
+                      setWatchPageOpen(false);
+                      setOrdersModalTab('settings');
+                      setHistoryModalOpen(true);
+                    }}
+                    title="Configure Kite credentials"
+                  >
+                    Configure
+                  </button>
+                )}
+              </div>
+              {!kiteConfigured ? (
+                <p className="orders-empty-msg">
+                  Kite not configured. Click <strong>Configure</strong> to set API key and access token.
+                </p>
+              ) : watchRows.length === 0 ? (
+                <div className="orders-empty-block">
+                  <p className="orders-empty-msg">{activeWatchTab} is empty.</p>
+                  <button
+                    type="button"
+                    className="watchlist-delete-btn"
+                    onClick={handleDeleteWatchlistTab}
+                    disabled={watchTabs.length <= 1}
+                    title={watchTabs.length <= 1 ? 'At least one watchlist is required' : 'Delete this empty watchlist'}
+                  >
+                    Delete watchlist
+                  </button>
+                </div>
+              ) : filteredWatchRows.length === 0 ? (
+                <div className="orders-empty-block">
+                  <p className="orders-empty-msg">No stocks match current watchlist filters.</p>
+                </div>
+              ) : (
+                <StockListSection
+                  stocks={filteredWatchRows.map((stock, idx) => ({
+                    ...stock,
+                    rank: idx + 1,
+                  }))}
+                  activeStockId={watchActiveStockId}
+                  activeTab={watchActiveTab}
+                  onStockTap={handleWatchStockTap}
+                  onTabClick={handleWatchTabClick}
+                  analysisCache={analysisCache}
+                  loadingAnalysisId={loadingAnalysisId}
+                  fundamentalsCache={fundamentalsCache}
+                  loadingFundamentalsId={loadingFundamentalsId}
+                  quarterlyProfitCache={quarterlyProfitCache}
+                  loadingQuarterlyProfitId={loadingQuarterlyProfitId}
+                  stockInfoCache={stockInfoCache}
+                  loadingStockInfoId={loadingStockInfoId}
+                  financialsReportCache={financialsReportCache}
+                  loadingFinancialsReportId={loadingFinancialsReportId}
+                  onRequestFinancialsLoad={(stock, id) => void loadFinancialsForStock(stock, id)}
+                  chartCache={chartCache}
+                  chartPeriod={chartPeriod}
+                  onChartPeriodChange={handleChartPeriodChange}
+                  loadingChartId={loadingChartId}
+                  selectedStockIds={watchSelectionIds}
+                  onSelectStock={(id, checked) => {
+                    setWatchSelectionIds((prev) => {
+                      const next = new Set(prev);
+                      if (checked) next.add(id);
+                      else next.delete(id);
+                      return next;
+                    });
+                  }}
+                  showSelect
+                  highlightedSearchId={highlightedSearchId}
+                  financialsOpenId={financialsOpenId}
+                  onFinancialsOpenChange={setFinancialsOpenId}
+                  predictionCache={predictionCache}
+                  loadingPredictionId={loadingPredictionId}
+                  predictionPeriod={predictionPeriod}
+                  predictionLevel={predictionLevel}
+                  onPredictionPeriodChange={handlePredictionPeriodChange}
+                  onPredictionLevelChange={handlePredictionLevelChange}
+                  defaultChartPeriod={preferredChartPeriod}
+                  fundamentalsSubTab={preferredFundamentalsSubTab}
+                  onFundamentalsSubTabChange={setPreferredFundamentalsSubTab}
+                  sortOrder={'bestentry'}
+                  showWatchDelta
+                />
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -4516,6 +5631,60 @@ export default function App() {
                           autoComplete="off"
                         />
                       </div>
+                      <div className="settings-access-token-inner" ref={settingsAccessTokenRef}>
+                        <label>Access Token</label>
+                        <div className="settings-input-with-btn-row">
+                          <input
+                            type="text"
+                            className="settings-input"
+                            placeholder="Paste access token or click Generate"
+                            value={kiteForm.accessToken}
+                            onChange={(e) => {
+                              setKiteForm((f) => ({ ...f, accessToken: e.target.value }));
+                              setKiteInvalidateError(null);
+                            }}
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            className="settings-invalidate-btn"
+                            onClick={async () => {
+                              const accessToken = kiteForm.accessToken.trim();
+                              if (!accessToken) return;
+                              if (!kiteForm.apiKey) {
+                                setKiteInvalidateError('API Key required to invalidate token.');
+                                return;
+                              }
+                              setKiteInvalidateError(null);
+                              setKiteInvalidateLoading(true);
+                              try {
+                                const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite/invalidate-token`, {
+                                  method: 'DELETE',
+                                  headers: kiteHeaders({ ...kiteForm, accessToken }),
+                                });
+                                if (data.error) throw new Error(data.error);
+                                setKiteForm((f) => ({ ...f, accessToken: '' }));
+                                setKiteGenerateResult(null);
+                              } catch (e) {
+                                setKiteInvalidateError((e as Error).message);
+                              } finally {
+                                setKiteInvalidateLoading(false);
+                              }
+                            }}
+                            disabled={!kiteForm.accessToken.trim() || kiteInvalidateLoading}
+                            title="Invalidate access token via Kite API (security)"
+                          >
+                            {kiteInvalidateLoading ? (
+                              <span className="settings-icon-spinner" aria-hidden />
+                            ) : (
+                              'Invalidate'
+                            )}
+                          </button>
+                        </div>
+                        {kiteInvalidateError && (
+                          <p className="settings-field-error">{stripErrorUrl(kiteInvalidateError)}</p>
+                        )}
+                      </div>
                     </div>
                     {kiteForm.apiKey && kiteForm.secret && (
                     <div className="settings-signin-group" ref={settingsSigninGroupRef}>
@@ -4588,60 +5757,6 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      <div className="settings-access-token-inner" ref={settingsAccessTokenRef}>
-                          <label>Access Token</label>
-                          <div className="settings-input-with-btn-row">
-                            <input
-                              type="text"
-                              className="settings-input"
-                              placeholder="Paste access token or click Generate"
-                              value={kiteForm.accessToken}
-                              onChange={(e) => {
-                                setKiteForm((f) => ({ ...f, accessToken: e.target.value }));
-                                setKiteInvalidateError(null);
-                              }}
-                              autoComplete="off"
-                            />
-                            <button
-                              type="button"
-                              className="settings-invalidate-btn"
-                              onClick={async () => {
-                                const accessToken = kiteForm.accessToken.trim();
-                                if (!accessToken) return;
-                                if (!kiteForm.apiKey) {
-                                  setKiteInvalidateError('API Key required to invalidate token.');
-                                  return;
-                                }
-                                setKiteInvalidateError(null);
-                                setKiteInvalidateLoading(true);
-                                try {
-                                  const data = await fetchJson<{ success?: boolean; error?: string }>(`${API}/settings/kite/invalidate-token`, {
-                                    method: 'DELETE',
-                                    headers: kiteHeaders({ ...kiteForm, accessToken }),
-                                  });
-                                  if (data.error) throw new Error(data.error);
-                                  setKiteForm((f) => ({ ...f, accessToken: '' }));
-                                  setKiteGenerateResult(null);
-                                } catch (e) {
-                                  setKiteInvalidateError((e as Error).message);
-                                } finally {
-                                  setKiteInvalidateLoading(false);
-                                }
-                              }}
-                              disabled={!kiteForm.accessToken.trim() || kiteInvalidateLoading}
-                              title="Invalidate access token via Kite API (security)"
-                            >
-                              {kiteInvalidateLoading ? (
-                                <span className="settings-icon-spinner" aria-hidden />
-                              ) : (
-                                'Invalidate'
-                              )}
-                            </button>
-                          </div>
-                          {kiteInvalidateError && (
-                            <p className="settings-field-error">{stripErrorUrl(kiteInvalidateError)}</p>
-                          )}
-                        </div>
                       {kiteGenerateResult && (
                         <div className="settings-generate-result" style={{ marginTop: '1rem' }}>
                           <h4 className="settings-generate-result-title">
@@ -4839,6 +5954,17 @@ export default function App() {
                       </a>
                     </p>
                   )}
+                  {!goldLoading && goldPayload.goodreturns && (
+                    <p className="gold-source">
+                      <a
+                        href={goldPayload.goodreturns.sourceUrl || 'https://www.goodreturns.in/gold-rates/chennai.html'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        More Details
+                      </a>
+                    </p>
+                  )}
                 </>
               )}
             </div>
@@ -4912,6 +6038,7 @@ export default function App() {
             defaultChartPeriod={preferredChartPeriod}
             fundamentalsSubTab={preferredFundamentalsSubTab}
             onFundamentalsSubTabChange={setPreferredFundamentalsSubTab}
+            sortOrder={sortOrder}
           />
         )}
       </main>

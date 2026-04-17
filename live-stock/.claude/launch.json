@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "live-stock-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5177,
+      "cwd": "/Users/thamil-1041/Documents/GitHub/mern_projects/live-stock/client"
+    }
+  ]
+}

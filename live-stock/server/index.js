@@ -264,6 +264,11 @@ async function fetchQuoteViaChart(symbol) {
         marketCap: meta.marketCap,
         fiftyTwoWeekHigh,
         fiftyTwoWeekLow,
+        trailingPE: meta.trailingPE ?? null,
+        forwardPE: meta.forwardPE ?? null,
+        epsTrailingTwelveMonths: meta.epsTrailingTwelveMonths ?? null,
+        priceToBook: meta.priceToBook ?? null,
+        dividendYield: meta.dividendYield ?? null,
       };
     } catch {
       continue;
@@ -580,7 +585,43 @@ async function getGoodreturnsChennaiCached() {
 /** Fetch quote; try v8 chart first (no cookies), then yahoo-finance2. */
 async function fetchQuote(symbol) {
   const fromChart = await fetchQuoteViaChart(symbol);
-  if (fromChart && (fromChart.regularMarketPrice != null || fromChart.preMarketPrice != null)) return fromChart;
+  if (fromChart && (fromChart.regularMarketPrice != null || fromChart.preMarketPrice != null)) {
+    const needsValuation =
+      fromChart.trailingPE == null ||
+      fromChart.priceToBook == null ||
+      fromChart.dividendYield == null;
+    if (!needsValuation) return fromChart;
+    try {
+      const q = await yahooFinance.quote(symbol);
+      if (q) {
+        return {
+          ...fromChart,
+          trailingPE: fromChart.trailingPE ?? q.trailingPE ?? null,
+          forwardPE: fromChart.forwardPE ?? q.forwardPE ?? null,
+          epsTrailingTwelveMonths: fromChart.epsTrailingTwelveMonths ?? q.epsTrailingTwelveMonths ?? null,
+          priceToBook: fromChart.priceToBook ?? q.priceToBook ?? null,
+          dividendYield: fromChart.dividendYield ?? q.dividendYield ?? null,
+        };
+      }
+    } catch {
+      /* continue to quoteSummary fallback */
+    }
+    try {
+      const summary = await yahooFinance.quoteSummary(symbol, { modules: ['price', 'summaryDetail', 'defaultKeyStatistics'] });
+      const sd = summary?.summaryDetail || {};
+      const ks = summary?.defaultKeyStatistics || {};
+      return {
+        ...fromChart,
+        trailingPE: fromChart.trailingPE ?? sd.trailingPE ?? null,
+        forwardPE: fromChart.forwardPE ?? sd.forwardPE ?? null,
+        epsTrailingTwelveMonths: fromChart.epsTrailingTwelveMonths ?? ks.trailingEps ?? null,
+        priceToBook: fromChart.priceToBook ?? ks.priceToBook ?? sd.priceToBook ?? null,
+        dividendYield: fromChart.dividendYield ?? sd.dividendYield ?? null,
+      };
+    } catch {
+      return fromChart;
+    }
+  }
   try {
     const quote = await yahooFinance.quote(symbol);
     if (quote && (quote.regularMarketPrice != null || quote.preMarketPrice != null)) return quote;
@@ -604,11 +645,25 @@ async function fetchQuote(symbol) {
       marketCap: sd.marketCap ?? price.marketCap,
       fiftyTwoWeekHigh: sd.fiftyTwoWeekHigh ?? price.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: sd.fiftyTwoWeekLow ?? price.fiftyTwoWeekLow,
+      trailingPE: sd.trailingPE ?? null,
+      forwardPE: sd.forwardPE ?? null,
+      epsTrailingTwelveMonths: summary?.defaultKeyStatistics?.trailingEps ?? null,
+      priceToBook: sd.priceToBook ?? null,
+      dividendYield: sd.dividendYield ?? null,
     };
   } catch (err) {
     console.warn(`QuoteSummary fallback failed for ${symbol}:`, err.message);
     return null;
   }
+}
+
+function normalizeDividendYieldPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  // Yahoo usually returns dividendYield as fraction (e.g. 0.012 => 1.2%).
+  // If already percent-scale (e.g. 2.1), keep as-is.
+  if (Math.abs(n) <= 1) return n * 100;
+  return n;
 }
 
 /** Fetch symbols in batches with delay to avoid rate limits. Returns Map<symbol, stockData>. */
@@ -913,6 +968,11 @@ async function fetchSymbolData(symbol, market) {
     : null;
   const displaySymbol = market === 'us' ? (quote.symbol || symbol) : (quote.symbol?.replace(/\.(NS|BO)$/, '') || symbol.replace(/\.(NS|BO)$/, ''));
   const price = quote.regularMarketPrice ?? quote.preMarketPrice;
+  const pe = Number.isFinite(Number(quote.trailingPE)) ? Number(quote.trailingPE) : null;
+  const forwardPE = Number.isFinite(Number(quote.forwardPE)) ? Number(quote.forwardPE) : null;
+  const eps = Number.isFinite(Number(quote.epsTrailingTwelveMonths)) ? Number(quote.epsTrailingTwelveMonths) : null;
+  const priceToBook = Number.isFinite(Number(quote.priceToBook)) ? Number(quote.priceToBook) : null;
+  const dividendYield = normalizeDividendYieldPercent(quote.dividendYield);
   return {
     symbol: displaySymbol,
     market,
@@ -926,6 +986,11 @@ async function fetchSymbolData(symbol, market) {
     monthChange,
     fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh,
     fiftyTwoWeekLow: quote.fiftyTwoWeekLow,
+    ...(pe != null ? { pe } : {}),
+    ...(forwardPE != null ? { forwardPE } : {}),
+    ...(eps != null ? { eps } : {}),
+    ...(priceToBook != null ? { priceToBook } : {}),
+    ...(dividendYield != null ? { dividendYield } : {}),
     history: history.slice(-14).map((q) => ({ date: q.date, close: q.close })),
     ...(sector ? { sector } : {}),
     ...(isPSU ? { isPSU: true } : {}),
@@ -959,6 +1024,9 @@ async function getStocksViaScreener(market, count = 50) {
       const qName = q.shortName || q.longName || q.symbol || '';
       const isPSU =
         market === 'in' && inferIsPSU(sym, qName, sectorRawS, industryRawS);
+      const pe = Number.isFinite(Number(q.trailingPE)) ? Number(q.trailingPE) : null;
+      const priceToBook = Number.isFinite(Number(q.priceToBook)) ? Number(q.priceToBook) : null;
+      const dividendYield = normalizeDividendYieldPercent(q.dividendYield);
       return {
         symbol: q.symbol || '',
         market,
@@ -974,6 +1042,9 @@ async function getStocksViaScreener(market, count = 50) {
         segment: 'flexi',
         segmentName: 'Flexi Cap',
         rank,
+        ...(pe != null ? { pe } : {}),
+        ...(priceToBook != null ? { priceToBook } : {}),
+        ...(dividendYield != null ? { dividendYield } : {}),
         ...(sectorNorm ? { sector: sectorNorm } : {}),
         ...(isPSU ? { isPSU: true } : {}),
       };
@@ -1491,10 +1562,21 @@ function parseScreenerNum(s) {
 async function getFundamentalsViaScreener(symbol, fmt, fmtPct, fmtIndian) {
   const screenerSymbol = symbol.replace(/\.(NS|BO)$/, '');
   if (!screenerSymbol) return null;
+  const url = `https://www.screener.in/company/${encodeURIComponent(screenerSymbol)}/`;
   try {
-    const url = `https://www.screener.in/company/${encodeURIComponent(screenerSymbol)}/`;
     const res = await fetch(url, { headers: SCREENER_HEADERS });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      let snippet = '';
+      try {
+        snippet = (await res.text()).slice(0, 220).replace(/\s+/g, ' ').trim();
+      } catch {
+        snippet = '';
+      }
+      console.warn(
+        `[Fundamentals] Screener non-OK for ${screenerSymbol}: status=${res.status} ${res.statusText || ''}${snippet ? ` | body=${snippet}` : ''}`,
+      );
+      return null;
+    }
     const html = await res.text();
     const ratios = {};
     const liRegex = /<li[^>]*>[\s\S]*?<span class="name">\s*([^<]+)\s*<\/span>[\s\S]*?<span class="nowrap value"[^>]*>([\s\S]*?)<\/span>(?=\s*<\/li>)/g;
@@ -1552,7 +1634,11 @@ async function getFundamentalsViaScreener(symbol, fmt, fmtPct, fmtIndian) {
       dayLow: '—',
     };
   } catch (err) {
-    console.warn('[Fundamentals] Screener.in failed:', err.message);
+    const msg = err instanceof Error ? err.message : String(err);
+    const cause = err && typeof err === 'object' && 'cause' in err ? String(err.cause) : '';
+    console.warn(
+      `[Fundamentals] Screener.in failed for ${screenerSymbol}: ${msg}${cause ? ` | cause=${cause}` : ''} | url=${url}`,
+    );
     return null;
   }
 }
@@ -1633,11 +1719,11 @@ async function getFundamentalsViaChart(symbol) {
         marketCap: '—',
         volume: fmtIndian(meta.regularMarketVolume),
         avgVolume: '—',
-        pe: '—',
+        pe: meta.trailingPE != null ? fmt(meta.trailingPE) : '—',
         forwardPE: '—',
         peg: '—',
         eps: '—',
-        dividendYield: '—',
+        dividendYield: meta.dividendYield != null ? fmtPct(meta.dividendYield) : '—',
         fiftyTwoWeekHigh: fmt(meta.fiftyTwoWeekHigh),
         fiftyTwoWeekLow: fmt(meta.fiftyTwoWeekLow),
         open: fmt(meta.chartPreviousClose),
@@ -1837,9 +1923,29 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
       result.symbol = result.symbol || chartData.symbol || symbol;
     }
     if (!result) result = chartData;
+    // Quote fallback fills valuation fields often missing in chart/screener responses.
+    try {
+      const q = await fetchQuote(yfSymbol);
+      if (q) {
+        result = result || {};
+        const useQuote = (v) => v != null && v !== '';
+        if ((result.pe == null || result.pe === '—') && useQuote(q.trailingPE)) result.pe = fmt(Number(q.trailingPE));
+        if ((result.forwardPE == null || result.forwardPE === '—') && useQuote(q.forwardPE)) result.forwardPE = fmt(Number(q.forwardPE));
+        if ((result.eps == null || result.eps === '—') && useQuote(q.epsTrailingTwelveMonths)) result.eps = fmt(Number(q.epsTrailingTwelveMonths));
+        if ((result.priceToBook == null || result.priceToBook === '—') && useQuote(q.priceToBook)) result.priceToBook = fmt(Number(q.priceToBook));
+        if ((result.dividendYield == null || result.dividendYield === '—') && useQuote(q.dividendYield)) result.dividendYield = fmtPct(Number(q.dividendYield));
+        if ((result.marketCap == null || result.marketCap === '—') && useQuote(q.marketCap)) result.marketCap = fmtIndian(Number(q.marketCap));
+      }
+    } catch {
+      /* quote fallback best effort */
+    }
     if (advanced) {
       result = result || {};
       const useAdv = (v) => v != null && v !== '';
+      if ((result.pe == null || result.pe === '—') && useAdv(advanced.trailingPE)) result.pe = fmt(advanced.trailingPE);
+      if ((result.forwardPE == null || result.forwardPE === '—') && useAdv(advanced.forwardPE)) result.forwardPE = fmt(advanced.forwardPE);
+      if ((result.eps == null || result.eps === '—') && useAdv(advanced.epsTrailing)) result.eps = fmt(advanced.epsTrailing);
+      if ((result.dividendYield == null || result.dividendYield === '—') && useAdv(advanced.dividendYieldPct)) result.dividendYield = `${Number(advanced.dividendYieldPct).toFixed(2)}%`;
       if (useAdv(advanced.bookValue)) result.bookValue = fmt(advanced.bookValue);
       if (useAdv(advanced.priceToBook)) result.priceToBook = fmt(advanced.priceToBook);
       if (useAdv(advanced.returnOnEquity)) result.returnOnEquity = `${Number(advanced.returnOnEquity).toFixed(2)}%`;
@@ -3033,6 +3139,10 @@ async function fetchAdvancedFundamentals(symbol, market) {
       shortRatio:       fmt2(ks.shortRatio),
       bookValue:        fmt2(ks.bookValue),
       priceToBook:      fmt2(ks.priceToBook),
+      trailingPE:       fmt2(sd.trailingPE),
+      forwardPE:        fmt2(sd.forwardPE),
+      epsTrailing:      fmt2(ks.trailingEps),
+      dividendYieldPct: fmtPct(sd.dividendYield),
       returnOnEquity:   fmtPct(fd.returnOnEquity),
       returnOnAssets:   fmtPct(fd.returnOnAssets),
       debtToEquity:     fmt2(fd.debtToEquity),
