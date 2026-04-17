@@ -2298,28 +2298,80 @@ export default function App() {
     average_price?: number;
   }>>([]);
 
-  const upsertSegmentsForMarket = useCallback((m: string, incoming: SegmentData[]) => {
+  const mergeSegmentRows = useCallback((existing: SegmentData[], incoming: SegmentData[]) => {
+    const map = new Map<string, SegmentData>();
+    existing.forEach((row) => map.set(String(row.segment || ''), row));
+    incoming.forEach((row) => {
+      const key = String(row.segment || '');
+      const existingRow = map.get(key);
+      const incomingHasData = (row.topGainers?.length ?? 0) > 0 || (row.topLosers?.length ?? 0) > 0;
+      const existingHasData = (existingRow?.topGainers?.length ?? 0) > 0 || (existingRow?.topLosers?.length ?? 0) > 0;
+      // Never overwrite good data with empty data (e.g. from a timeout fallback)
+      if (existingHasData && !incomingHasData) return;
+      map.set(key, row);
+    });
+    return LOAD_ORDER_SEGMENTS
+      .map((seg) => map.get(seg))
+      .filter(Boolean) as SegmentData[];
+  }, []);
+
+  const segmentsByMarketRef = useRef<Record<string, SegmentData[]>>(segmentsByMarket);
+  useEffect(() => {
+    segmentsByMarketRef.current = segmentsByMarket;
+  }, [segmentsByMarket]);
+
+  const pendingSegmentsByMarketRef = useRef<Record<string, SegmentData[]>>({});
+  const activeStockIdRef = useRef<string | null>(null);
+  const activeTabRef = useRef<TabType | null>(null);
+  useEffect(() => {
+    activeStockIdRef.current = activeStockId;
+    activeTabRef.current = activeTab;
+  }, [activeStockId, activeTab]);
+
+  const writeSegmentsCache = useCallback((baseState: Record<string, SegmentData[]>) => {
+    const snapshot: Record<string, SegmentData[]> = { ...baseState };
+    for (const [m, pendingRows] of Object.entries(pendingSegmentsByMarketRef.current)) {
+      if (!pendingRows?.length) continue;
+      snapshot[m] = mergeSegmentRows(snapshot[m] || [], pendingRows);
+    }
+    try { sessionStorage.setItem('livestock_segments_v1', JSON.stringify(snapshot)); } catch {}
+  }, [mergeSegmentRows]);
+
+  const flushPendingSegmentsForMarket = useCallback((m: string) => {
+    const pending = pendingSegmentsByMarketRef.current[m];
+    if (!pending?.length) return;
     setSegmentsByMarket((prev) => {
-      const existing = Array.isArray(prev[m]) ? prev[m] : [];
-      const map = new Map<string, SegmentData>();
-      existing.forEach((row) => map.set(String(row.segment || ''), row));
-      incoming.forEach((row) => {
-        const key = String(row.segment || '');
-        const existingRow = map.get(key);
-        const incomingHasData = (row.topGainers?.length ?? 0) > 0 || (row.topLosers?.length ?? 0) > 0;
-        const existingHasData = (existingRow?.topGainers?.length ?? 0) > 0 || (existingRow?.topLosers?.length ?? 0) > 0;
-        // Never overwrite good data with empty data (e.g. from a timeout fallback)
-        if (existingHasData && !incomingHasData) return;
-        map.set(key, row);
-      });
-      const ordered = LOAD_ORDER_SEGMENTS
-        .map((seg) => map.get(seg))
-        .filter(Boolean) as SegmentData[];
-      const next = { ...prev, [m]: ordered };
-      try { sessionStorage.setItem('livestock_segments_v1', JSON.stringify(next)); } catch {}
+      const merged = mergeSegmentRows(prev[m] || [], pending);
+      const next = { ...prev, [m]: merged };
+      segmentsByMarketRef.current = next;
+      pendingSegmentsByMarketRef.current[m] = [];
+      writeSegmentsCache(next);
       return next;
     });
-  }, []);
+  }, [mergeSegmentRows, writeSegmentsCache]);
+
+  const upsertSegmentsForMarket = useCallback((
+    m: string,
+    incoming: SegmentData[],
+    options?: { applyToView?: boolean },
+  ) => {
+    const applyToView = options?.applyToView ?? true;
+    if (!applyToView) {
+      const existingPending = pendingSegmentsByMarketRef.current[m] || [];
+      pendingSegmentsByMarketRef.current[m] = mergeSegmentRows(existingPending, incoming);
+      writeSegmentsCache(segmentsByMarketRef.current);
+      return;
+    }
+    setSegmentsByMarket((prev) => {
+      const pending = pendingSegmentsByMarketRef.current[m] || [];
+      const merged = mergeSegmentRows(prev[m] || [], mergeSegmentRows(pending, incoming));
+      const next = { ...prev, [m]: merged };
+      segmentsByMarketRef.current = next;
+      pendingSegmentsByMarketRef.current[m] = [];
+      writeSegmentsCache(next);
+      return next;
+    });
+  }, [mergeSegmentRows, writeSegmentsCache]);
 
   // Ref-based cache: tracks which segments have been loaded per market.
   // useRef doesn't support lazy initializers — use null sentinel pattern instead.
@@ -2381,7 +2433,11 @@ export default function App() {
         catch { throw new Error('Invalid response. Make sure the server is running.'); }
       })
       .then((data) => {
-        upsertSegmentsForMarket(m, data.segments || []);
+        const shouldDeferViewUpdate =
+          silent &&
+          activeStockIdRef.current != null &&
+          activeTabRef.current === 'fundamentals';
+        upsertSegmentsForMarket(m, data.segments || [], { applyToView: !shouldDeferViewUpdate });
         if (!loadedSegmentsRef.current[m]) loadedSegmentsRef.current[m] = new Set();
         segments.forEach((s) => loadedSegmentsRef.current[m].add(s));
         setSegmentReadyByMarket((prev) => ({
@@ -2426,7 +2482,7 @@ export default function App() {
       fetchSegmentGroupForMarket(m, FETCH_GROUPS[1], forceRefresh, true),
       fetchSegmentGroupForMarket(m, FETCH_GROUPS[2], forceRefresh, true),
     ]);
-  }, [fetchSegmentGroupForMarket]);
+  }, [fetchSegmentGroupForMarket, activeStockId, activeTab, upsertSegmentsForMarket]);
 
   const fetchIndicesIn = useCallback(() => {
     setIndicesLoading(true);
@@ -2491,10 +2547,13 @@ export default function App() {
     return () => window.clearInterval(intervalId);
   }, [areAllCapSegmentsLoaded, refreshMarketInBackground]);
 
+  // Only clear the expanded stock when switching market (list + ids are market-specific).
+  // Cap / display-limit / sector changes are handled by the stocks reconciliation effect so a
+  // large-cap row stays open when trimming other caps from the filter (e.g. uncheck mid).
   useEffect(() => {
     setActiveStockId(null);
     setActiveTab(null);
-  }, [segmentFilter, displayLimit, market]);
+  }, [market]);
 
   // Reset cap filter to large when switching market so user starts fresh.
   const prevMarketRef = useRef(market);
@@ -2530,6 +2589,11 @@ export default function App() {
   useEffect(() => {
     setSectorFilter('all');
   }, [market, segmentFilter]);
+
+  useEffect(() => {
+    // User changed cap selection: apply any pending background updates now.
+    flushPendingSegmentsForMarket(market);
+  }, [market, segmentFilter, flushPendingSegmentsForMarket]);
 
   useEffect(() => {
     if (!segmentMenuOpen) return;
@@ -2982,6 +3046,74 @@ export default function App() {
       .map((s) => ({ ...s, rank: 0 }));
     return [...pinnedForMarket, ...ranked];
   }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market]);
+
+  // After cap/segment list merges, row ids `${symbol}-${segment}` can drift while caches still use the old id.
+  // Remap selection + caches so the expanded row (and fundamentals tab) stay attached to the visible stock.
+  useEffect(() => {
+    if (!activeStockId) return;
+    const rowId = (s: Stock) => `${s.symbol}-${s.segment}`;
+    if (stocks.some((s) => rowId(s) === activeStockId)) return;
+
+    const candidates = stocks.filter((s) => activeStockId.startsWith(`${s.symbol}-`));
+    if (!candidates.length) {
+      setActiveStockId(null);
+      setActiveTab(null);
+      return;
+    }
+    const nonSearch = candidates.filter((s) => !String(s.segment || '').startsWith('search'));
+    const nextStock = nonSearch[0] ?? candidates[0];
+    const newId = rowId(nextStock);
+    if (newId === activeStockId) return;
+
+    const oldId = activeStockId;
+    setActiveStockId(newId);
+
+    const rekeyRecord = <T,>(rec: Record<string, T>): Record<string, T> => {
+      if (!Object.prototype.hasOwnProperty.call(rec, oldId)) return rec;
+      const next = { ...rec };
+      next[newId] = rec[oldId];
+      delete next[oldId];
+      return next;
+    };
+
+    setFundamentalsCache((c) => rekeyRecord(c));
+    setAnalysisCache((c) => rekeyRecord(c));
+    setQuarterlyProfitCache((c) => rekeyRecord(c));
+    setStockInfoCache((c) => rekeyRecord(c));
+    setFinancialsReportCache((c) => rekeyRecord(c));
+    setChartCache((c) => rekeyRecord(c));
+    setChartPeriod((p) => rekeyRecord(p));
+    setPredictionPeriod((p) => rekeyRecord(p));
+    setPredictionCache((c) => {
+      let touched = false;
+      const next = { ...c };
+      for (const k of Object.keys(c)) {
+        if (k.startsWith(`${oldId}-`)) {
+          const nk = newId + k.slice(oldId.length);
+          next[nk] = c[k];
+          delete next[k];
+          touched = true;
+        }
+      }
+      return touched ? next : c;
+    });
+
+    setLoadingFundamentalsId((x) => (x === oldId ? newId : x));
+    setLoadingAnalysisId((x) => (x === oldId ? newId : x));
+    setLoadingQuarterlyProfitId((x) => (x === oldId ? newId : x));
+    setLoadingStockInfoId((x) => (x === oldId ? newId : x));
+    setLoadingFinancialsReportId((x) => (x === oldId ? newId : x));
+    setLoadingChartId((x) => (x === oldId ? newId : x));
+    setLoadingPredictionId((x) => (x === oldId ? newId : x));
+    setHighlightedSearchId((h) => (h === oldId ? newId : h));
+    setSelectedStockIds((prev) => {
+      if (!prev.has(oldId)) return prev;
+      const next = new Set(prev);
+      next.delete(oldId);
+      next.add(newId);
+      return next;
+    });
+  }, [stocks, activeStockId]);
 
   const loadFinancialsForStock = async (stock: Stock, id: string) => {
     const mkt = stock.market || 'in';
