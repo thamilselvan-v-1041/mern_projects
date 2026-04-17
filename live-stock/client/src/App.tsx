@@ -3403,8 +3403,6 @@ export default function App() {
       return [match, ...next];
     });
     setMarket('in');
-    setSegmentFilter(['all', ...CAP_SEGMENT_VALUES]);
-    setSectorFilter('all');
     const id = `${match.symbol}-${match.segment}`;
     setHighlightedSearchId(id);
     setTimeout(() => {
