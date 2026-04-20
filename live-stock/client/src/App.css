@@ -2607,6 +2607,51 @@ table.gold-table {
   margin: 0 -1rem;
 }
 
+/* Watchlist modal: scroll tab names; keep + and close visible */
+.watch-page-tabs-header {
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.watch-page-tabs-scroll {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.watch-page-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.watch-page-tabs-inner.orders-modal-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  width: max-content;
+  max-width: none;
+  margin: 0;
+  align-items: center;
+}
+
+.watch-page-tabs-inner .orders-tab-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.watch-page-tab-add {
+  flex-shrink: 0;
+  margin-bottom: -1px;
+}
+
+.watch-page-tabs-header .auto-trade-close {
+  flex-shrink: 0;
+}
+
 .orders-tab-btn {
   padding: 0.7rem 1rem;
   font-size: 0.9rem;
@@ -2626,6 +2671,28 @@ table.gold-table {
 .orders-tab-btn.active {
   color: #16a34a;
   border-bottom-color: #16a34a;
+}
+
+.watchlist-select-all-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0 0.5rem;
+  border-bottom: 1px solid #e4e4e7;
+  margin-bottom: 0.35rem;
+}
+
+.watchlist-select-all-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #3f3f46;
+  cursor: pointer;
+  user-select: none;
 }
 
 .watchlist-move-bar {
@@ -2939,7 +3006,8 @@ table.gold-table {
 
 /* Portfolio listing: ~15% smaller checkboxes than main list; tick aligns with first line */
 .kite-holdings-list .holding-item .stock-select-cb,
-.portfolio-select-all-toolbar .stock-select-cb {
+.portfolio-select-all-toolbar .stock-select-cb,
+.watchlist-select-all-toolbar .stock-select-cb {
   width: 0.935rem;
   height: 0.935rem;
   border-width: 1.3px;
@@ -2951,14 +3019,16 @@ table.gold-table {
 }
 
 .kite-holdings-list .holding-item .stock-select-cb:checked::after,
-.portfolio-select-all-toolbar .stock-select-cb:checked::after {
+.portfolio-select-all-toolbar .stock-select-cb:checked::after,
+.watchlist-select-all-toolbar .stock-select-cb:checked::after {
   width: 0.19rem;
   height: 0.41rem;
   border-width: 0 1.5px 1.5px 0;
 }
 
 .kite-holdings-list .holding-item .stock-select-cb:indeterminate::after,
-.portfolio-select-all-toolbar .stock-select-cb:indeterminate::after {
+.portfolio-select-all-toolbar .stock-select-cb:indeterminate::after,
+.watchlist-select-all-toolbar .stock-select-cb:indeterminate::after {
   width: 0.43rem;
 }
 

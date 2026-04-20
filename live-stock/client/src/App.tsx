@@ -542,6 +542,36 @@ function tacticalOpportunityScoreFromStock(stock: Stock): number {
   return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
+/**
+ * Core 0–100 "Best entry" score (fundamentals + tactical only). Used for main-list sort when
+ * "Best Score" is selected so order follows the numeric score, not volatility rank boost.
+ */
+function bestEntryListCoreScoreRaw(
+  stock: Stock,
+  scoreInput: Record<string, string>,
+  history: Array<{ date: string; close: number }> | null,
+): number {
+  const fundamentalsScore = bestEntryScoreFromFundamentals(scoreInput, stock, history);
+  const tacticalEntryScore = tacticalOpportunityScoreFromStock(stock);
+  return Math.max(0, Math.min(100, fundamentalsScore * 0.5 + tacticalEntryScore * 0.5));
+}
+
+/**
+ * Blended list "Best entry" score (matches main `stocks` useMemo).
+ * Display in expanded row: core score plus a small boost from list Best # rank.
+ * Main list sort uses {@link bestEntryListCoreScoreRaw} only — see `bestEntryScore` on list rows.
+ */
+function bestEntryListBlendedScore(
+  stock: Stock,
+  scoreInput: Record<string, string>,
+  history: Array<{ date: string; close: number }> | null,
+): number {
+  const core = bestEntryListCoreScoreRaw(stock, scoreInput, history);
+  const bestRank = stock.bestRank;
+  const rankBoost = bestRank != null ? Math.max(0, 8 - (bestRank - 1) * 0.5) : 0;
+  return Math.round(Math.max(0, Math.min(100, core + rankBoost)));
+}
+
 function fundamentalsFromStockRow(stock: Stock): Record<string, string> {
   const row = stock as Record<string, unknown>;
   const pick = (...keys: string[]) => {
@@ -704,7 +734,9 @@ type Stock = {
   priceToBook?: number;
   dividendYield?: number;
   bestRank?: number;
+  /** Fundamentals scorecard "Entry point" band (aligned with scorecard tab, list pipeline). */
   entryPoint?: ScorecardBand;
+  /** Core best-entry 0–100 (fundamentals + tactical); list sort uses raw value, display often rounded. */
   bestEntryScore?: number;
   tacticalEntryScore?: number;
   fiftyTwoWeekHigh?: number;
@@ -910,6 +942,11 @@ type WatchlistItem = Stock & {
   watchAddedPrice?: number;
   watchAddedAt?: string;
 };
+
+/** Same key as StockListSection row selection (`${symbol}-${segment}`); may differ from persisted `id` after segment merge. */
+function watchlistRowSelectKey(x: Pick<Stock, 'symbol' | 'segment'>): string {
+  return `${x.symbol}-${x.segment}`;
+}
 
 const DEFAULT_WATCHLIST_TABS = ['Watchlist 1', 'Watchlist 2', 'Watchlist 3'] as const;
 type WatchlistTab = string;
@@ -1390,6 +1427,7 @@ function StockItem({
   onFundamentalsSubTabChange,
   showBestEntryTag,
   showWatchDelta,
+  scorecardHistory3y,
 }: {
   stock: Stock;
   expanded: boolean;
@@ -1411,6 +1449,8 @@ function StockItem({
   onFundamentalsSubTabChange: (tab: 'details' | 'scorecard') => void;
   showBestEntryTag?: boolean;
   showWatchDelta?: boolean;
+  /** 3y series — matches main list `stocks` useMemo for entry point / best score. */
+  scorecardHistory3y?: { date: string; close: number }[] | null;
   quarterlyProfit: QuarterlyProfitPayload | null;
   loadingQuarterlyProfit: boolean;
   stockInfo: StockInfoResponse | null;
@@ -1432,6 +1472,8 @@ function StockItem({
   const isUp = (stock.changePercent ?? 0) >= 0;
   const currency = stock.market === 'us' ? '$' : '₹';
   const history = chartData ?? stock.history ?? [];
+  const historyForScorecard =
+    scorecardHistory3y && scorecardHistory3y.length > 0 ? scorecardHistory3y : history;
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [infoModalOpen, setInfoModalOpen] = useState(false);
 
@@ -1556,19 +1598,13 @@ function StockItem({
   const isSearchHighlighted = isSearchPinned && highlightedSearchId === `${stock.symbol}-${stock.segment}`;
   const displayName = isSearchPinned ? String(stock.name || '').replace(/\.NS$/i, '') : stock.name;
   const displaySymbol = isSearchPinned ? String(stock.symbol || '').replace(/\.NS$/i, '') : stock.symbol;
-  const resolvedEntryPoint: ScorecardBand = scorecardFromFundamentals(
-    scorecardInputFromDetails(fundamentals ?? fundamentalsFromStockRow(stock), stock),
+  const scoreInput = scorecardInputFromDetails(fundamentals ?? fundamentalsFromStockRow(stock), stock);
+  const listEntryPoint: ScorecardBand = scorecardFromFundamentals(
+    scoreInput,
     stock,
-    history,
+    historyForScorecard,
   ).entryPoint;
-  const resolvedBestEntryScore =
-    typeof stock.bestEntryScore === 'number' && Number.isFinite(stock.bestEntryScore)
-      ? stock.bestEntryScore
-      : bestEntryScoreFromFundamentals(
-          scorecardInputFromDetails(fundamentals ?? fundamentalsFromStockRow(stock), stock),
-          stock,
-          history,
-        );
+  const displayBlendedBestEntryScore = bestEntryListBlendedScore(stock, scoreInput, historyForScorecard);
   const addedPrice = typeof (stock as WatchlistItem).watchAddedPrice === 'number' ? (stock as WatchlistItem).watchAddedPrice : null;
   const todayPrice = typeof stock.price === 'number' && Number.isFinite(stock.price) ? stock.price : null;
   const watchDeltaPct =
@@ -1623,10 +1659,21 @@ function StockItem({
               )}
               {showBestEntryTag && (
                 <span
-                  className={`stock-best-tag stock-entry-tag stock-entry-${resolvedEntryPoint ?? 'fair'}`}
-                  title="Best entry score from scorecard"
+                  className={`stock-best-tag stock-entry-tag stock-entry-${listEntryPoint ?? 'fair'}`}
+                  title="Best entry score (fundamentals + tactical)"
                 >
-                  Score: {resolvedBestEntryScore}
+                  Score:{' '}
+                  {typeof stock.bestEntryScore === 'number' && Number.isFinite(stock.bestEntryScore)
+                    ? Math.round(stock.bestEntryScore)
+                    : Math.round(bestEntryListCoreScoreRaw(stock, scoreInput, historyForScorecard))}
+                </span>
+              )}
+              {!showWatchDelta && (
+                <span
+                  className={`stock-best-tag stock-entry-tag stock-entry-${listEntryPoint ?? 'fair'}`}
+                  title="Fundamentals scorecard — Entry point (same logic as scorecard tab)"
+                >
+                  Entry: {listEntryPoint}
                 </span>
               )}
             </div>
@@ -1792,7 +1839,7 @@ function StockItem({
                         const score = scorecardFromFundamentals(
                           scorecardInputFromDetails(fundamentals, stock),
                           stock,
-                          history,
+                          historyForScorecard,
                         );
                         const rows: Array<{ label: string; value: ScorecardBand }> = [
                           { label: 'Performance', value: score.performance },
@@ -1822,14 +1869,14 @@ function StockItem({
                       <div className="fund-row fund-best-score-row">
                         <span
                           className={`stock-best-tag stock-entry-tag stock-entry-${
-                            resolvedBestEntryScore >= 75
+                            displayBlendedBestEntryScore >= 75
                               ? "good"
-                              : resolvedBestEntryScore >= 50
+                              : displayBlendedBestEntryScore >= 50
                                 ? "fair"
                                 : "low"
                           }`}
                         >
-                          {`Score: #${resolvedBestEntryScore}`}
+                          {`Score: #${displayBlendedBestEntryScore}`}
                         </span>
                       </div>
                     </div>
@@ -2340,7 +2387,9 @@ function StockItem({
   );
 }
 
-type SortOrder = 'asc' | 'desc' | 'best' | 'bestprice' | 'bestentry';
+type SortOrder = 'asc' | 'desc' | 'bestprice' | 'bestentry';
+
+type ListDisplayLimit = 25 | 50 | 100 | 150;
 
 function StockListSection({
   stocks,
@@ -2476,6 +2525,7 @@ function StockListSection({
               onFundamentalsSubTabChange={onFundamentalsSubTabChange}
               showBestEntryTag={sortOrder === 'bestentry'}
               showWatchDelta={showWatchDelta}
+              scorecardHistory3y={chartCache[id]?.['3y'] ?? stock.history ?? null}
             />
           );
         })}
@@ -2531,7 +2581,7 @@ export default function App() {
   const [preferredFundamentalsSubTab, setPreferredFundamentalsSubTab] = useState<'details' | 'scorecard'>('details');
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [market, setMarket] = useState<string>('in');
-  const [displayLimit, setDisplayLimit] = useState<50 | 100 | 150>(150);
+  const [displayLimit, setDisplayLimit] = useState<ListDisplayLimit>(150);
   const [segmentFilter, setSegmentFilter] = useState<string[]>(['large']);
   const [segmentMenuOpen, setSegmentMenuOpen] = useState(false);
   const [segmentMenuPos, setSegmentMenuPos] = useState<{ top: number; left: number; minWidth: number } | null>(null);
@@ -2681,6 +2731,9 @@ export default function App() {
     average_price?: number;
   }>>([]);
   const watchCapMenuRef = useRef<HTMLDivElement>(null);
+  const watchSelectAllRef = useRef<HTMLInputElement>(null);
+  /** Recent watch tab selections; used to pick the tab after deleting the current one. */
+  const watchTabHistoryRef = useRef<WatchlistTab[]>(['Watchlist 1']);
 
   const mergeSegmentRows = useCallback((existing: SegmentData[], incoming: SegmentData[]) => {
     const map = new Map<string, SegmentData>();
@@ -3382,15 +3435,11 @@ export default function App() {
       ...s,
       entryPoint: s.entryPoint ?? entryPointFromStockRow(s),
     }));
-    const byAbsoluteChange = [...withEntryPoint].sort((a, b) => {
-      const aAbs = Math.abs(a.changePercent ?? 0);
-      const bAbs = Math.abs(b.changePercent ?? 0);
-      return bAbs - aAbs;
-    });
-    const topListing = byAbsoluteChange.slice(0, displayLimit);
+    // Score and sort the full cap+segment+sector-filtered universe, then apply display limit.
+    // (Previously we pre-sliced by |change%|, so changing filters did not reorder against the active sort mode.)
     const volumeLog = (v: number | undefined) => Math.log10(Math.max(v ?? 1, 1));
     const capLog = (v: number | undefined) => Math.log10(Math.max(v ?? 1, 1));
-    const scored = topListing.map((s) => {
+    const scored = withEntryPoint.map((s) => {
       const id = `${s.symbol}-${s.segment}`;
       // Keep Best Rank stable across row-level fundamentals fetches.
       // Using only list-level snapshot data avoids rank jumping when one row is opened.
@@ -3445,26 +3494,15 @@ export default function App() {
     scored.forEach((s, i) => {
       if (s._rankId) rowToBestRank[s._rankId] = i + 1;
     });
-    const topWithBestRank = topListing.map((s) => {
+    const topWithBestRank = withEntryPoint.map((s) => {
       const id = `${s.symbol}-${s.segment}`;
-      const scorecardInput = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
-      const entryPoint = scorecardFromFundamentals(
-        scorecardInput,
-        s,
-        chartCache[id]?.['3y'] ?? s.history ?? null,
-      ).entryPoint;
-      const fundamentalsScore = bestEntryScoreFromFundamentals(
-        scorecardInput,
-        s,
-        chartCache[id]?.['3y'] ?? s.history ?? null,
-      );
-      const tacticalEntryScore = tacticalOpportunityScoreFromStock(s);
       const bestRank = rowToBestRank[id];
-      const rankBoost = bestRank != null ? Math.max(0, 8 - (bestRank - 1) * 0.5) : 0;
-      // Blend quality with timing equally, then add a small shortlist-rank bonus.
-      const bestEntryScore = Math.round(
-        Math.max(0, Math.min(100, fundamentalsScore * 0.5 + tacticalEntryScore * 0.5 + rankBoost)),
-      );
+      // Row + segment snapshot only — do not tie sort to fundamentalsCache (avoids list reshuffle on row expand).
+      const scorecardInput = scorecardInputFromDetails(fundamentalsFromStockRow(s), s);
+      const history = chartCache[id]?.['3y'] ?? s.history ?? null;
+      const entryPoint = scorecardFromFundamentals(scorecardInput, s, history).entryPoint;
+      const tacticalEntryScore = tacticalOpportunityScoreFromStock(s);
+      const bestEntryScore = bestEntryListCoreScoreRaw(s, scorecardInput, history);
       return {
         ...s,
         bestRank,
@@ -3478,17 +3516,15 @@ export default function App() {
         const aScore = a.bestEntryScore ?? -1;
         const bScore = b.bestEntryScore ?? -1;
         if (aScore !== bScore) return bScore - aScore;
+        const aTac = a.tacticalEntryScore ?? -1;
+        const bTac = b.tacticalEntryScore ?? -1;
+        if (aTac !== bTac) return bTac - aTac;
         const aBest = a.bestRank ?? 9999;
         const bBest = b.bestRank ?? 9999;
         if (aBest !== bBest) return aBest - bBest;
         const aPrice = a.price ?? Infinity;
         const bPrice = b.price ?? Infinity;
         return aPrice - bPrice;
-      }
-      if (sortOrder === 'best') {
-        const aBest = a.bestRank ?? 9999;
-        const bBest = b.bestRank ?? 9999;
-        return aBest - bBest;
       }
       if (sortOrder === 'bestprice') {
         const aPrice = a.price ?? Infinity;
@@ -3502,12 +3538,12 @@ export default function App() {
       const bVal = b.changePercent ?? 0;
       return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
     });
-    const ranked = sorted.map((s, i) => ({ ...s, rank: i + 1 }));
+    const ranked = sorted.slice(0, displayLimit).map((s, i) => ({ ...s, rank: i + 1 }));
     const pinnedForMarket = searchPinnedStocks
       .filter((s) => (s.market || 'in') === market)
       .map((s) => ({ ...s, rank: 0 }));
     return [...pinnedForMarket, ...ranked];
-  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market, fundamentalsCache, chartCache]);
+  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market, chartCache]);
 
   // After cap/segment list merges, row ids `${symbol}-${segment}` can drift while caches still use the old id.
   // Remap selection + caches so the expanded row (and fundamentals tab) stay attached to the visible stock.
@@ -4159,9 +4195,9 @@ export default function App() {
     setWatchlists((prev) => {
       const source = prev[activeWatchTab] || [];
       const target = prev[resolvedTarget] || [];
-      const moving = source.filter((x) => watchSelectionIds.has(x.id));
+      const moving = source.filter((x) => watchSelectionIds.has(watchlistRowSelectKey(x)));
       if (!moving.length) return prev;
-      const sourceNext = source.filter((x) => !watchSelectionIds.has(x.id));
+      const sourceNext = source.filter((x) => !watchSelectionIds.has(watchlistRowSelectKey(x)));
       const targetMap = new Map(target.map((x) => [x.id, x]));
       moving.forEach((x) => targetMap.set(x.id, x));
       return {
@@ -4176,7 +4212,9 @@ export default function App() {
   const handleRemoveWatchItem = useCallback((id: string) => {
     setWatchlists((prev) => ({
       ...prev,
-      [activeWatchTab]: (prev[activeWatchTab] || []).filter((x) => x.id !== id),
+      [activeWatchTab]: (prev[activeWatchTab] || []).filter(
+        (x) => x.id !== id && watchlistRowSelectKey(x) !== id,
+      ),
     }));
     setWatchSelectionIds((prev) => {
       if (!prev.has(id)) return prev;
@@ -4209,7 +4247,15 @@ export default function App() {
     if (!window.confirm(`Delete ${activeWatchTab}?`)) return;
 
     const remainingTabs = watchTabs.filter((tab) => tab !== activeWatchTab);
-    const fallbackTab = remainingTabs[0] || 'Watchlist 1';
+    const hist = watchTabHistoryRef.current;
+    let fallbackTab: WatchlistTab = remainingTabs[0] || 'Watchlist 1';
+    for (let i = hist.length - 2; i >= 0; i -= 1) {
+      if (remainingTabs.includes(hist[i])) {
+        fallbackTab = hist[i];
+        break;
+      }
+    }
+    watchTabHistoryRef.current = hist.filter((t) => t !== activeWatchTab);
 
     setWatchTabs(remainingTabs);
     setWatchlists((prev) => {
@@ -4312,14 +4358,27 @@ export default function App() {
     void ensureChartLoadedForPeriod(stock, id, period);
   };
 
+  // Tab switch: clear expanded row + filters. Do not clear selection (user may select on WL1, pick Move To WL2, preview WL2).
   useEffect(() => {
-    setWatchSelectionIds(new Set());
     setWatchActiveStockId(null);
     setWatchActiveTab(null);
     setWatchCapFilter(['all']);
     setWatchSortFilter('bestentry');
     setWatchSectorFilter('all');
     setWatchCapMenuOpen(false);
+  }, [activeWatchTab]);
+
+  useEffect(() => {
+    const h = watchTabHistoryRef.current;
+    const t = activeWatchTab;
+    if (h[h.length - 1] !== t) {
+      h.push(t);
+      const max = 50;
+      if (h.length > max) h.splice(0, h.length - max);
+    }
+  }, [activeWatchTab]);
+
+  useEffect(() => {
     if (watchMoveTargetTab === activeWatchTab) {
       const fallback = watchTabs.find((x) => x !== activeWatchTab) || 'Watchlist 1';
       setWatchMoveTargetTab(fallback);
@@ -4538,14 +4597,13 @@ export default function App() {
         return s.bestEntryScore;
       }
       const id = `${s.symbol}-${s.segment}`;
-      const scorecardInput = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
+      const scoreInput = scorecardInputFromDetails(fundamentalsFromStockRow(s), s);
       const history = chartCache[id]?.['3y'] ?? s.history ?? null;
-      return bestEntryScoreFromFundamentals(scorecardInput, s, history);
+      return bestEntryListCoreScoreRaw(s, scoreInput, history);
     };
 
     const afterFilter = watchRows.filter((s) => {
-      const id = `${s.symbol}-${s.segment}`;
-      const fund = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
+      const fund = fundamentalsFromStockRow(s);
       const cap = (inferCapType(s, fund) || '').toLowerCase();
       const segmentCap = String(s.segment || '').toLowerCase();
       const effectiveCap = cap || (CAP_SEGMENT_VALUES.find((v) => segmentCap.includes(v)) || '');
@@ -4587,14 +4645,30 @@ export default function App() {
       return watchSortFilter === 'desc' ? bVal - aVal : aVal - bVal;
     });
     return sorted;
-  }, [
-    watchRows,
-    fundamentalsCache,
-    chartCache,
-    watchCapFilter,
-    watchSortFilter,
-    watchSectorFilter,
-  ]);
+  }, [watchRows, chartCache, watchCapFilter, watchSortFilter, watchSectorFilter]);
+
+  // Must match StockListSection row keys (`${symbol}-${segment}`), not persisted `id`, because
+  // segment can change after market merge while `id` stays the original add-time value.
+  const visibleWatchRowIds = useMemo(
+    () => filteredWatchRows.map((s) => watchlistRowSelectKey(s)),
+    [filteredWatchRows],
+  );
+
+  useEffect(() => {
+    if (!watchPageOpen) return;
+    const el = watchSelectAllRef.current;
+    if (!el) return;
+    const ids = visibleWatchRowIds;
+    if (ids.length === 0) {
+      el.indeterminate = false;
+      return;
+    }
+    let sel = 0;
+    for (const id of ids) {
+      if (watchSelectionIds.has(id)) sel += 1;
+    }
+    el.indeterminate = sel > 0 && sel < ids.length;
+  }, [watchPageOpen, visibleWatchRowIds, watchSelectionIds]);
 
   if (error) {
     return (
@@ -4798,9 +4872,10 @@ export default function App() {
             <select
               className="limit-picker"
               value={displayLimit}
-              onChange={(e) => setDisplayLimit(Number(e.target.value) as 50 | 100 | 150)}
+              onChange={(e) => setDisplayLimit(Number(e.target.value) as ListDisplayLimit)}
               title="Show top N from fetched list"
             >
+              <option value={25}>Top 25</option>
               <option value={50}>Top 50</option>
               <option value={100}>Top 100</option>
               <option value={150}>Top 150</option>
@@ -4842,11 +4917,10 @@ export default function App() {
               className={`sort-picker sort-${sortOrder}`}
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-              title="Sort by profit, loss, best rank, or best price"
+              title="Sort by profit, loss, best score, or best price"
             >
               <option value="desc">Profit</option>
               <option value="asc">Loss</option>
-              <option value="best">Best Rank</option>
               <option value="bestentry">Best Score</option>
               <option value="bestprice">Best Price</option>
             </select>
@@ -5021,28 +5095,32 @@ export default function App() {
       {watchPageOpen && (
         <div className="auto-trade-result" role="dialog" aria-label="Watchlists full screen">
           <div className="auto-trade-result-inner trade-confirm-modal gold-page-modal watch-page-modal">
-            <div className="auto-trade-result-header orders-header-with-tabs">
-              <div className="orders-modal-tabs">
-                {watchTabs.map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    className={`orders-tab-btn ${activeWatchTab === tab ? 'active' : ''}`}
-                    onClick={() => setActiveWatchTab(tab)}
-                  >
-                    {tab}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className="orders-tab-btn"
-                  onClick={handleAddWatchlistTab}
-                  title="Add watch list"
-                  aria-label="Add watch list"
-                >
-                  +
-                </button>
+            <div className="auto-trade-result-header orders-header-with-tabs watch-page-tabs-header">
+              <div className="watch-page-tabs-scroll">
+                <div className="orders-modal-tabs watch-page-tabs-inner" role="tablist" aria-label="Watchlists">
+                  {watchTabs.map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeWatchTab === tab}
+                      className={`orders-tab-btn ${activeWatchTab === tab ? 'active' : ''}`}
+                      onClick={() => setActiveWatchTab(tab)}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
               </div>
+              <button
+                type="button"
+                className="orders-tab-btn watch-page-tab-add"
+                onClick={handleAddWatchlistTab}
+                title="Add watch list"
+                aria-label="Add watch list"
+              >
+                +
+              </button>
               <button className="auto-trade-close" onClick={() => setWatchPageOpen(false)} aria-label="Close">×</button>
             </div>
             <div className="history-modal-content gold-modal-content watch-page-content">
@@ -5206,6 +5284,38 @@ export default function App() {
                   <p className="orders-empty-msg">No stocks match current watchlist filters.</p>
                 </div>
               ) : (
+                <>
+                  <div className="watchlist-select-all-toolbar">
+                    <label className="watchlist-select-all-label">
+                      <input
+                        ref={watchSelectAllRef}
+                        type="checkbox"
+                        className="stock-select-cb"
+                        checked={
+                          visibleWatchRowIds.length > 0
+                          && visibleWatchRowIds.every((id) => watchSelectionIds.has(id))
+                        }
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setWatchSelectionIds((prev) => {
+                            const next = new Set(prev);
+                            if (on) {
+                              visibleWatchRowIds.forEach((id) => next.add(id));
+                            } else {
+                              visibleWatchRowIds.forEach((id) => next.delete(id));
+                            }
+                            return next;
+                          });
+                        }}
+                      />
+                      <span>
+                        Select all (
+                        {visibleWatchRowIds.filter((id) => watchSelectionIds.has(id)).length}
+                        {' of '}
+                        {visibleWatchRowIds.length})
+                      </span>
+                    </label>
+                  </div>
                 <StockListSection
                   stocks={filteredWatchRows.map((stock, idx) => ({
                     ...stock,
@@ -5255,6 +5365,7 @@ export default function App() {
                   sortOrder={'bestentry'}
                   showWatchDelta
                 />
+                </>
               )}
             </div>
           </div>
