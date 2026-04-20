@@ -1391,6 +1391,7 @@ function StockFinancialsAccordionsPanel({
 
 function StockItem({
   stock,
+  stockId,
   expanded,
   activeTab,
   onStockTap,
@@ -1430,6 +1431,7 @@ function StockItem({
   scorecardHistory3y,
 }: {
   stock: Stock;
+  stockId: string;
   expanded: boolean;
   activeTab: TabType | null;
   onStockTap: () => void;
@@ -1614,7 +1616,10 @@ function StockItem({
   const watchAddedOn = showWatchDelta ? formatWatchAddedDate((stock as WatchlistItem).watchAddedAt) : null;
 
   return (
-    <div className={`stock-item ${isSearchPinned ? 'search-stock-item' : ''} ${isSearchHighlighted ? 'search-stock-item-highlight' : ''}`}>
+    <div
+      className={`stock-item ${isSearchPinned ? 'search-stock-item' : ''} ${isSearchHighlighted ? 'search-stock-item-highlight' : ''}`}
+      data-stock-id={stockId}
+    >
       <div className="stock-row" onClick={onStockTap} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onStockTap()}>
         {showSelect && onSelectChange && (
           <input
@@ -1858,7 +1863,27 @@ function StockItem({
                             {pair.map((item, idx) => item ? (
                               <div key={`${item.label}-${idx}`} className="fund-score-cell">
                                 <span className="fund-label">{item.label}</span>
-                                <span className={`fund-score-badge ${scoreBandClass(item.value)}`}>{item.value}</span>
+                                <span
+                                  className={`fund-score-badge ${
+                                    item.label === 'Red Flags'
+                                      ? scoreBandClass(
+                                          item.value === 'low'
+                                            ? 'good'
+                                            : item.value === 'fair' || item.value === 'avg'
+                                              ? 'fair'
+                                              : 'bad',
+                                        )
+                                      : scoreBandClass(item.value)
+                                  }`}
+                                >
+                                  {item.label === 'Red Flags'
+                                    ? item.value === 'low'
+                                      ? 'Good'
+                                      : item.value === 'fair' || item.value === 'avg'
+                                        ? 'Fair'
+                                        : 'Bad'
+                                    : item.value}
+                                </span>
                               </div>
                             ) : (
                               <div key={`empty-${idx}`} className="fund-score-cell fund-score-cell-empty" />
@@ -2387,7 +2412,7 @@ function StockItem({
   );
 }
 
-type SortOrder = 'asc' | 'desc' | 'bestprice' | 'bestentry';
+type SortOrder = 'asc' | 'desc' | 'best' | 'bestprice' | 'bestentry';
 
 type ListDisplayLimit = 25 | 50 | 100 | 150;
 
@@ -2470,9 +2495,32 @@ function StockListSection({
   sortOrder: SortOrder;
   showWatchDelta?: boolean;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const lastKnownIndexRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!activeStockId || activeTab !== 'fundamentals') {
+      lastKnownIndexRef.current = null;
+      return;
+    }
+    const nextIndex = stocks.findIndex((s) => `${s.symbol}-${s.segment}` === activeStockId);
+    if (nextIndex === -1) return;
+    const prevIndex = lastKnownIndexRef.current;
+    lastKnownIndexRef.current = nextIndex;
+    if (prevIndex == null || prevIndex === nextIndex) return;
+
+    const listEl = listRef.current;
+    if (!listEl) return;
+    const target = Array.from(
+      listEl.querySelectorAll<HTMLElement>('.stock-item[data-stock-id]'),
+    ).find((el) => el.dataset.stockId === activeStockId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [stocks, activeStockId, activeTab]);
+
   return (
     <section className="stock-list-section">
-      <div className="stock-list">
+      <div className="stock-list" ref={listRef}>
         {stocks.length === 0 ? (
           <div className="select-category-placeholder">
             No stocks to display. Try refreshing.
@@ -2489,6 +2537,7 @@ function StockListSection({
             <StockItem
               key={id}
               stock={stock}
+              stockId={id}
               expanded={isExpanded}
               activeTab={isExpanded ? activeTab : null}
               onStockTap={() => onStockTap(stock)}
@@ -3443,7 +3492,7 @@ export default function App() {
       const id = `${s.symbol}-${s.segment}`;
       // Keep Best Rank stable across row-level fundamentals fetches.
       // Using only list-level snapshot data avoids rank jumping when one row is opened.
-      const scorecardInput = fundamentalsFromStockRow(s);
+      const scorecardInput = fundamentalsCache[id] ?? fundamentalsFromStockRow(s);
       const history = chartCache[id]?.['3y'] ?? s.history ?? null;
       const fundamentalsScore = bestEntryScoreFromFundamentals(scorecardInput, s, history);
       const tacticalScore = tacticalOpportunityScoreFromStock(s);
@@ -3497,8 +3546,7 @@ export default function App() {
     const topWithBestRank = withEntryPoint.map((s) => {
       const id = `${s.symbol}-${s.segment}`;
       const bestRank = rowToBestRank[id];
-      // Row + segment snapshot only — do not tie sort to fundamentalsCache (avoids list reshuffle on row expand).
-      const scorecardInput = scorecardInputFromDetails(fundamentalsFromStockRow(s), s);
+      const scorecardInput = scorecardInputFromDetails(fundamentalsCache[id] ?? fundamentalsFromStockRow(s), s);
       const history = chartCache[id]?.['3y'] ?? s.history ?? null;
       const entryPoint = scorecardFromFundamentals(scorecardInput, s, history).entryPoint;
       const tacticalEntryScore = tacticalOpportunityScoreFromStock(s);
@@ -3513,6 +3561,15 @@ export default function App() {
     });
     const sorted = [...topWithBestRank].sort((a, b) => {
       if (sortOrder === 'bestentry') {
+        const entryPointWeight = (band?: ScorecardBand): number => {
+          if (band === 'good' || band === 'high') return 3;
+          if (band === 'fair' || band === 'avg') return 2;
+          if (band === 'low') return 1;
+          return 0; // bad or unknown
+        };
+        const aEntry = entryPointWeight(a.entryPoint);
+        const bEntry = entryPointWeight(b.entryPoint);
+        if (aEntry !== bEntry) return bEntry - aEntry;
         const aScore = a.bestEntryScore ?? -1;
         const bScore = b.bestEntryScore ?? -1;
         if (aScore !== bScore) return bScore - aScore;
@@ -3525,6 +3582,11 @@ export default function App() {
         const aPrice = a.price ?? Infinity;
         const bPrice = b.price ?? Infinity;
         return aPrice - bPrice;
+      }
+      if (sortOrder === 'best') {
+        const aBest = a.bestRank ?? 9999;
+        const bBest = b.bestRank ?? 9999;
+        return aBest - bBest;
       }
       if (sortOrder === 'bestprice') {
         const aPrice = a.price ?? Infinity;
@@ -3543,7 +3605,7 @@ export default function App() {
       .filter((s) => (s.market || 'in') === market)
       .map((s) => ({ ...s, rank: 0 }));
     return [...pinnedForMarket, ...ranked];
-  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market, chartCache]);
+  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market, chartCache, fundamentalsCache]);
 
   // After cap/segment list merges, row ids `${symbol}-${segment}` can drift while caches still use the old id.
   // Remap selection + caches so the expanded row (and fundamentals tab) stay attached to the visible stock.
@@ -4917,10 +4979,11 @@ export default function App() {
               className={`sort-picker sort-${sortOrder}`}
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-              title="Sort by profit, loss, best score, or best price"
+              title="Sort by profit, loss, best rank, best score, or best price"
             >
               <option value="desc">Profit</option>
               <option value="asc">Loss</option>
+              <option value="best">Best Rank</option>
               <option value="bestentry">Best Score</option>
               <option value="bestprice">Best Price</option>
             </select>
