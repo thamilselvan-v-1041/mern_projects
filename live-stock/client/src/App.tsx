@@ -180,6 +180,24 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
 
 const API = import.meta.env.VITE_API_URL || '/api';
 const FUNDAMENTALS_CACHE_KEY = 'live-stock-fundamentals-cache';
+const FUNDAMENTALS_FETCHED_AT_KEY = 'live-stock-fundamentals-fetched-at';
+const FUNDAMENTALS_FETCH_SLOT_MS = 15 * 60 * 1000;
+/** Background fundamentals fetch parallelism per batch. */
+const FUNDAMENTALS_BATCH_SIZE = 5;
+/** 15-minute deterministic slot id, shared by all fetches in that window. */
+function fundamentalsFetchSlotId(ts: number = Date.now()): number {
+  return Math.floor(ts / FUNDAMENTALS_FETCH_SLOT_MS);
+}
+
+function hasFreshFundamentalsForCurrentSlot(
+  fetchedSlotById: Record<string, number>,
+  id: string,
+  hasCache: boolean,
+): boolean {
+  if (!hasCache) return false;
+  const slot = fetchedSlotById[id];
+  return slot === fundamentalsFetchSlotId();
+}
 
 function stripErrorUrl(msg: string): string {
   const stripped = msg
@@ -741,6 +759,8 @@ type Stock = {
   tacticalEntryScore?: number;
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
+  /** 15-minute slot id when fundamentals were last fetched for this row. */
+  fundamentalsFetchSlotId?: number;
 };
 
 type SegmentData = {
@@ -1873,15 +1893,21 @@ function StockItem({
                                               ? 'fair'
                                               : 'bad',
                                         )
-                                      : scoreBandClass(item.value)
+                                      : item.label === 'Valuation'
+                                        ? item.value === 'high' || item.value === 'bad'
+                                          ? 'low'
+                                          : item.value === 'low' || item.value === 'good'
+                                            ? 'high'
+                                            : scoreBandClass(item.value)
+                                        : scoreBandClass(item.value)
                                   }`}
                                 >
                                   {item.label === 'Red Flags'
                                     ? item.value === 'low'
-                                      ? 'Good'
+                                      ? 'Low'
                                       : item.value === 'fair' || item.value === 'avg'
-                                        ? 'Fair'
-                                        : 'Bad'
+                                        ? 'Avg'
+                                        : 'High'
                                     : item.value}
                                 </span>
                               </div>
@@ -2413,6 +2439,14 @@ function StockItem({
 }
 
 type SortOrder = 'asc' | 'desc' | 'best' | 'bestprice' | 'bestentry';
+type WatchSortOrder = SortOrder;
+const SORT_OPTIONS: Array<{ value: SortOrder; label: string }> = [
+  { value: 'desc', label: 'Profit' },
+  { value: 'asc', label: 'Loss' },
+  { value: 'best', label: 'Best Rank' },
+  { value: 'bestentry', label: 'Best Score' },
+  { value: 'bestprice', label: 'Best Price' },
+];
 
 type ListDisplayLimit = 25 | 50 | 100 | 150;
 
@@ -2613,6 +2647,23 @@ export default function App() {
     }
   });
   const [loadingFundamentalsId, setLoadingFundamentalsId] = useState<string | null>(null);
+  const [fundamentalsFetchedAtById, setFundamentalsFetchedAtById] = useState<Record<string, number>>(() => {
+    try {
+      const raw = sessionStorage.getItem(FUNDAMENTALS_FETCHED_AT_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.entries(parsed || {}).map(([k, v]) => [k, typeof v === 'number' && Number.isFinite(v) ? v : Number(v) || 0]),
+      );
+    } catch {
+      return {};
+    }
+  });
+  const applyFundamentalsForId = useCallback((id: string, record: Record<string, string>) => {
+    const slotId = fundamentalsFetchSlotId();
+    setFundamentalsCache((c) => ({ ...c, [id]: record }));
+    setFundamentalsFetchedAtById((f) => ({ ...f, [id]: slotId }));
+  }, []);
   const [quarterlyProfitCache, setQuarterlyProfitCache] = useState<Record<string, QuarterlyProfitPayload>>({});
   const [loadingQuarterlyProfitId, setLoadingQuarterlyProfitId] = useState<string | null>(null);
   const [stockInfoCache, setStockInfoCache] = useState<Record<string, StockInfoResponse>>({});
@@ -2755,7 +2806,7 @@ export default function App() {
   const [activeWatchTab, setActiveWatchTab] = useState<WatchlistTab>('Watchlist 1');
   const [watchMoveTargetTab, setWatchMoveTargetTab] = useState<WatchlistTab>('Watchlist 2');
   const [watchCapFilter, setWatchCapFilter] = useState<string[]>(['all']);
-  const [watchSortFilter, setWatchSortFilter] = useState<'desc' | 'asc' | 'best' | 'bestentry' | 'bestprice'>('bestentry');
+  const [watchSortFilter, setWatchSortFilter] = useState<WatchSortOrder>('bestentry');
   const [watchSectorFilter, setWatchSectorFilter] = useState<string>('all');
   const [watchCapMenuOpen, setWatchCapMenuOpen] = useState(false);
   const [watchSelectionIds, setWatchSelectionIds] = useState<Set<string>>(new Set());
@@ -3131,6 +3182,14 @@ export default function App() {
       /* ignore */
     }
   }, [fundamentalsCache]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(FUNDAMENTALS_FETCHED_AT_KEY, JSON.stringify(fundamentalsFetchedAtById));
+    } catch {
+      /* ignore */
+    }
+  }, [fundamentalsFetchedAtById]);
 
   useEffect(() => {
     if (historyModalOpen || reportFullscreen || goldPageOpen || watchPageOpen) {
@@ -3604,8 +3663,116 @@ export default function App() {
     const pinnedForMarket = searchPinnedStocks
       .filter((s) => (s.market || 'in') === market)
       .map((s) => ({ ...s, rank: 0 }));
-    return [...pinnedForMarket, ...ranked];
-  }, [baseMerged, segmentFilter, sectorFilter, sortOrder, displayLimit, searchPinnedStocks, market, chartCache, fundamentalsCache]);
+    const attachFundamentalsFetchedAt = (s: Stock): Stock => {
+      const rowId = `${s.symbol}-${s.segment}`;
+      const slotId = fundamentalsFetchedAtById[rowId];
+      if (slotId == null || !Number.isFinite(slotId)) return s;
+      return { ...s, fundamentalsFetchSlotId: slotId };
+    };
+    return [...pinnedForMarket, ...ranked].map(attachFundamentalsFetchedAt);
+  }, [
+    baseMerged,
+    segmentFilter,
+    sectorFilter,
+    sortOrder,
+    displayLimit,
+    searchPinnedStocks,
+    market,
+    chartCache,
+    fundamentalsCache,
+    fundamentalsFetchedAtById,
+  ]);
+
+  const stocksListRef = useRef(stocks);
+  stocksListRef.current = stocks;
+  const fundamentalsCachePrefetchRef = useRef(fundamentalsCache);
+  fundamentalsCachePrefetchRef.current = fundamentalsCache;
+  const fundamentalsFetchedAtPrefetchRef = useRef(fundamentalsFetchedAtById);
+  fundamentalsFetchedAtPrefetchRef.current = fundamentalsFetchedAtById;
+  const indicesInPrefetchRef = useRef(indicesIn);
+  indicesInPrefetchRef.current = indicesIn;
+  const mainListTopFundamentalsPrefetchGenRef = useRef(0);
+  const mainListCapFilterSig = useMemo(
+    () => JSON.stringify([...segmentFilter].slice().sort()),
+    [segmentFilter],
+  );
+  /** Tracks latest cap-filter signature we already prefetch-processed. */
+  const mainListCapFundamentalsPrefetchSigRef = useRef<string | null>(null);
+
+  /** On cap checkbox changes, prefetch fundamentals for top 25 (5 per batch), excluding rows already fetched in current slot. */
+  useEffect(() => {
+    if (watchPageOpen || goldPageOpen) return;
+    if (loading) return;
+    const rows = stocksListRef.current;
+    if (!rows.length) return;
+    if (mainListCapFundamentalsPrefetchSigRef.current === mainListCapFilterSig) return;
+    mainListCapFundamentalsPrefetchSigRef.current = mainListCapFilterSig;
+    const gen = ++mainListTopFundamentalsPrefetchGenRef.current;
+    const top25 = rows.slice(0, 25);
+    const marketCode = market;
+
+    void (async () => {
+      const cacheSnap = fundamentalsCachePrefetchRef.current;
+      const fetchedSnap = fundamentalsFetchedAtPrefetchRef.current;
+      const toFetch = top25.filter((stock) => {
+        const id = `${stock.symbol}-${stock.segment}`;
+        return !hasFreshFundamentalsForCurrentSlot(fetchedSnap, id, Boolean(cacheSnap[id]));
+      });
+      if (!toFetch.length) return;
+      const batchedFundamentalsUpdates: Record<string, Record<string, string>> = {};
+      const batchSize = FUNDAMENTALS_BATCH_SIZE;
+      for (let i = 0; i < toFetch.length; i += batchSize) {
+        if (mainListTopFundamentalsPrefetchGenRef.current !== gen) return;
+        const batch = toFetch.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (stock) => {
+            if (mainListTopFundamentalsPrefetchGenRef.current !== gen) return;
+            const id = `${stock.symbol}-${stock.segment}`;
+            const mkt = stock.market || marketCode;
+            if (INDEX_SYMBOLS.has(stock.symbol)) {
+              batchedFundamentalsUpdates[id] = buildIndexFundamentals(
+                stock.symbol,
+                stock.price,
+                indicesInPrefetchRef.current,
+              ) as unknown as Record<string, string>;
+              return;
+            }
+            try {
+              const res = await fetch(`${API}/fundamentals/${encodeURIComponent(stock.symbol)}?market=${mkt}`);
+              const data = (await res.json()) as Record<string, unknown> & { error?: string };
+              if (mainListTopFundamentalsPrefetchGenRef.current !== gen) return;
+              if (data?.error) return;
+              batchedFundamentalsUpdates[id] = normalizeFundamentalsRecord(data);
+            } catch {
+              /* live-only */
+            }
+          }),
+        );
+      }
+      if (mainListTopFundamentalsPrefetchGenRef.current !== gen) return;
+      const ids = Object.keys(batchedFundamentalsUpdates);
+      if (!ids.length) return;
+      // Align fundamentals slot id with the same "last fetched" timestamp shown in header.
+      const headerFetchedAtMs = Date.parse(lastUpdated || '');
+      const slotId = fundamentalsFetchSlotId(
+        Number.isFinite(headerFetchedAtMs) ? headerFetchedAtMs : Date.now(),
+      );
+      setFundamentalsCache((prev) => ({ ...prev, ...batchedFundamentalsUpdates }));
+      setFundamentalsFetchedAtById((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => { next[id] = slotId; });
+        return next;
+      });
+    })();
+  }, [
+    loading,
+    watchPageOpen,
+    goldPageOpen,
+    stocks.length,
+    mainListCapFilterSig,
+    market,
+    lastUpdated,
+  ]);
 
   // After cap/segment list merges, row ids `${symbol}-${segment}` can drift while caches still use the old id.
   // Remap selection + caches so the expanded row (and fundamentals tab) stay attached to the visible stock.
@@ -3637,6 +3804,7 @@ export default function App() {
     };
 
     setFundamentalsCache((c) => rekeyRecord(c));
+    setFundamentalsFetchedAtById((f) => rekeyRecord(f));
     setAnalysisCache((c) => rekeyRecord(c));
     setQuarterlyProfitCache((c) => rekeyRecord(c));
     setStockInfoCache((c) => rekeyRecord(c));
@@ -3680,14 +3848,16 @@ export default function App() {
     const sym = String(stock.symbol || '').replace(/\.(NS|BO)$/i, '');
 
     let fund: Record<string, string> | undefined = fundamentalsCache[id];
-    if (!fund) {
+    const fundNeedsFetch =
+      !fund || !hasFreshFundamentalsForCurrentSlot(fundamentalsFetchedAtById, id, Boolean(fund));
+    if (fundNeedsFetch) {
       setLoadingFundamentalsId(id);
       try {
         const res = await fetch(`${API}/fundamentals/${encodeURIComponent(stock.symbol)}?market=${mkt}`);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         fund = normalizeFundamentalsRecord(data as Record<string, unknown>);
-        setFundamentalsCache((c) => ({ ...c, [id]: fund! }));
+        applyFundamentalsForId(id, fund);
       } catch {
         fund = {};
       } finally {
@@ -3831,23 +4001,25 @@ export default function App() {
     setChartPeriod((p) => ({ ...p, [id]: p[id] ?? preferredChartPeriod }));
     const market = stock.market || 'in';
 
-    // Load fundamentals if not cached
-    if (!fundamentalsCache[id]) {
+    const needFundamentals =
+      !fundamentalsCache[id] ||
+      !hasFreshFundamentalsForCurrentSlot(fundamentalsFetchedAtById, id, Boolean(fundamentalsCache[id]));
+    if (needFundamentals) {
       if (INDEX_SYMBOLS.has(stock.symbol)) {
-        setFundamentalsCache((c) => ({
-          ...c,
-          [id]: buildIndexFundamentals(stock.symbol, stock.price, indicesIn) as unknown as Record<string, string>,
-        }));
+        applyFundamentalsForId(
+          id,
+          buildIndexFundamentals(stock.symbol, stock.price, indicesIn) as unknown as Record<string, string>,
+        );
       } else {
-      setLoadingFundamentalsId(id);
-      fetch(`${API}/fundamentals/${stock.symbol}?market=${market}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.error) throw new Error(data.error);
-          setFundamentalsCache((c) => ({ ...c, [id]: normalizeFundamentalsRecord(data as Record<string, unknown>) }));
-        })
-        .catch(() => { /* no fallback - live data only */ })
-        .finally(() => setLoadingFundamentalsId(null));
+        setLoadingFundamentalsId(id);
+        fetch(`${API}/fundamentals/${stock.symbol}?market=${market}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.error) throw new Error(data.error);
+            applyFundamentalsForId(id, normalizeFundamentalsRecord(data as Record<string, unknown>));
+          })
+          .catch(() => { /* no fallback - live data only */ })
+          .finally(() => setLoadingFundamentalsId(null));
       }
     }
 
@@ -3905,13 +4077,16 @@ export default function App() {
     }, 1500);
     setChartPeriod((p) => ({ ...p, [id]: p[id] ?? preferredChartPeriod }));
     const marketCode = match.market || 'in';
-    if (!fundamentalsCache[id]) {
+    const needSearchFundamentals =
+      !fundamentalsCache[id] ||
+      !hasFreshFundamentalsForCurrentSlot(fundamentalsFetchedAtById, id, Boolean(fundamentalsCache[id]));
+    if (needSearchFundamentals) {
       setLoadingFundamentalsId(id);
       fetch(`${API}/fundamentals/${match.symbol}?market=${marketCode}`)
         .then((r) => r.json())
         .then((data) => {
           if (data.error) throw new Error(data.error);
-          setFundamentalsCache((c) => ({ ...c, [id]: normalizeFundamentalsRecord(data as Record<string, unknown>) }));
+          applyFundamentalsForId(id, normalizeFundamentalsRecord(data as Record<string, unknown>));
         })
         .catch(() => { /* live-only */ })
         .finally(() => setLoadingFundamentalsId(null));
@@ -4052,24 +4227,27 @@ export default function App() {
       }
     }
 
-    if (tab === 'fundamentals' && !fundamentalsCache[id]) {
+    const needFundamentalsTab =
+      !fundamentalsCache[id] ||
+      !hasFreshFundamentalsForCurrentSlot(fundamentalsFetchedAtById, id, Boolean(fundamentalsCache[id]));
+    if (tab === 'fundamentals' && needFundamentalsTab) {
       if (INDEX_SYMBOLS.has(stock.symbol)) {
-        setFundamentalsCache((c) => ({
-          ...c,
-          [id]: buildIndexFundamentals(stock.symbol, stock.price, indicesIn) as unknown as Record<string, string>,
-        }));
+        applyFundamentalsForId(
+          id,
+          buildIndexFundamentals(stock.symbol, stock.price, indicesIn) as unknown as Record<string, string>,
+        );
       } else {
-      setLoadingFundamentalsId(id);
-      try {
-        const res = await fetch(`${API}/fundamentals/${stock.symbol}?market=${stock.market || 'in'}`);
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        setFundamentalsCache((c) => ({ ...c, [id]: normalizeFundamentalsRecord(data as Record<string, unknown>) }));
-      } catch {
-        /* no fallback - live data only */
-      } finally {
-        setLoadingFundamentalsId(null);
-      }
+        setLoadingFundamentalsId(id);
+        try {
+          const res = await fetch(`${API}/fundamentals/${stock.symbol}?market=${stock.market || 'in'}`);
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          applyFundamentalsForId(id, normalizeFundamentalsRecord(data as Record<string, unknown>));
+        } catch {
+          /* no fallback - live data only */
+        } finally {
+          setLoadingFundamentalsId(null);
+        }
       }
     }
 
@@ -4554,26 +4732,45 @@ export default function App() {
     let cancelled = false;
 
     const run = async () => {
-      const updates = await Promise.all(rows.map(async (w) => {
-        const marketCode = w.market || 'in';
-        const id = `${w.symbol}-${w.segment}`;
-        const [quoteRes, fundamentalsRes] = await Promise.all([
-          fetch(`${API}/quote/${encodeURIComponent(w.symbol)}?market=${marketCode}`)
-            .then((r) => r.json())
-            .catch(() => null),
-          fundamentalsCache[id]
-            ? Promise.resolve(null)
-            : fetch(`${API}/fundamentals/${encodeURIComponent(w.symbol)}?market=${marketCode}`)
+      const batchSize = FUNDAMENTALS_BATCH_SIZE;
+      const updates: Array<{
+        id: string;
+        quote: Record<string, unknown> | null;
+        fundamentals: Record<string, unknown> | null;
+      }> = [];
+
+      for (let i = 0; i < rows.length; i += batchSize) {
+        if (cancelled) return;
+        const batch = rows.slice(i, i + batchSize);
+        const part = await Promise.all(
+          batch.map(async (w) => {
+            const marketCode = w.market || 'in';
+            const id = `${w.symbol}-${w.segment}`;
+            const skipFundamentals = hasFreshFundamentalsForCurrentSlot(
+              fundamentalsFetchedAtPrefetchRef.current,
+              id,
+              Boolean(fundamentalsCachePrefetchRef.current[id]),
+            );
+            const [quoteRes, fundamentalsRes] = await Promise.all([
+              fetch(`${API}/quote/${encodeURIComponent(w.symbol)}?market=${marketCode}`)
                 .then((r) => r.json())
                 .catch(() => null),
-        ]);
+              skipFundamentals
+                ? Promise.resolve(null)
+                : fetch(`${API}/fundamentals/${encodeURIComponent(w.symbol)}?market=${marketCode}`)
+                    .then((r) => r.json())
+                    .catch(() => null),
+            ]);
 
-        return {
-          id,
-          quote: quoteRes && !quoteRes.error ? quoteRes : null,
-          fundamentals: fundamentalsRes && !fundamentalsRes.error ? fundamentalsRes : null,
-        };
-      }));
+            return {
+              id,
+              quote: quoteRes && !quoteRes.error ? quoteRes : null,
+              fundamentals: fundamentalsRes && !fundamentalsRes.error ? fundamentalsRes : null,
+            };
+          }),
+        );
+        updates.push(...part);
+      }
 
       if (cancelled) return;
 
@@ -4582,14 +4779,23 @@ export default function App() {
         if (u.fundamentals) fundamentalsUpdates[u.id] = normalizeFundamentalsRecord(u.fundamentals as Record<string, unknown>);
       });
       if (Object.keys(fundamentalsUpdates).length) {
+        const slotId = fundamentalsFetchSlotId();
         setFundamentalsCache((prev) => ({ ...prev, ...fundamentalsUpdates }));
+        setFundamentalsFetchedAtById((f) => {
+          const next = { ...f };
+          for (const id of Object.keys(fundamentalsUpdates)) {
+            next[id] = slotId;
+          }
+          return next;
+        });
       }
 
       setWatchlists((prev) => {
         const src = prev[activeWatchTab] || [];
         let changed = false;
         const mapped = src.map((w) => {
-          const hit = updates.find((u) => u.id === w.id);
+          const rowKey = `${w.symbol}-${w.segment}`;
+          const hit = updates.find((u) => u.id === rowKey);
           if (!hit?.quote) return w;
           const next: WatchlistItem = {
             ...w,
@@ -4981,11 +5187,9 @@ export default function App() {
               onChange={(e) => setSortOrder(e.target.value as SortOrder)}
               title="Sort by profit, loss, best rank, best score, or best price"
             >
-              <option value="desc">Profit</option>
-              <option value="asc">Loss</option>
-              <option value="best">Best Rank</option>
-              <option value="bestentry">Best Score</option>
-              <option value="bestprice">Best Price</option>
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
             <button
               type="button"
@@ -5248,14 +5452,12 @@ export default function App() {
                   <select
                     className="watchlist-filter-picker"
                     value={watchSortFilter}
-                    onChange={(e) => setWatchSortFilter(e.target.value as 'desc' | 'asc' | 'best' | 'bestentry' | 'bestprice')}
+                    onChange={(e) => setWatchSortFilter(e.target.value as WatchSortOrder)}
                     title="Profit/loss category"
                   >
-                    <option value="desc">Profit</option>
-                    <option value="asc">Loss</option>
-                    <option value="best">Best Rank</option>
-                    <option value="bestentry">Best Score</option>
-                    <option value="bestprice">Best Price</option>
+                    {SORT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
                   </select>
                   <select
                     className="watchlist-filter-picker"
