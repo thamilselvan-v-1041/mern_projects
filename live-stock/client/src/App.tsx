@@ -181,6 +181,7 @@ function parsePortfolioXlsx(file: File): Promise<HoldingRow[]> {
 const API = import.meta.env.VITE_API_URL || '/api';
 const FUNDAMENTALS_CACHE_KEY = 'live-stock-fundamentals-cache';
 const FUNDAMENTALS_FETCHED_AT_KEY = 'live-stock-fundamentals-fetched-at';
+const LAST_UPDATED_KEY = 'live-stock-last-updated';
 const FUNDAMENTALS_FETCH_SLOT_MS = 15 * 60 * 1000;
 /** Background fundamentals fetch parallelism per batch. */
 const FUNDAMENTALS_BATCH_SIZE = 5;
@@ -2679,7 +2680,13 @@ export default function App() {
   const [predictionPeriod, setPredictionPeriod] = useState<Record<string, PredictionPeriod>>({});
   const [predictionLevel, setPredictionLevel] = useState<PredictionLevel>('low');
   const [preferredFundamentalsSubTab, setPreferredFundamentalsSubTab] = useState<'details' | 'scorecard'>('details');
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem(LAST_UPDATED_KEY);
+    } catch {
+      return null;
+    }
+  });
   const [market, setMarket] = useState<string>('in');
   const [displayLimit, setDisplayLimit] = useState<ListDisplayLimit>(150);
   const [segmentFilter, setSegmentFilter] = useState<string[]>(['large']);
@@ -2991,10 +2998,13 @@ export default function App() {
       })
       .catch((err) => {
         if (!isBackground) setError(err.message);
-        setSegmentReadyByMarket((prev) => ({
-          ...prev,
-          [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, false])) },
-        }));
+        // Keep prior ready state during background failures to avoid disabling cap checkboxes.
+        if (!isBackground) {
+          setSegmentReadyByMarket((prev) => ({
+            ...prev,
+            [m]: { ...(prev[m] || {}), ...Object.fromEntries(segments.map((s) => [s, false])) },
+          }));
+        }
       })
       .finally(() => {
         if (!isBackground) setLoading(false);
@@ -3123,8 +3133,8 @@ export default function App() {
       // Keep any segments the user has selected that are now ready
       const prevValid = prev.filter((v) => v !== 'all' && readySegments.includes(v));
       if (prevValid.length > 0) return prevValid;
-      // If currently selected segments became invalid/unavailable, allow empty state.
-      return [];
+      // Never auto-clear user cap selection to empty; keep previous selection until data is ready.
+      return prev;
     });
   }, [market, segmentReadyByMarket]);
 
@@ -3190,6 +3200,14 @@ export default function App() {
       /* ignore */
     }
   }, [fundamentalsFetchedAtById]);
+
+  useEffect(() => {
+    try {
+      if (lastUpdated) sessionStorage.setItem(LAST_UPDATED_KEY, lastUpdated);
+    } catch {
+      /* ignore */
+    }
+  }, [lastUpdated]);
 
   useEffect(() => {
     if (historyModalOpen || reportFullscreen || goldPageOpen || watchPageOpen) {
@@ -3696,17 +3714,21 @@ export default function App() {
     () => JSON.stringify([...segmentFilter].slice().sort()),
     [segmentFilter],
   );
-  /** Tracks latest cap-filter signature we already prefetch-processed. */
-  const mainListCapFundamentalsPrefetchSigRef = useRef<string | null>(null);
+  const mainListPrefetchTriggerSig = useMemo(
+    () => JSON.stringify({ cap: mainListCapFilterSig, lastUpdated: lastUpdated || '' }),
+    [mainListCapFilterSig, lastUpdated],
+  );
+  /** Tracks latest prefetch trigger signature (cap selection + lastUpdated time) we already processed. */
+  const mainListPrefetchTriggerSigRef = useRef<string | null>(null);
 
-  /** On cap checkbox changes, prefetch fundamentals for top 25 (5 per batch), excluding rows already fetched in current slot. */
+  /** On cap checkbox or lastUpdated changes, prefetch fundamentals for top 25 (5 per batch), excluding rows already fetched in current slot. */
   useEffect(() => {
     if (watchPageOpen || goldPageOpen) return;
     if (loading) return;
     const rows = stocksListRef.current;
     if (!rows.length) return;
-    if (mainListCapFundamentalsPrefetchSigRef.current === mainListCapFilterSig) return;
-    mainListCapFundamentalsPrefetchSigRef.current = mainListCapFilterSig;
+    if (mainListPrefetchTriggerSigRef.current === mainListPrefetchTriggerSig) return;
+    mainListPrefetchTriggerSigRef.current = mainListPrefetchTriggerSig;
     const gen = ++mainListTopFundamentalsPrefetchGenRef.current;
     const top25 = rows.slice(0, 25);
     const marketCode = market;
@@ -3769,7 +3791,7 @@ export default function App() {
     watchPageOpen,
     goldPageOpen,
     stocks.length,
-    mainListCapFilterSig,
+    mainListPrefetchTriggerSig,
     market,
     lastUpdated,
   ]);
