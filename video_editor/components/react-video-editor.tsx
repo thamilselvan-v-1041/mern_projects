@@ -31,7 +31,9 @@ import {
   Clapperboard,
   Clipboard,
   Copy,
+  Download,
   Link2,
+  Loader2,
   Mic2,
   MoreVertical,
   Minimize2,
@@ -110,9 +112,14 @@ const RESIZE_HANDLE_W = 6;
 const MAX_STRETCH_FRAMES = 30 * 120;
 const TRACK_ITEM_MAX_H = 18;
 const AUDIO_ITEM_H = 25;
-const MEDIA_ITEM_H = 25;
+const MEDIA_ITEM_H = 42;
 const ELEMENTS_ITEM_H = 25;
 const TRACK_ITEM_RADIUS = 5;
+const VIDEO_ROW_PADDING_Y = 6;
+const AUDIO_ROW_PADDING_Y = 6;
+const ELEMENTS_ROW_PADDING_Y = 6;
+const ELEMENTS_ROW_MIN_HEIGHT = TRACK_ROW_H + 4;
+const EMPTY_ELEMENTS_ROW_HEIGHT = TRACK_ROW_H + 6;
 
 const MAX_UNDO = 80;
 
@@ -133,6 +140,124 @@ function clipBarDisplayTitle(
 function stableBarFallback(id: string, kind: string): string {
   const tail = id.length <= 14 ? id : id.slice(-10);
   return `${kind} · ${tail}`;
+}
+
+function buildDeterministicWave(seedInput: string, bins = 72): number[] {
+  let seed = 0;
+  for (let i = 0; i < seedInput.length; i += 1) {
+    seed = (seed * 33 + seedInput.charCodeAt(i)) >>> 0;
+  }
+  const out: number[] = [];
+  let x = seed || 1;
+  for (let i = 0; i < bins; i += 1) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    const n = Math.abs(x % 1000) / 1000;
+    out.push(0.15 + n * 0.85);
+  }
+  return out;
+}
+
+async function probeMediaDurationFrames(src: string, kind: "video" | "audio"): Promise<number | null> {
+  return new Promise<number | null>((resolve) => {
+    const media = document.createElement(kind);
+    let done = false;
+    media.preload = "metadata";
+    media.crossOrigin = "anonymous";
+    media.src = src;
+    const finish = (value: number | null) => {
+      if (done) return;
+      done = true;
+      media.onloadedmetadata = null;
+      media.onerror = null;
+      media.removeAttribute("src");
+      media.load();
+      resolve(value);
+    };
+    media.onloadedmetadata = () => {
+      const sec = Number.isFinite(media.duration) ? media.duration : 0;
+      if (sec <= 0) {
+        finish(null);
+        return;
+      }
+      finish(Math.max(1, Math.floor(sec * FPS)));
+    };
+    media.onerror = () => finish(null);
+    media.load();
+  });
+}
+
+async function extractVideoThumbnailStrip(src: string, count: number): Promise<string[]> {
+  const safeCount = Math.max(3, Math.min(12, Math.floor(count)));
+  return new Promise<string[]>((resolve) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = "anonymous";
+    video.src = src;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      resolve([]);
+      return;
+    }
+
+    const cleanup = () => {
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.onseeked = null;
+      video.removeAttribute("src");
+      video.load();
+    };
+
+    const seekTo = (sec: number) =>
+      new Promise<void>((done) => {
+        const onSeeked = () => {
+          video.removeEventListener("seeked", onSeeked);
+          done();
+        };
+        video.addEventListener("seeked", onSeeked);
+        try {
+          video.currentTime = Math.max(0, sec);
+        } catch {
+          video.removeEventListener("seeked", onSeeked);
+          done();
+        }
+      });
+
+    video.onerror = () => {
+      cleanup();
+      resolve([]);
+    };
+
+    video.onloadedmetadata = async () => {
+      try {
+        const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 1;
+        const width = Math.max(80, Math.floor((video.videoWidth || 320) * 0.2));
+        const height = Math.max(46, Math.floor((video.videoHeight || 180) * 0.2));
+        canvas.width = width;
+        canvas.height = height;
+        const thumbs: string[] = [];
+        for (let i = 0; i < safeCount; i += 1) {
+          const progress = safeCount === 1 ? 0 : i / (safeCount - 1);
+          const t = Math.max(0, Math.min(duration - 0.05, progress * duration));
+          await seekTo(t);
+          ctx.drawImage(video, 0, 0, width, height);
+          thumbs.push(canvas.toDataURL("image/jpeg", 0.72));
+        }
+        cleanup();
+        resolve(thumbs);
+      } catch {
+        cleanup();
+        resolve([]);
+      }
+    };
+
+    video.load();
+  });
 }
 
 function formatClockFromFrames(frame: number, fps: number): string {
@@ -166,6 +291,7 @@ type ClipboardEntry =
   | { kind: "audio"; data: TimelineAudio };
 
 type PreviewMode = "live" | "cached";
+type EditorTheme = "white" | "black";
 
 type CachedPreviewChunk = {
   startFrame: number;
@@ -233,20 +359,26 @@ function deepCloneLayer<T extends Clip | TextOverlay | TimelineAudio>(x: T): T {
 
 function normalizeNonOverlappingMediaLane(clips: Clip[]): Clip[] {
   const media = clips
-    .map((c) => ({ ...c, row: VIDEO_TRACK_ROW }))
-    .map((c) => ({ ...c }))
+    .map((c) => ({
+      ...c,
+      row: VIDEO_TRACK_ROW,
+      start: Math.max(0, Math.floor(c.start)),
+      duration: Math.max(1, Math.floor(c.duration)),
+    }))
     .sort((a, b) => (a.start !== b.start ? a.start - b.start : a.id.localeCompare(b.id)));
-
+  // Keep the primary video lane in strict sequence with no gaps.
+  // Audio / text lanes are managed elsewhere and remain unchanged.
+  const baseLane = media.filter((c) => !c.overlayClip);
+  const overlays = media.filter((c) => c.overlayClip);
   let cursor = 0;
-  for (let i = 0; i < media.length; i += 1) {
-    const item = media[i];
-    const clampedDuration = Math.max(1, item.duration);
-    // Keep media clips packed in a single continuous lane.
-    item.start = cursor;
-    cursor += clampedDuration;
-  }
-
-  return media.sort((a, b) => a.start - b.start);
+  const packedBase = baseLane.map((clip) => {
+    const next = { ...clip, start: cursor };
+    cursor += clip.duration;
+    return next;
+  });
+  return [...packedBase, ...overlays].sort((a, b) =>
+    a.start !== b.start ? a.start - b.start : a.id.localeCompare(b.id),
+  );
 }
 
 function mediaTimingChanged(a: Clip[], b: Clip[]): boolean {
@@ -715,8 +847,14 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   const [isPlaybackResizing, setIsPlaybackResizing] = useState(false);
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const [editorTheme, setEditorTheme] = useState<EditorTheme>("white");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportResult, setExportResult] = useState<{ url: string; filename: string } | null>(null);
   const [uploadedMediaItems, setUploadedMediaItems] = useState<UploadedFileItem[]>([]);
   const [uploadedAudioItems, setUploadedAudioItems] = useState<UploadedFileItem[]>([]);
+  const [clipThumbnailStrips, setClipThumbnailStrips] = useState<Record<string, string[]>>({});
+  const [mediaDurationFramesBySrc, setMediaDurationFramesBySrc] = useState<Record<string, number>>({});
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
   const [minTimelinePaneHeight, setMinTimelinePaneHeight] = useState(260);
   const [clipDragInsertFrame, setClipDragInsertFrame] = useState<number | null>(null);
@@ -743,9 +881,28 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   const hoverFrameRef = useRef<number | null>(null);
   const preloadedNextChunkRef = useRef<ActiveCachedChunk | null>(null);
   const clipDragSnapshotRef = useRef<Clip[] | null>(null);
+  const clipThumbStripInFlightRef = useRef<Set<string>>(new Set());
+  const mediaDurationProbeInFlightRef = useRef<Set<string>>(new Set());
+  const mediaDurationFramesBySrcRef = useRef<Record<string, number>>({});
+  const clipsRef = useRef<Clip[]>([]);
+  const audioTracksRef = useRef<TimelineAudio[]>([]);
+  const textOverlaysRef = useRef<TextOverlay[]>([]);
   const topMenuRef = useRef<HTMLDivElement | null>(null);
   const playbackPaneUserResizedRef = useRef(false);
   const lastAutoFocusedSelectionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem("video_editor_main_theme");
+    if (saved === "white" || saved === "black") {
+      setEditorTheme(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("video_editor_main_theme", editorTheme);
+  }, [editorTheme]);
 
   useEffect(() => {
     if (!isPlaybackResizing) return;
@@ -782,6 +939,88 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     window.addEventListener("resize", updateMinimumTimelineHeight);
     return () => window.removeEventListener("resize", updateMinimumTimelineHeight);
   }, []);
+
+  useEffect(() => {
+    const activeClipIds = new Set(clips.map((c) => c.id));
+    setClipThumbnailStrips((prev) => {
+      const next: Record<string, string[]> = {};
+      let changed = false;
+      Object.entries(prev).forEach(([clipId, strip]) => {
+        if (activeClipIds.has(clipId)) {
+          next[clipId] = strip;
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+
+    const videoClips = clips.filter((c) => (c.mediaType ?? "video") !== "image");
+    if (!videoClips.length) return;
+
+    let cancelled = false;
+    void (async () => {
+      for (const clip of videoClips) {
+        if (cancelled) return;
+        if (clipThumbStripInFlightRef.current.has(clip.id)) continue;
+        clipThumbStripInFlightRef.current.add(clip.id);
+        const thumbs = await extractVideoThumbnailStrip(clip.src, 8);
+        clipThumbStripInFlightRef.current.delete(clip.id);
+        if (cancelled) return;
+        setClipThumbnailStrips((prev) => {
+          if (prev[clip.id]?.length) return prev;
+          return { ...prev, [clip.id]: thumbs };
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clips]);
+
+  useEffect(() => {
+    mediaDurationFramesBySrcRef.current = mediaDurationFramesBySrc;
+  }, [mediaDurationFramesBySrc]);
+
+  useEffect(() => {
+    clipsRef.current = clips;
+    audioTracksRef.current = audioTracks;
+    textOverlaysRef.current = textOverlays;
+  }, [clips, audioTracks, textOverlays]);
+
+  useEffect(() => {
+    const videoSources = clips
+      .filter((c) => (c.mediaType ?? "video") !== "image")
+      .map((c) => c.src)
+      .filter(Boolean);
+    const audioSources = audioTracks.map((a) => a.src).filter(Boolean);
+    const pending = [
+      ...videoSources.map((src) => ({ src, kind: "video" as const })),
+      ...audioSources.map((src) => ({ src, kind: "audio" as const })),
+    ];
+    if (!pending.length) return;
+    let cancelled = false;
+    void (async () => {
+      for (const item of pending) {
+        if (cancelled) return;
+        if (mediaDurationFramesBySrcRef.current[item.src] != null) continue;
+        if (mediaDurationProbeInFlightRef.current.has(item.src)) continue;
+        mediaDurationProbeInFlightRef.current.add(item.src);
+        const frames = await probeMediaDurationFrames(item.src, item.kind);
+        mediaDurationProbeInFlightRef.current.delete(item.src);
+        if (cancelled || frames == null) continue;
+        mediaDurationFramesBySrcRef.current[item.src] = frames;
+        setMediaDurationFramesBySrc((prev) => {
+          if (prev[item.src] != null) return prev;
+          return { ...prev, [item.src]: frames };
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clips, audioTracks]);
 
   useEffect(() => {
     const container = previewTimelineContainerRef.current;
@@ -907,7 +1146,8 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       const h = r.height;
       const ok =
         Number.isFinite(w) && Number.isFinite(h) && w >= 2 && h >= 2;
-      setPreviewPlayerReady(ok);
+      // Avoid ready-state oscillation (true <-> false) that can remount Player repeatedly.
+      setPreviewPlayerReady((prev) => (ok ? true : prev));
     };
 
     evaluate();
@@ -1349,27 +1589,29 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     const hasTextElements = interactionTextOnlyStackLayout.size > 0;
     const hasShapeElements = interactionShapeStackLayout.size > 0;
     const hasAnyElements = hasTextElements || hasShapeElements;
-    const videoRowH = TRACK_ROW_H;
+    const videoRowH = Math.max(TRACK_ROW_H, MEDIA_ITEM_H + VIDEO_ROW_PADDING_Y * 2);
     const audioRowH = expandedHeight(
       maxLanesInStack(audioStackLayout),
       AUDIO_ITEM_H,
       audioStackGap
     );
     const textRowH = hasTextElements
-      ? expandedHeight(
-          maxLanesInStack(interactionTextOnlyStackLayout),
-          ELEMENTS_ITEM_H,
-          elementsStackGap
+      ? Math.max(
+          ELEMENTS_ROW_MIN_HEIGHT,
+          maxLanesInStack(interactionTextOnlyStackLayout) * ELEMENTS_ITEM_H +
+            Math.max(0, maxLanesInStack(interactionTextOnlyStackLayout) - 1) * elementsStackGap +
+            ELEMENTS_ROW_PADDING_Y * 2
         )
       : 0;
     const shapeRowH = hasShapeElements
-      ? expandedHeight(
-          maxLanesInStack(interactionShapeStackLayout),
-          ELEMENTS_ITEM_H,
-          elementsStackGap
+      ? Math.max(
+          ELEMENTS_ROW_MIN_HEIGHT,
+          maxLanesInStack(interactionShapeStackLayout) * ELEMENTS_ITEM_H +
+            Math.max(0, maxLanesInStack(interactionShapeStackLayout) - 1) * elementsStackGap +
+            ELEMENTS_ROW_PADDING_Y * 2
         )
       : 0;
-    const elementsBlockH = hasAnyElements ? textRowH + shapeRowH : TRACK_ROW_H;
+    const elementsBlockH = hasAnyElements ? textRowH + shapeRowH : EMPTY_ELEMENTS_ROW_HEIGHT;
 
     const textTop = 0;
     const shapeTop = textTop + textRowH;
@@ -1390,6 +1632,8 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       shapeTop,
       tracksBodyH,
       elementsBlockH,
+      videoRowPaddingY: VIDEO_ROW_PADDING_Y,
+      audioRowPaddingY: AUDIO_ROW_PADDING_Y,
     };
   }, [
     audioStackLayout,
@@ -2128,38 +2372,26 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
   );
 
   const normalizedVideoLayers = useMemo(() => {
-    const byIdentity = new Map<
-      string,
-      {
-        clip: Clip;
-        safeStart: number;
-        safeDuration: number;
-        safeTrimStart: number;
-        zVideo: number;
-      }
-    >();
-    for (const clip of clips) {
-      const safeStart = Math.max(0, Math.floor(clip.start));
-      const safeDuration = Math.max(1, Math.floor(clip.duration));
-      const safeTrimStart = Math.max(0, Math.floor(clip.trimStart ?? 0));
-      const zVideo = clip.fromAI
-        ? 200 + (clip.aiStackOrder ?? 0)
-        : clip.overlayClip
-          ? 200 + (clip.overlayOrder ?? 0)
-          : 20;
-      const identityKey = `${clip.src}|${safeStart}|${safeDuration}|${safeTrimStart}|${clip.row}`;
-      const candidate = { clip, safeStart, safeDuration, safeTrimStart, zVideo };
-      const existing = byIdentity.get(identityKey);
-      if (!existing || candidate.clip.id.localeCompare(existing.clip.id) < 0) {
-        byIdentity.set(identityKey, candidate);
-      }
-    }
-
-    return Array.from(byIdentity.entries())
-      .map(([identityKey, layer]) => ({
-        ...layer,
-        renderKey: `video:${identityKey}|z:${layer.zVideo}`,
-      }))
+    return clips
+      .map((clip) => {
+        const safeStart = Math.max(0, Math.floor(clip.start));
+        const safeDuration = Math.max(1, Math.floor(clip.duration));
+        const safeTrimStart = Math.max(0, Math.floor(clip.trimStart ?? 0));
+        const zVideo = clip.fromAI
+          ? 200 + (clip.aiStackOrder ?? 0)
+          : clip.overlayClip
+            ? 200 + (clip.overlayOrder ?? 0)
+            : 20;
+        return {
+          clip,
+          safeStart,
+          safeDuration,
+          safeTrimStart,
+          zVideo,
+          // Stable key prevents expensive remounts after timeline reflow.
+          renderKey: `video:${clip.id}`,
+        };
+      })
       .sort((a, b) => {
         if (a.safeStart !== b.safeStart) return a.safeStart - b.safeStart;
         if (a.zVideo !== b.zVideo) return a.zVideo - b.zVideo;
@@ -3161,12 +3393,16 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
 
   useEffect(() => {
     if (!resizeDragging) return;
-    if (resizeDragging.kind === "clip" && previewMode === "live") {
-      resumeAfterClipResizeRef.current = Boolean(playerRef.current?.isPlaying());
-    } else {
-      resumeAfterClipResizeRef.current = false;
-    }
+    resumeAfterClipResizeRef.current = false;
+    // Resizing is an edit action: pause transport and wait for explicit Play click.
+    cachedVideoRef.current?.pause();
+    playerRef.current?.pause();
     const onMove = (e: MouseEvent) => {
+      const clampToRange = (value: number, start: number, duration: number) => {
+        const min = Math.max(0, Math.floor(start));
+        const max = Math.max(min, Math.floor(start + Math.max(1, duration) - 1));
+        return Math.max(min, Math.min(max, Math.floor(value)));
+      };
       const delta = Math.round(
         (e.clientX - resizeDragging.startClientX) / PX_PER_FRAME
       );
@@ -3178,9 +3414,27 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
           MAX_STRETCH_FRAMES,
           Math.max(1, initialDuration + delta)
         );
+        if (kind === "clip") {
+          const clip = clipsRef.current.find((c) => c.id === id);
+          const srcLimit = clip ? mediaDurationFramesBySrcRef.current[clip.src] : undefined;
+          if (srcLimit != null) {
+            // Right handle expands only until real source-content end from current trim.
+            const maxFromContent = Math.max(1, srcLimit - initialTrim);
+            newDur = Math.min(newDur, maxFromContent);
+          }
+        } else if (kind === "audio") {
+          const track = audioTracksRef.current.find((a) => a.id === id);
+          const srcLimit = track ? mediaDurationFramesBySrcRef.current[track.src] : undefined;
+          if (srcLimit != null) {
+            // Keep resize interaction smooth: never force current drag below its starting size.
+            const maxFromContent = Math.max(1, srcLimit - initialTrim);
+            const dragSafeCap = Math.max(initialDuration, maxFromContent);
+            newDur = Math.min(newDur, dragSafeCap);
+          }
+        }
         const snapThresholdFrames = 6;
         if (kind === "audio") {
-          const nextStart = audioTracks
+          const nextStart = audioTracksRef.current
             .filter((a) => a.id !== id && a.start > initialStart)
             .reduce<number | null>(
               (minStart, a) =>
@@ -3194,7 +3448,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
             }
           }
         } else if (kind === "text") {
-          const nextStart = textOverlays
+          const nextStart = textOverlaysRef.current
             .filter((o) => o.id !== id && o.start > initialStart)
             .reduce<number | null>(
               (minStart, o) =>
@@ -3219,6 +3473,15 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
             });
             return changed ? next : prev;
           });
+          const bounded = clampToRange(
+            currentFrameRef.current,
+            initialStart,
+            newDur,
+          );
+          playActionFrameRef.current = bounded;
+          setCurrentFrame((prev) => (prev === bounded ? prev : bounded));
+          setPlaybackFrame((prev) => (prev === bounded ? prev : bounded));
+          setHoverFrame((prev) => (prev === bounded ? prev : bounded));
         } else if (kind === "audio") {
           setAudioTracks((prev) => {
             let changed = false;
@@ -3289,6 +3552,15 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
           });
           return changed ? next : prev;
         });
+        const bounded = clampToRange(
+          currentFrameRef.current,
+          newStart,
+          newDur,
+        );
+        playActionFrameRef.current = bounded;
+        setCurrentFrame((prev) => (prev === bounded ? prev : bounded));
+        setPlaybackFrame((prev) => (prev === bounded ? prev : bounded));
+        setHoverFrame((prev) => (prev === bounded ? prev : bounded));
       } else {
         setAudioTracks((prev) => {
           let changed = false;
@@ -3309,7 +3581,6 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       }
     };
     const onUp = () => {
-      const shouldResume = resumeAfterClipResizeRef.current;
       resumeAfterClipResizeRef.current = false;
       // Keep next Play anchored to the currently visible playhead after resize.
       const frame = clampFrameToTimeline(currentFrameRef.current);
@@ -3323,19 +3594,45 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       const player = playerRef.current;
       setCurrentFrame((prev) => (prev === frame ? prev : frame));
       setPlaybackFrame((prev) => (prev === frame ? prev : frame));
+      setHoverFrame((prev) => (prev === frame ? prev : frame));
       if (player) {
         safeSeekPlayer(player, frame);
       }
-      if (!shouldResume || previewMode !== "live" || !player) return;
-      void player.play();
+      if (resizeDragging.kind === "clip") {
+        const clipId = resizeDragging.id;
+        requestAnimationFrame(() => {
+          const latestClip = clipsRef.current.find((c) => c.id === clipId);
+          const candidate = clampFrameToTimeline(playActionFrameRef.current);
+          const refined = latestClip
+            ? Math.max(
+                latestClip.start,
+                Math.min(latestClip.start + Math.max(1, latestClip.duration) - 1, candidate),
+              )
+            : candidate;
+          playActionFrameRef.current = refined;
+          setCurrentFrame((prev) => (prev === refined ? prev : refined));
+          setPlaybackFrame((prev) => (prev === refined ? prev : refined));
+          setHoverFrame((prev) => (prev === refined ? prev : refined));
+          safeSeekPlayer(playerRef.current, refined);
+        });
+      }
+      // Cached preview does not carry timeline audio reliably after edit interactions.
+      // Ensure the next Play starts from live mode so audio is audible.
+      if (previewMode === "cached" && audioTracksRef.current.length > 0) {
+        switchToLivePlayback(frame, undefined, false);
+      }
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
-  }, [resizeDragging, previewMode, clampFrameToTimeline, safeSeekPlayer, clearAudioInteractionStack, clearElementInteractionStack]);
+  }, [resizeDragging, previewMode, clampFrameToTimeline, safeSeekPlayer, clearAudioInteractionStack, clearElementInteractionStack, switchToLivePlayback]);
 
   useEffect(() => {
     if (!trackContextMenu) return;
@@ -3851,6 +4148,37 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
     switchToLivePlayback,
   ]);
 
+  const handleExport = useCallback(async () => {
+    setExportError(null);
+    setIsExporting(true);
+    setIsMoreMenuOpen(false);
+    try {
+      const resp = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clips,
+          textOverlays,
+          audioTracks,
+          fps: FPS,
+          totalFrames: Math.max(1, totalDurationRef.current),
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: "Export failed" }));
+        throw new Error(err.error ?? "Export failed");
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const filename = `export-${Date.now()}.mp4`;
+      setExportResult({ url, filename });
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : "Export failed");
+    } finally {
+      setIsExporting(false);
+    }
+  }, [clips, textOverlays, audioTracks]);
+
   const handlePreviewPlayToggle = useCallback(async () => {
     if (previewPlayToggleInFlightRef.current) return;
     previewPlayToggleInFlightRef.current = true;
@@ -4207,14 +4535,23 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
             };
           })()
         : null;
+  const isDarkTheme = editorTheme === "black";
 
   return (
-    <div className="relative flex h-[100dvh] min-h-0 w-full overflow-hidden bg-white text-slate-800">
+    <div
+      className={`relative flex h-[100dvh] min-h-0 w-full overflow-hidden ${
+        isDarkTheme ? "bg-slate-950 text-slate-100" : "bg-white text-slate-800"
+      }`}
+    >
       <div ref={topMenuRef} className="absolute right-4 top-3 z-[200] flex flex-col items-center gap-1.5">
         <button
           type="button"
           onClick={() => setIsPreviewFullscreen((prev) => !prev)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900"
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-md border shadow-sm ${
+            isDarkTheme
+              ? "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white"
+              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+          }`}
           aria-label={isPreviewFullscreen ? "Exit preview fullscreen" : "Enter preview fullscreen"}
           title={isPreviewFullscreen ? "Exit preview fullscreen" : "Enter preview fullscreen"}
         >
@@ -4227,15 +4564,25 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         <button
           type="button"
           onClick={() => setIsMoreMenuOpen((prev) => !prev)}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900"
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-md border shadow-sm ${
+            isDarkTheme
+              ? "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white"
+              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+          }`}
           aria-label="More editor options"
           title="More editor options"
         >
           <MoreVertical className="h-4 w-4" />
         </button>
         {isMoreMenuOpen ? (
-          <div className="absolute right-0 top-[calc(100%+6px)] min-w-[170px] rounded-md border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700 shadow-md">
-            <label className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-slate-50">
+          <div
+            className={`absolute right-0 top-[calc(100%+6px)] min-w-[210px] rounded-md border px-2 py-2 text-xs shadow-md ${
+              isDarkTheme
+                ? "border-slate-700 bg-slate-900 text-slate-200"
+                : "border-slate-200 bg-white text-slate-700"
+            }`}
+          >
+            <label className={`flex items-center gap-2 rounded px-2 py-1.5 ${isDarkTheme ? "hover:bg-slate-800" : "hover:bg-slate-50"}`}>
               <input
                 type="checkbox"
                 checked={autoSaveEnabled}
@@ -4243,7 +4590,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
               />
               Auto Save
             </label>
-            <label className="mt-1 flex items-center gap-2 rounded px-2 py-1.5 hover:bg-slate-50">
+            <label className={`mt-1 flex items-center gap-2 rounded px-2 py-1.5 ${isDarkTheme ? "hover:bg-slate-800" : "hover:bg-slate-50"}`}>
               <input
                 type="checkbox"
                 checked={preferLivePreview}
@@ -4251,6 +4598,56 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
               />
               Live Preview
             </label>
+            <div className="mt-2 border-t border-dashed border-slate-300/40 pt-2">
+              <p className={`px-2 text-[10px] font-semibold uppercase tracking-wide ${isDarkTheme ? "text-slate-400" : "text-slate-500"}`}>
+                Theme
+              </p>
+              <div className="mt-1 flex gap-1 px-2">
+                <button
+                  type="button"
+                  onClick={() => setEditorTheme("white")}
+                  className={`rounded px-2 py-1 text-[11px] font-medium ${
+                    editorTheme === "white"
+                      ? "bg-white text-slate-900 ring-1 ring-slate-300"
+                      : isDarkTheme
+                        ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  White
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditorTheme("black")}
+                  className={`rounded px-2 py-1 text-[11px] font-medium ${
+                    editorTheme === "black"
+                      ? "bg-slate-950 text-white ring-1 ring-slate-500"
+                      : isDarkTheme
+                        ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  Black
+                </button>
+              </div>
+            </div>
+            <hr className={`my-1 ${isDarkTheme ? "border-slate-700" : "border-slate-100"}`} />
+            <button
+              type="button"
+              disabled={isExporting}
+              onClick={() => void handleExport()}
+              className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-violet-50 hover:text-violet-700 disabled:pointer-events-none disabled:opacity-50"
+            >
+              {isExporting ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5 shrink-0" />
+              )}
+              {isExporting ? "Exporting…" : "Export MP4"}
+            </button>
+            {exportError ? (
+              <p className="mt-1 px-2 text-[11px] leading-tight text-red-500">{exportError}</p>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -4281,7 +4678,9 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
         <div
           className={`${
             isSamplesPanelVisible ? "flex w-[min(100%,380px)]" : "hidden w-0"
-          } relative shrink-0 flex-col overflow-visible border-r border-slate-200 bg-white min-h-0`}
+          } relative shrink-0 flex-col overflow-visible border-r min-h-0 ${
+            isDarkTheme ? "border-slate-700 bg-slate-900" : "border-slate-200 bg-white"
+          }`}
         >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div
@@ -4396,10 +4795,12 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           ref={previewTimelineContainerRef}
-          className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
+          className={`flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3 ${isDarkTheme ? "bg-slate-950" : ""}`}
         >
           <div
-            className="w-full shrink-0 rounded-xl bg-white px-4 py-2 shadow-sm"
+            className={`w-full shrink-0 rounded-xl px-4 py-2 shadow-sm ${
+              isDarkTheme ? "bg-slate-900" : "bg-white"
+            }`}
             style={{ height: playbackPaneHeight }}
           >
             <div className="flex min-h-0 h-full flex-col">
@@ -4554,38 +4955,42 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
             <div className="mx-auto h-2 w-2 rounded-full bg-slate-300/80 transition-colors hover:bg-slate-400/90" />
           </div>
 
-        <div className="mt-2 min-h-0 flex-1 bg-white px-1 pb-4 pt-3">
-          <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-white">
+        <div className={`mt-2 min-h-0 flex-1 px-1 pb-4 pt-3 ${isDarkTheme ? "bg-slate-950" : "bg-white"}`}>
+          <div className={`flex min-h-0 w-full flex-1 flex-col overflow-hidden ${isDarkTheme ? "bg-slate-950" : "bg-white"}`}>
             <div
               className="flex min-h-0 w-full flex-1 overflow-hidden"
               style={{ minHeight: minTimelinePaneHeight }}
             >
               <div
                 ref={timelineScrollRef}
-                className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-white"
+                className={`min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto ${isDarkTheme ? "bg-slate-950" : "bg-white"}`}
               >
                 <div
                   className="relative shrink-0"
                   style={{ width: effectiveTrackWidthPx }}
                   onPointerMove={(e) => {
                     if (dragging || resizeDragging || playheadScrubbingRef.current) {
-                      setHoverFrame((prev) => (prev === null ? prev : null));
+                      if (hoverFrameRef.current !== null) {
+                        setHoverFrame(null);
+                      }
                       return;
                     }
                     const target = e.target as HTMLElement | null;
                     if (target?.closest('button[aria-label^="Resize "]')) {
-                      setHoverFrame((prev) => (prev === null ? prev : null));
+                      if (hoverFrameRef.current !== null) {
+                        setHoverFrame(null);
+                      }
                       return;
                     }
                     const nextHover = frameFromClientX(e.clientX);
                     setHoverFrame((prev) => (prev === nextHover ? prev : nextHover));
                   }}
                   onPointerLeave={() =>
-                    setHoverFrame((prev) => (prev === null ? prev : null))
+                    hoverFrameRef.current !== null ? setHoverFrame(null) : undefined
                   }
                 >
                   <div
-                    className="relative cursor-pointer border-b border-slate-200 bg-white"
+                    className={`relative cursor-pointer border-b ${isDarkTheme ? "border-slate-700 bg-slate-900" : "border-slate-200 bg-white"}`}
                     style={{ height: RULER_H }}
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
@@ -4635,7 +5040,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                   </div>
 
                   <div
-                    className="relative cursor-default border-t border-slate-200 bg-white"
+                    className={`relative cursor-default border-t ${isDarkTheme ? "border-slate-700 bg-slate-950" : "border-slate-200 bg-white"}`}
                     style={{ height: tracksBodyHeightPx }}
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
@@ -4675,11 +5080,11 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                     {!hasElementTrackBars ? (
                       <button
                         type="button"
-                        className="absolute left-3 z-40 inline-flex -translate-y-1/2 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                        className="absolute left-3 z-40 inline-flex h-[25px] items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2 py-0 text-[10px] font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
                         style={{
                           top:
                             trackRowMetrics.textTop +
-                            trackRowMetrics.elementsBlockH / 2,
+                            ELEMENTS_ROW_PADDING_Y,
                         }}
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={() => {
@@ -4737,7 +5142,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                       const mediaLaneTop =
                         trackRowMetrics.videoTop +
                         Math.max(
-                          2,
+                          trackRowMetrics.videoRowPaddingY,
                           Math.floor((trackRowMetrics.videoRowH - mediaBarH) / 2)
                         );
                       return (
@@ -4778,6 +5183,34 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                             : stableBarFallback(clip.id, "GIF")
                           : stableBarFallback(clip.id, "Video"),
                       );
+                      const clipThumbs = clipThumbnailStrips[clip.id] ?? [];
+                      const sourceFrames = mediaDurationFramesBySrc[clip.src];
+                      const trimStartFrames = Math.max(0, clip.trimStart ?? 0);
+                      const trimEndFrames = trimStartFrames + Math.max(1, clip.duration);
+                      const showVideoThumbStrip =
+                        (clip.mediaType ?? "video") !== "image" && clipThumbs.length > 0;
+                      const visibleClipThumbs = (() => {
+                        if (!showVideoThumbStrip) return [] as string[];
+                        if (!sourceFrames || sourceFrames <= 0) return clipThumbs;
+                        const startRatio = Math.max(0, Math.min(1, trimStartFrames / sourceFrames));
+                        const endRatio = Math.max(
+                          startRatio,
+                          Math.min(1, trimEndFrames / sourceFrames),
+                        );
+                        const picked = clipThumbs.filter((_, idx) => {
+                          const p = clipThumbs.length <= 1 ? 0 : idx / (clipThumbs.length - 1);
+                          return p >= startRatio && p <= endRatio;
+                        });
+                        if (picked.length > 0) return picked;
+                        const nearestIdx = Math.max(
+                          0,
+                          Math.min(
+                            clipThumbs.length - 1,
+                            Math.round(startRatio * (clipThumbs.length - 1)),
+                          ),
+                        );
+                        return [clipThumbs[nearestIdx]];
+                      })();
                       return (
                         <div
                           key={clip.id}
@@ -4794,14 +5227,18 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               y: e.clientY,
                             });
                           }}
-                          className={`absolute z-20 flex overflow-hidden border-2 bg-gradient-to-br from-violet-300 to-purple-400 ${
+                          className={`absolute z-20 flex overflow-hidden border-2 bg-transparent ${
                             clip.fromAI
                               ? "border-amber-300"
                               : ""
                           } ${
                             isSel
-                              ? "border-violet-300"
-                              : "border-white/30"
+                              ? isDarkTheme
+                                ? "border-slate-100 ring-2 ring-slate-500 ring-offset-2 ring-offset-slate-900"
+                                : "border-slate-400 ring-2 ring-slate-300 ring-offset-2 ring-offset-white"
+                              : isDarkTheme
+                                ? "border-slate-500/50"
+                                : "border-white/30"
                           } ${
                             isClipDragActive && !isDraggingClip ? "opacity-45" : "opacity-100"
                           }`}
@@ -4822,6 +5259,37 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                                 : undefined,
                           }}
                         >
+                          <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+                            {(clip.mediaType ?? "video") === "image" ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={clip.src}
+                                alt=""
+                                className="h-full w-full object-cover opacity-95"
+                                draggable={false}
+                              />
+                            ) : showVideoThumbStrip ? (
+                              <div className="flex h-full w-full">
+                                {visibleClipThumbs.map((thumb, idx) => (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    key={`${clip.id}-thumb-${idx}`}
+                                    src={thumb}
+                                    alt=""
+                                    className="h-full flex-1 object-cover opacity-95"
+                                    draggable={false}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="relative h-full w-full bg-slate-600/45 backdrop-blur-[0.5px]">
+                                <span className="absolute inset-0 flex items-center justify-center px-2 text-[10px] font-semibold text-white/95">
+                                  {clipBarText}
+                                </span>
+                              </div>
+                            )}
+                            <div className="absolute inset-0 bg-black/5" />
+                          </div>
                           <button
                             type="button"
                             aria-label="Resize clip start"
@@ -4844,7 +5312,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                           <div
                             role="button"
                             tabIndex={0}
-                            className="flex min-w-0 flex-1 cursor-grab items-center justify-center active:cursor-grabbing"
+                            className="relative z-10 flex min-w-0 flex-1 cursor-grab items-center justify-center active:cursor-grabbing"
                             onMouseDown={(e) => {
                               if (e.button !== 0) return;
                               e.stopPropagation();
@@ -4882,12 +5350,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               }
                             }}
                           >
-                            <span
-                              className="pointer-events-none min-w-0 max-w-full truncate px-2 text-left text-[10px] font-bold leading-tight text-white drop-shadow-sm"
-                              title={clipBarText}
-                            >
-                              {clipBarText}
-                            </span>
+                            <span className="sr-only">{clipBarText}</span>
                   </div>
                           <button
                             type="button"
@@ -4929,19 +5392,40 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                       const barH = AUDIO_ITEM_H;
                       const topOffset =
                         trackRowMetrics.audioTop +
-                        2 +
+                        trackRowMetrics.audioRowPaddingY +
                         stackSlot.lane * (barH + stackGap);
                       const audioBarText = clipBarDisplayTitle(
                         track.label,
                         track.sourceAuthor,
                         stableBarFallback(track.id, "Audio"),
                       );
+                      const sourceFrames = mediaDurationFramesBySrc[track.src];
+                      const trimStartFrames = Math.max(0, track.trimStart ?? 0);
+                      const maxPlayableFrames =
+                        sourceFrames != null
+                          ? Math.max(1, sourceFrames - trimStartFrames)
+                          : track.duration;
+                      const playableRatio = Math.max(
+                        0,
+                        Math.min(1, maxPlayableFrames / Math.max(1, track.duration)),
+                      );
+                      const playableBars = Math.max(
+                        0,
+                        Math.min(
+                          Math.max(1, Math.floor(w / 4)),
+                          Math.ceil(playableRatio * Math.max(32, Math.min(120, Math.floor(w / 4)))),
+                        ),
+                      );
+                      const waveBars = buildDeterministicWave(
+                        `${track.id}:${track.label}`,
+                        Math.max(32, Math.min(120, Math.floor(w / 4))),
+                      );
+                      const showAudioWaveform = sourceFrames != null && playableBars > 0 && waveBars.length > 0;
                       return (
                         <div
                           key={track.id}
                           role="group"
                           aria-label={audioBarText}
-                          title={audioBarText}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
@@ -4953,10 +5437,14 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               y: e.clientY,
                             });
                           }}
-                          className={`absolute z-20 flex overflow-hidden border-2 bg-gradient-to-br from-emerald-300 to-teal-400 shadow-md ${
+                          className={`absolute z-20 flex overflow-hidden border-[0.8px] bg-transparent shadow-md ${
                             isSel
-                              ? "border-emerald-300 ring-2 ring-emerald-200 ring-offset-2 ring-offset-white"
-                              : "border-white/30"
+                              ? isDarkTheme
+                                ? "border-slate-100 ring-2 ring-slate-500 ring-offset-2 ring-offset-slate-900"
+                                : "border-slate-400 ring-2 ring-slate-300 ring-offset-2 ring-offset-white"
+                              : isDarkTheme
+                                ? "border-slate-500/50"
+                                : "border-white/30"
                           } ${
                             dragging?.kind === "audio" && dragging.id !== track.id
                               ? "opacity-45"
@@ -4981,6 +5469,34 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                                 : undefined,
                           }}
                         >
+                          {showAudioWaveform ? (
+                            <div
+                              className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-transparent"
+                            >
+                              <div className="flex h-full w-full items-center gap-[1px] px-1">
+                                {waveBars.map((peak, i) => {
+                                  const inPlayableRange = i < playableBars;
+                                  return (
+                                  <span
+                                    key={`${track.id}-wave-${i}`}
+                                    className={`w-[2px] rounded-full ${
+                                      inPlayableRange
+                                        ? "bg-cyan-400"
+                                        : "bg-transparent"
+                                    }`}
+                                    style={{ height: `${Math.max(24, Math.round(peak * 100))}%` }}
+                                  />
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-transparent">
+                              <span className="absolute inset-0 flex items-center justify-center px-2 text-[10px] font-semibold text-white/95">
+                                {audioBarText}
+                              </span>
+                            </div>
+                          )}
                           <button
                             type="button"
                             aria-label="Resize audio start"
@@ -5004,7 +5520,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                           <div
                             role="button"
                             tabIndex={0}
-                            className="flex min-w-0 flex-1 cursor-grab items-center justify-start active:cursor-grabbing"
+                            className="relative z-10 flex min-w-0 flex-1 cursor-grab items-center justify-start active:cursor-grabbing"
                             onMouseDown={(e) => {
                               if (e.button !== 0) return;
                               e.stopPropagation();
@@ -5041,9 +5557,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                               }
                             }}
                           >
-                            <span className="pointer-events-none min-w-0 max-w-full truncate px-2 text-left text-[10px] font-bold leading-tight text-white drop-shadow-sm">
-                              {audioBarText}
-                            </span>
+                            <span className="sr-only">{audioBarText}</span>
                           </div>
                           <button
                             type="button"
@@ -5087,7 +5601,7 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                         : trackRowMetrics.textTop;
                       const barH = ELEMENTS_ITEM_H;
                       const topOffset =
-                        rowTop + 2 + stackSlot.lane * (barH + stackGap);
+                        rowTop + ELEMENTS_ROW_PADDING_Y + stackSlot.lane * (barH + stackGap);
                       const textName =
                         (overlay.sourceName ?? "").trim() ||
                         overlay.text.trim().replace(/\s+/g, " ").slice(0, 56) ||
@@ -5119,8 +5633,12 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
                           }}
                           className={`absolute z-20 flex overflow-hidden border-2 bg-gradient-to-br from-pink-300 to-rose-400 shadow-md ${
                             isSel
-                              ? "border-pink-300 ring-2 ring-pink-200 ring-offset-2 ring-offset-white"
-                              : "border-white/30"
+                              ? isDarkTheme
+                                ? "border-slate-100 ring-2 ring-slate-500 ring-offset-2 ring-offset-slate-900"
+                                : "border-pink-300 ring-2 ring-pink-200 ring-offset-2 ring-offset-white"
+                              : isDarkTheme
+                                ? "border-slate-500/50"
+                                : "border-white/30"
                           }`}
                           style={{
                             left:
@@ -5377,6 +5895,64 @@ const ReactVideoEditor: React.FC<{ projectId: string }> = ({ projectId }) => {
             <Trash2 className="h-4 w-4 shrink-0" />
             Delete
           </button>
+        </div>
+      ) : null}
+
+      {/* Export success dialog */}
+      {exportResult ? (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
+                <Download className="h-5 w-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-800">Export ready</p>
+                <p className="text-xs text-slate-500">{exportResult.filename}</p>
+              </div>
+            </div>
+            <p className="mb-5 text-sm text-slate-600">
+              Would you like to preview the exported video or save it to your device?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const win = window.open(exportResult.url, "_blank");
+                  if (!win) window.location.href = exportResult.url;
+                }}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                <Play className="h-4 w-4" fill="currentColor" />
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const a = document.createElement("a");
+                  a.href = exportResult.url;
+                  a.download = exportResult.filename;
+                  a.click();
+                  URL.revokeObjectURL(exportResult.url);
+                  setExportResult(null);
+                }}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500"
+              >
+                <Download className="h-4 w-4" />
+                Save
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                URL.revokeObjectURL(exportResult.url);
+                setExportResult(null);
+              }}
+              className="mt-3 w-full text-center text-xs text-slate-400 hover:text-slate-600"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

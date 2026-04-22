@@ -258,7 +258,9 @@ export function VideosLibraryPanel({
   const activeSampleCategoryRef = useRef<string | null>(null);
   const [previewVideo, setPreviewVideo] = useState<SampleVideo | null>(null);
   const [previewVideoPlaying, setPreviewVideoPlaying] = useState(false);
+  const [previewVideoLoading, setPreviewVideoLoading] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previewWarmupRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     setRecentVideos(loadRecentVideosFromStorage());
@@ -478,10 +480,47 @@ export function VideosLibraryPanel({
         else v.pause();
         return;
       }
-      setPreviewVideo(r);
+      // Open preview only when media is warm/ready.
+      setPreviewVideoLoading(true);
+      const warmup = document.createElement("video");
+      previewWarmupRef.current = warmup;
+      warmup.preload = "auto";
+      warmup.muted = true;
+      warmup.playsInline = true;
+      warmup.src = r.playbackUrl;
+
+      const cleanup = () => {
+        warmup.removeEventListener("canplay", onReady);
+        warmup.removeEventListener("loadeddata", onReady);
+        warmup.removeEventListener("error", onError);
+      };
+      const onReady = () => {
+        cleanup();
+        setPreviewVideo(r);
+        setPreviewVideoLoading(false);
+      };
+      const onError = () => {
+        cleanup();
+        setPreviewVideoLoading(false);
+      };
+
+      warmup.addEventListener("canplay", onReady, { once: true });
+      warmup.addEventListener("loadeddata", onReady, { once: true });
+      warmup.addEventListener("error", onError, { once: true });
+      warmup.load();
     },
     [previewVideo],
   );
+
+  useEffect(() => {
+    return () => {
+      if (previewWarmupRef.current) {
+        previewWarmupRef.current.removeAttribute("src");
+        previewWarmupRef.current.load();
+        previewWarmupRef.current = null;
+      }
+    };
+  }, []);
 
   const renderVideoSampleCard = useCallback(
     (
@@ -747,6 +786,14 @@ export function VideosLibraryPanel({
               onPause={() => setPreviewVideoPlaying(false)}
               onEnded={() => setPreviewVideoPlaying(false)}
             />
+          </div>
+        </div>
+      ) : null}
+      {previewVideoLoading ? (
+        <div className="fixed inset-0 z-[295] flex items-center justify-center bg-black/35 backdrop-blur-sm">
+          <div className="inline-flex items-center gap-2 rounded-lg border border-white/30 bg-black/65 px-3 py-2 text-xs font-semibold text-white">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Preparing preview...
           </div>
         </div>
       ) : null}
