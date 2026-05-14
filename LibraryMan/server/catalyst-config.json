@@ -1,0 +1,12 @@
+{
+  "deployment": {
+    "name": "library_api",
+    "type": "advancedio",
+    "stack": "node18",
+    "memory": 256,
+    "timeout_in_seconds": 30
+  },
+  "execution": {
+    "main": "index.js"
+  }
+}

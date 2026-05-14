@@ -1,0 +1,13 @@
+{
+  "project": {
+    "project_name": "LibraryMan",
+    "id": "37937000000031001"
+  },
+  "functions": {
+    "source": ".",
+    "targets": ["server"]
+  },
+  "client": {
+    "source": "client/dist"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$comment": "Data Store schema reference — recreate these tables in the Catalyst console (or via CLI) before deploying.",
+  "tables": [
+    {
+      "name": "Books",
+      "columns": [
+        { "name": "title",  "type": "Text",   "max_length": 200, "required": true },
+        { "name": "author", "type": "Text",   "max_length": 150, "required": true },
+        { "name": "isbn",   "type": "Text",   "max_length": 20,  "required": false },
+        { "name": "status", "type": "Text",   "max_length": 20,  "required": true, "default": "available" }
+      ]
+    },
+    {
+      "name": "BookLoans",
+      "columns": [
+        { "name": "book_id",        "type": "Text", "max_length": 64, "required": true },
+        { "name": "borrower_id",    "type": "Text", "max_length": 64, "required": true },
+        { "name": "borrower_email", "type": "Text", "max_length": 200, "required": true },
+        { "name": "lent_at",        "type": "Text", "max_length": 40, "required": true },
+        { "name": "returned_at",    "type": "Text", "max_length": 40, "required": false }
+      ]
+    }
+  ],
+  "roles": [
+    { "name": "admin",  "description": "Full library management" },
+    { "name": "member", "description": "Default — can lend/return their own loans" }
+  ]
+}

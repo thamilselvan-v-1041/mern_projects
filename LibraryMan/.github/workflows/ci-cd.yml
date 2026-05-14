@@ -1,0 +1,148 @@
+name: CI / CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ───────── Backend ─────────
+  server-tests:
+    name: Server tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20']
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:coverage -- --ci
+        env:
+          USE_MEMORY_STORE: 'true'
+          MOCK_AUTH: 'true'
+
+      - name: Upload server coverage
+        if: matrix.node == '20'
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-coverage
+          path: server/coverage
+          retention-days: 7
+
+  # ───────── Frontend ─────────
+  client-tests:
+    name: Client tests + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vitest
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Upload built client bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist
+          retention-days: 7
+
+  # ───────── Deploy ─────────
+  deploy:
+    name: Deploy to Zoho Catalyst
+    needs: [server-tests, client-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.CATALYST_APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Catalyst CLI
+        run: npm install -g zcatalyst-cli
+
+      # ── Install function deps so Catalyst packages a self-contained bundle ──
+      - name: Install server dependencies (production)
+        working-directory: server
+        run: npm ci --omit=dev
+
+      # ── Build the client bundle that Catalyst hosts statically ──
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build client
+        working-directory: client
+        run: npm run build
+
+      # ── Authenticate non-interactively via a stored refresh token ──
+      # Provision once locally with `catalyst login` then copy ~/.catalystrc to
+      # the CATALYST_CREDENTIALS secret (entire JSON file contents).
+      - name: Write Catalyst credentials
+        env:
+          CATALYST_CREDENTIALS: ${{ secrets.CATALYST_CREDENTIALS }}
+        run: |
+          if [ -z "$CATALYST_CREDENTIALS" ]; then
+            echo "::error::CATALYST_CREDENTIALS secret is not set"
+            exit 1
+          fi
+          printf '%s' "$CATALYST_CREDENTIALS" > "$HOME/.catalystrc"
+          chmod 600 "$HOME/.catalystrc"
+
+      - name: Verify Catalyst session
+        run: catalyst whoami
+
+      - name: Deploy to Catalyst
+        env:
+          CATALYST_PROJECT_ID: ${{ secrets.CATALYST_PROJECT_ID }}
+        run: catalyst deploy --only functions,client
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f "$HOME/.catalystrc"

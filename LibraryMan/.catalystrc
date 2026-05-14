@@ -1,0 +1,43 @@
+{
+  "projectName": "LibraryMan",
+  "projectId": 37937000000031000,
+  "projectType": "advanced",
+  "functions": [
+    {
+      "name": "library_api",
+      "type": "AdvancedIO",
+      "stack": "node18",
+      "path": "server"
+    }
+  ],
+  "client": {
+    "source": "client/dist"
+  },
+  "defaults": {
+    "project": 1
+  },
+  "actives": {
+    "project": 1,
+    "env": 1
+  },
+  "projects": [
+    {
+      "idx": 1,
+      "id": "37937000000031001",
+      "name": "LibraryMan",
+      "domain": {
+        "id": "50042210851",
+        "name": "libraryman-60070426714.development"
+      },
+      "timezone": "Asia/Kolkata",
+      "env": [
+        {
+          "idx": 1,
+          "id": "50042211067",
+          "name": "Production",
+          "type": 1
+        }
+      ]
+    }
+  ]
+}
