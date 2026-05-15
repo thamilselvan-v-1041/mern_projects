@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import useBookFilters from '../hooks/useBookFilters';
 import Pagination from './Pagination.jsx';
 
@@ -30,9 +31,12 @@ export default function BookList({
   onLoadMore,
   loadingMore = false,
   source,
-  showCheckbox = false
+  showCheckbox = false,
+  searchQuery,
+  onSearchChange
 }) {
   const lazyMode = typeof onLoadMore === 'function';
+  const externalSearch = typeof onSearchChange === 'function';
   const [viewMode, setViewMode] = useState(lazyMode ? 'grid' : 'list');
   const [selected, setSelected] = useState(() => new Set());
 
@@ -49,11 +53,19 @@ export default function BookList({
   } = useBookFilters(books, {
     initialStatus: defaultStatus,
     // In lazy mode the server controls paging, so don't slice client-side.
-    pageSize: lazyMode ? Math.max(books.length, 1) : undefined
+    pageSize: lazyMode ? Math.max(books.length, 1) : undefined,
+    // When App.jsx drives search via the server, suppress the client-side
+    // substring filter — books are already the filtered result set.
+    skipQuery: externalSearch
   });
 
+  // The search input is either App-controlled (server search) or hook-managed
+  // (client-side substring filter on already-loaded books).
+  const queryValue   = externalSearch ? (searchQuery ?? '') : state.query;
+  const handleQuery  = externalSearch ? onSearchChange      : set.query;
+
   const isFiltered =
-    state.query.trim() !== '' ||
+    queryValue.trim() !== '' ||
     state.status !== defaultStatus ||
     state.author !== 'all' ||
     state.sort !== 'title-asc';
@@ -64,7 +76,10 @@ export default function BookList({
   // Lazy mode renders every loaded+filtered book (no client pagination cap)
   const itemsToRender = lazyMode ? filtered : pageItems;
 
-  if (!totalCount && !loadingMore) {
+  // Only show the bare "library empty" message in the legacy (non-lazy) mode —
+  // in lazy mode the section/search input must always render so the user can
+  // change or clear their query, even when the current result set is empty.
+  if (!lazyMode && !totalCount && !loadingMore) {
     return <div className="empty">No books in the library yet.</div>;
   }
 
@@ -109,9 +124,11 @@ export default function BookList({
       <div className="filters" role="search">
         <input
           type="search"
-          placeholder="Search title, author or ISBN…"
-          value={state.query}
-          onChange={(e) => set.query(e.target.value)}
+          placeholder={externalSearch
+            ? 'Search Google Books — title, author, ISBN, anything…'
+            : 'Search title, author or ISBN…'}
+          value={queryValue}
+          onChange={(e) => handleQuery(e.target.value)}
           aria-label="Search books"
           className="filter-search"
         />
@@ -149,14 +166,23 @@ export default function BookList({
         </select>
 
         {isFiltered && (
-          <button type="button" className="btn-link" onClick={reset} aria-label="Clear filters">
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => { if (externalSearch) handleQuery(''); reset(); }}
+            aria-label="Clear filters"
+          >
             Clear
           </button>
         )}
       </div>
 
       {matchCount === 0 && !loadingMore ? (
-        <div className="empty">No books match the current filters.</div>
+        <div className="empty">
+          {externalSearch && queryValue.trim()
+            ? <>No results for <strong>"{queryValue}"</strong>. Try a different keyword.</>
+            : 'No books match the current filters.'}
+        </div>
       ) : viewMode === 'grid' ? (
         <GridView
           books={itemsToRender}
@@ -182,7 +208,7 @@ export default function BookList({
             </button>
           )}
           {!hasMore && !loadingMore && filtered.length > 0 && (
-            <span className="muted">End of catalogue</span>
+            <span className="muted">End of results</span>
           )}
         </div>
       ) : (
@@ -204,20 +230,31 @@ function GridView({ books, showCheckbox, selected, onToggleSelect }) {
       {books.map((b) => (
         <article key={b.id} className="book-card" role="listitem">
           {showCheckbox && (
+            // Checkbox is positioned absolutely on top of the card; clicking
+            // it must NOT trigger navigation, so we stop propagation. The
+            // surrounding <Link> handles the rest of the card area.
             <input
               type="checkbox"
               className="book-select"
               checked={selected.has(b.id)}
               onChange={() => onToggleSelect(b.id)}
+              onClick={(e) => e.stopPropagation()}
               aria-label={`Select ${b.title}`}
             />
           )}
-          <Thumbnail src={b.thumbnail} alt={b.title} />
-          <div className="book-card-meta">
-            <h3 className="book-title" title={b.title}>{b.title}</h3>
-            <p className="book-author muted" title={b.author}>{b.author || 'Unknown'}</p>
-            <span className={`badge badge-${b.status}`}>{b.status}</span>
-          </div>
+          <Link
+            to={`/book/${encodeURIComponent(b.id)}`}
+            state={{ book: b }}
+            className="book-card-link"
+            aria-label={`Open preview for ${b.title}`}
+          >
+            <Thumbnail src={b.thumbnail} alt={b.title} />
+            <div className="book-card-meta">
+              <h3 className="book-title" title={b.title}>{b.title}</h3>
+              <p className="book-author muted" title={b.author}>{b.author || 'Unknown'}</p>
+              <span className={`badge badge-${b.status}`}>{b.status}</span>
+            </div>
+          </Link>
         </article>
       ))}
     </div>
@@ -235,25 +272,33 @@ function ListView({ books, showCheckbox, selected, onToggleSelect }) {
               className="book-select"
               checked={selected.has(b.id)}
               onChange={() => onToggleSelect(b.id)}
+              onClick={(e) => e.stopPropagation()}
               aria-label={`Select ${b.title}`}
             />
           )}
-          <Thumbnail src={b.thumbnail} alt={b.title} size="lg" />
-          <div className="book-row-meta">
-            <h3 className="book-title">{b.title}{b.subtitle ? <span className="muted">: {b.subtitle}</span> : null}</h3>
-            <p className="book-author">{b.author || 'Unknown'}</p>
-            <div className="book-row-tags">
-              <span className={`badge badge-${b.status}`}>{b.status}</span>
-              {b.isbn       && <span className="badge badge-soft">ISBN {b.isbn}</span>}
-              {b.publisher  && <span className="badge badge-soft">{b.publisher}</span>}
-              {b.publishedAt && <span className="badge badge-soft">{b.publishedAt}</span>}
-              {b.pageCount  && <span className="badge badge-soft">{b.pageCount} pages</span>}
+          <Link
+            to={`/book/${encodeURIComponent(b.id)}`}
+            state={{ book: b }}
+            className="book-row-link"
+            aria-label={`Open preview for ${b.title}`}
+          >
+            <Thumbnail src={b.thumbnail} alt={b.title} size="lg" />
+            <div className="book-row-meta">
+              <h3 className="book-title">{b.title}{b.subtitle ? <span className="muted">: {b.subtitle}</span> : null}</h3>
+              <p className="book-author">{b.author || 'Unknown'}</p>
+              <div className="book-row-tags">
+                <span className={`badge badge-${b.status}`}>{b.status}</span>
+                {b.isbn       && <span className="badge badge-soft">ISBN {b.isbn}</span>}
+                {b.publisher  && <span className="badge badge-soft">{b.publisher}</span>}
+                {b.publishedAt && <span className="badge badge-soft">{b.publishedAt}</span>}
+                {b.pageCount  && <span className="badge badge-soft">{b.pageCount} pages</span>}
+              </div>
+              {b.description && <p className="book-desc">{b.description}</p>}
+              {Array.isArray(b.categories) && b.categories.length > 0 && (
+                <p className="book-categories muted">{b.categories.slice(0, 4).join(' · ')}</p>
+              )}
             </div>
-            {b.description && <p className="book-desc">{b.description}</p>}
-            {Array.isArray(b.categories) && b.categories.length > 0 && (
-              <p className="book-categories muted">{b.categories.slice(0, 4).join(' · ')}</p>
-            )}
-          </div>
+          </Link>
         </article>
       ))}
     </div>

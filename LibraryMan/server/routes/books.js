@@ -28,12 +28,15 @@ const { popularWithCovers } = require('../seeds/popularBooks');
 const POPULAR_CACHE_TTL_MS = 60 * 60 * 1000;
 const popularPageCache = new Map(); // key = `${source}:${startIndex}:${size}` → { at, payload }
 
-async function fetchFromOpenLibrary({ startIndex, size }) {
+async function fetchFromOpenLibrary({ startIndex, size, query }) {
   if (typeof globalThis.fetch !== 'function') throw new Error('fetch missing');
-  // sort=editions ≈ popularity (high edition count → frequently reprinted)
+  // sort=editions ≈ popularity (high edition count → frequently reprinted).
+  // When the caller supplies an explicit query (search mode), use it verbatim;
+  // otherwise default to 'programming' for the popular feed.
+  const q = (query && query.trim()) || 'programming';
   const url = 'https://openlibrary.org/search.json'
-    + '?q=programming'
-    + '&sort=editions'
+    + `?q=${encodeURIComponent(q)}`
+    + (query ? '' : '&sort=editions')
     + `&limit=${size}`
     + `&offset=${startIndex}`
     + '&fields=key,title,author_name,first_publish_year,isbn,cover_i,subject,publisher';
@@ -65,15 +68,21 @@ async function fetchFromOpenLibrary({ startIndex, size }) {
   return { items, total: body.numFound || items.length };
 }
 
-async function fetchFromGoogleBooks({ startIndex, size }) {
+async function fetchFromGoogleBooks({ startIndex, size, query }) {
   if (typeof globalThis.fetch !== 'function') throw new Error('fetch missing');
-  const url = 'https://www.googleapis.com/books/v1/volumes'
-    + '?q=subject:computers'
-    + '&orderBy=relevance'
-    + '&printType=books'
-    + `&maxResults=${size}`
-    + `&startIndex=${startIndex}`
-    + '&projection=lite';
+  // When a search query is supplied, use it directly; otherwise default to
+  // the CS subject filter that drives the popular feed.
+  const q = (query && query.trim()) || 'subject:computers';
+  const params = new URLSearchParams({
+    q,
+    orderBy: 'relevance',
+    printType: 'books',
+    maxResults: String(size),
+    startIndex: String(startIndex),
+    projection: 'lite'
+  });
+  if (process.env.GOOGLE_BOOKS_API_KEY) params.set('key', process.env.GOOGLE_BOOKS_API_KEY);
+  const url = `https://www.googleapis.com/books/v1/volumes?${params.toString()}`;
   const resp = await globalThis.fetch(url, {
     headers: { Accept: 'application/json', 'User-Agent': 'LibraryMan/2.0 (demo)' }
   });
@@ -108,11 +117,11 @@ router.get('/popular', async (req, res, next) => {
   try {
     const startIndex = Math.max(0, parseInt(req.query.startIndex || '0', 10) || 0);
     const size = Math.min(30, Math.max(1, parseInt(req.query.size || '30', 10) || 30));
-    // Source priority: explicit query param wins. Default = 'curated'
-    // (hand-picked popular CS titles with Open Library cover URLs), which is
-    // instant + key-less + always returns relevant results. Set 'google' or
-    // 'openlibrary' to fetch from the corresponding upstream search API.
-    const preferred = (req.query.source || 'curated').toLowerCase();
+    // Source priority: explicit query param wins. Default = 'google' so the
+    // home page can lazy-load through many batches (Google subject:computers
+    // returns thousands). Google → Open Library → curated 30-item list, in
+    // that order, on any upstream failure.
+    const preferred = (req.query.source || 'google').toLowerCase();
 
     const cacheKey = `${preferred}:${startIndex}:${size}`;
     const cached = popularPageCache.get(cacheKey);
@@ -162,6 +171,67 @@ router.get('/popular', async (req, res, next) => {
       total,
       hasMore:    startIndex + items.length < total,
       source,
+      cached:     false
+    };
+    popularPageCache.set(cacheKey, { at: Date.now(), payload });
+    res.json(payload);
+  } catch (err) { next(err); }
+});
+
+/* ─── /books/search ─────────────────────────────────────────────────────────
+ * Server-side search across Google Books (preferred) with Open Library as a
+ * fallback when Google is unavailable / rate-limited.
+ *
+ *   GET /books/search?q=<query>&startIndex=<n>&size=<n>
+ *     q          required, trimmed; empty → empty result set (200)
+ *     startIndex default 0
+ *     size       default 30, max 40
+ *
+ * Same response shape as /books/popular plus a `query` echo. Cached per
+ * (q,start,size) for 1h in the shared popularPageCache.
+ */
+router.get('/search', async (req, res, next) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const startIndex = Math.max(0, parseInt(req.query.startIndex || '0', 10) || 0);
+    const size = Math.min(40, Math.max(1, parseInt(req.query.size || '30', 10) || 30));
+
+    if (!q) {
+      return res.json({
+        success: true, data: [], total: 0, startIndex: 0, size: 0,
+        hasMore: false, query: '', source: 'empty', cached: false
+      });
+    }
+
+    const cacheKey = `search:${q.toLowerCase()}:${startIndex}:${size}`;
+    const cached = popularPageCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < POPULAR_CACHE_TTL_MS) {
+      return res.json({ ...cached.payload, cached: true });
+    }
+
+    let items = [], total = 0, source, lastError;
+    const fetchers = [
+      ['google',      fetchFromGoogleBooks],
+      ['openlibrary', fetchFromOpenLibrary]
+    ];
+    for (const [name, fn] of fetchers) {
+      try {
+        const r = await fn({ startIndex, size, query: q });
+        if (r.items.length) { items = r.items; total = r.total; source = name; break; }
+      } catch (e) {
+        lastError = `${name}: ${e.message}`;
+      }
+    }
+
+    const payload = {
+      success:    true,
+      data:       items,
+      startIndex,
+      size:       items.length,
+      total,
+      hasMore:    items.length > 0 && startIndex + items.length < total,
+      query:      q,
+      source:     source || `unavailable (${lastError || 'no results'})`,
       cached:     false
     };
     popularPageCache.set(cacheKey, { at: Date.now(), payload });

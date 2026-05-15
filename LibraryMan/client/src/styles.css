@@ -328,3 +328,90 @@ button.btn-danger { background: #E42527; }
   cursor: pointer;
 }
 .btn-signout:hover { background: #f3f4f6; color: #111827; }
+
+/* ─── IntersectionObserver sentinel ──────────────────────────────────────── */
+.lazy-sentinel { height: 1px; width: 100%; }
+
+/* ─── Clickable book cards/rows (Link wraps inner content) ───────────────── */
+.book-card-link, .book-row-link {
+  display: flex; gap: 14px; flex: 1; min-width: 0;
+  color: inherit; text-decoration: none;
+}
+.book-row-link { gap: 16px; }
+.book-card-link:hover .book-title,
+.book-row-link:hover  .book-title { color: #226DB4; }
+.book-card-link:focus-visible,
+.book-row-link:focus-visible {
+  outline: 2px solid #226DB4; outline-offset: 2px; border-radius: 6px;
+}
+
+/* ─── Book preview page ──────────────────────────────────────────────────── */
+.book-preview { padding: 24px; }
+.book-preview-back { display: inline-block; margin-bottom: 16px; }
+.book-preview-body {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 28px;
+}
+@media (max-width: 640px) {
+  .book-preview-body { grid-template-columns: 1fr; }
+}
+.book-preview-cover {
+  width: 220px; height: 320px;
+  object-fit: cover;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+  background: #f3f4f6;
+}
+.book-preview-meta { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.book-preview-title { margin: 0; font-size: 24px; line-height: 1.25; }
+.book-preview-title .muted { font-weight: 400; font-size: 18px; }
+.book-preview-author { margin: 0; font-size: 16px; color: #4b5563; }
+.book-preview-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+.book-preview-desc {
+  margin: 8px 0 0; font-size: 14px; color: #1f2937; line-height: 1.6;
+  white-space: pre-wrap;
+}
+.book-preview-actions { margin-top: 16px; }
+.btn-borrow {
+  background: #226DB4; color: #fff;
+  border: none; padding: 10px 24px; border-radius: 8px;
+  font-size: 15px; font-weight: 600;
+  cursor: pointer; transition: background 0.15s;
+}
+.btn-borrow:hover:not(:disabled) { background: #1a5790; }
+.btn-borrow:disabled { background: #93c5fd; cursor: wait; }
+
+/* ─── Embedded Google Books reader ───────────────────────────────────────── */
+.book-reader { margin-top: 28px; padding-top: 24px; border-top: 1px solid #e5e7eb; }
+.book-reader-heading { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
+.book-reader-canvas {
+  width: 100%;
+  height: 600px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fafafa;
+  overflow: hidden;
+}
+@media (max-width: 640px) {
+  .book-reader-canvas { height: 70vh; }
+}
+.book-reader-status { margin: 10px 0 0; font-size: 13px; text-align: center; }
+.book-reader-fallback { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e5e7eb; font-size: 13px; }
+.book-reader-pagination {
+  display: flex; justify-content: center; align-items: center; gap: 14px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.btn-page {
+  background: #fff;
+  color: #1f2937;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer;
+}
+.btn-page:hover { background: #f3f4f6; border-color: #9ca3af; }
+.btn-page:active { background: #e5e7eb; }
+.book-reader-page-info { font-size: 12px; }

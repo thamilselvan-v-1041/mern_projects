@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, NavLink } from 'react-router-dom';
 import AddBook from './components/AddBook.jsx';
 import BookList from './components/BookList.jsx';
+import BookPreview from './components/BookPreview.jsx';
 import LendBook from './components/LendBook.jsx';
 import ReturnBook from './components/ReturnBook.jsx';
 import DeleteBook from './components/DeleteBook.jsx';
@@ -10,6 +11,7 @@ import { useAuth } from './auth/AuthContext';
 import SignInGate from './auth/SignInGate.jsx';
 import RequireRole from './auth/RequireRole.jsx';
 import OAuthCallback from './auth/OAuthCallback.jsx';
+import useDebouncedValue from './hooks/useDebouncedValue';
 
 export default function App() {
   const { user, loading: authLoading, isAdmin, isAuthenticated, signOut, role, provider } = useAuth();
@@ -23,6 +25,16 @@ export default function App() {
   const [popularHasMore, setPopularHasMore]     = useState(true);
   const [popularLoading, setPopularLoading]     = useState(false);
   const [popularSource, setPopularSource]       = useState(null);
+
+  // Server-side search (Google Books → Open Library fallback) — replaces the
+  // popular feed when the user has a non-empty search query.
+  const [searchQuery,   setSearchQuery]   = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchSource,  setSearchSource]  = useState(null);
+  const debouncedSearch = useDebouncedValue(searchQuery, 350);
+  const isSearching = debouncedSearch.trim().length > 0;
 
   // Auto-close the sign-in modal once the user is authenticated
   useEffect(() => { if (isAuthenticated) setSigninOpen(false); }, [isAuthenticated]);
@@ -64,6 +76,55 @@ export default function App() {
       setPopularLoading(false);
     }
   }, [popular.length]);
+
+  // Server-side search: fire on debounced query change. A fresh query resets
+  // the result list and pagination; an empty query clears everything (we just
+  // fall back to the popular feed in render).
+  useEffect(() => {
+    let cancelled = false;
+    const q = debouncedSearch.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchHasMore(false);
+      setSearchSource(null);
+      return;
+    }
+    (async () => {
+      setSearchLoading(true);
+      try {
+        const res = await booksApi.search(q, 0, 30);
+        if (cancelled) return;
+        setSearchResults(res.data || []);
+        setSearchHasMore(Boolean(res.hasMore));
+        setSearchSource(res.source || null);
+      } catch {
+        if (!cancelled) {
+          showToast('Search failed', 'error');
+          setSearchHasMore(false);
+        }
+      } finally {
+        if (!cancelled) setSearchLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [debouncedSearch]);
+
+  const loadMoreSearch = useCallback(async () => {
+    if (searchLoading || !searchHasMore) return;
+    const q = debouncedSearch.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    try {
+      const res = await booksApi.search(q, searchResults.length, 30);
+      setSearchResults((prev) => [...prev, ...(res.data || [])]);
+      setSearchHasMore(Boolean(res.hasMore));
+    } catch {
+      showToast('Failed to load more search results', 'error');
+      setSearchHasMore(false);
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchLoading, searchHasMore, debouncedSearch, searchResults.length]);
 
   // Initial loads
   useEffect(() => { refresh(); }, [refresh]);
@@ -129,15 +190,18 @@ export default function App() {
         <Routes>
           <Route path="/" element={
             <BookList
-              books={popular}
-              heading="Popular Books"
-              hasMore={popularHasMore}
-              onLoadMore={loadMorePopular}
-              loadingMore={popularLoading}
-              source={popularSource}
+              books={isSearching ? searchResults : popular}
+              heading={isSearching ? `Search: "${debouncedSearch.trim()}"` : 'Popular Books'}
+              hasMore={isSearching ? searchHasMore : popularHasMore}
+              onLoadMore={isSearching ? loadMoreSearch : loadMorePopular}
+              loadingMore={isSearching ? searchLoading : popularLoading}
+              source={isSearching ? searchSource : popularSource}
               showCheckbox={isAuthenticated}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
             />
           } />
+          <Route path="/book/:id" element={<BookPreview showToast={showToast} />} />
           <Route path="/auth/callback" element={<OAuthCallback />} />
 
           <Route path="/lend" element={

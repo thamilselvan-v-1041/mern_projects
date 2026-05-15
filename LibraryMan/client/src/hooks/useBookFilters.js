@@ -15,13 +15,15 @@ const SORTERS = {
  * Encapsulates search/filter/sort/paginate state for a book list.
  * All filtering is in-memory and O(n) per keystroke; cheap up to ~10k rows.
  */
-export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialStatus = 'all' } = {}) {
+export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialStatus = 'all', skipQuery = false } = {}) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState(initialStatus); // all | available | lent
   const [author, setAuthor] = useState('all');
   const [sort, setSort] = useState('title-asc');
   const [page, setPage] = useState(1);
 
+  // When the caller drives search externally (server-side query → /books/search),
+  // skip client-side query filtering — the books prop is already the result set.
   const debouncedQuery = useDebouncedValue(query, 200);
 
   const authors = useMemo(() => {
@@ -34,7 +36,7 @@ export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialSta
     const q = debouncedQuery.trim().toLowerCase();
     let out = books;
 
-    if (q) {
+    if (q && !skipQuery) {
       out = out.filter(b =>
         (b.title  && b.title.toLowerCase().includes(q)) ||
         (b.author && b.author.toLowerCase().includes(q)) ||
@@ -47,7 +49,7 @@ export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialSta
     const sorter = SORTERS[sort] || SORTERS['title-asc'];
     // copy before sort — never mutate caller's array
     return [...out].sort(sorter);
-  }, [books, debouncedQuery, status, author, sort]);
+  }, [books, debouncedQuery, status, author, sort, skipQuery]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
