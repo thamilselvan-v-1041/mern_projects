@@ -8,9 +8,12 @@
  *   - joi validators    → input sanitisation per route
  *   - Catalyst auth     → identity (cookie/session) + role-based authz
  */
-// Load local-dev secrets from server/.env when present (no-op in production
-// where AppSail / AdvancedIO env vars come from the Catalyst console).
-require('dotenv').config();
+// Load local-dev secrets from server/.env when present. In production
+// (AppSail / AdvancedIO) the env vars come from the Catalyst console, and
+// dotenv may not be in the deployed node_modules — so make this optional
+// rather than crashing the container on a missing dependency.
+try { require('dotenv').config(); }
+catch (e) { /* dotenv unavailable — fine, real env vars come from the runtime */ }
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');

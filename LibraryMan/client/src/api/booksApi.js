@@ -3,8 +3,11 @@ import { getCurrentUser, isMockMode } from '../auth/catalystAuth';
 
 /**
  * Base URL strategy:
- *  - Local dev: Vite proxies /api -> http://localhost:3001 (see vite.config.js)
- *  - Catalyst : VITE_API_BASE injected at build time → AdvancedIO function URL
+ *  - Local dev   : Vite proxies /api → http://localhost:3001 (vite.config.js)
+ *  - Production  : drop `VITE_API_BASE=…` into client/.env.local for the
+ *                  build step (gitignored — keeps the URL out of version
+ *                  control). All flows (popular, search, list, CRUD) go
+ *                  through this base URL — no browser-direct fallback.
  */
 const baseURL = import.meta.env.VITE_API_BASE || '/api';
 
