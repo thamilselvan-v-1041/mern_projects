@@ -70,7 +70,7 @@ export default function App() {
       <main className="main">
         {loading && <div className="loading">Loading books…</div>}
         <Routes>
-          <Route path="/" element={<BookList books={books} />} />
+          <Route path="/" element={<BookList books={books} defaultStatus="available" />} />
           <Route path="/auth/callback" element={<OAuthCallback />} />
 
           <Route path="/lend" element={

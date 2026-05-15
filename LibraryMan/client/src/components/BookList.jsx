@@ -2,16 +2,18 @@ import React from 'react';
 import useBookFilters from '../hooks/useBookFilters';
 import Pagination from './Pagination.jsx';
 
-export default function BookList({ books = [] }) {
+export default function BookList({ books = [], defaultStatus = 'all', heading }) {
   const {
     state, authors, pageItems, totalPages, totalCount, matchCount, set, reset
-  } = useBookFilters(books);
+  } = useBookFilters(books, { initialStatus: defaultStatus });
 
   const isFiltered =
     state.query.trim() !== '' ||
-    state.status !== 'all' ||
+    state.status !== defaultStatus ||
     state.author !== 'all' ||
     state.sort !== 'title-asc';
+
+  const titleText = heading ?? (defaultStatus === 'available' ? 'Available Books' : 'All Books');
 
   if (!totalCount) {
     return <div className="empty">No books in the library yet.</div>;
@@ -21,7 +23,7 @@ export default function BookList({ books = [] }) {
     <section className="card">
       <header className="list-header">
         <h2>
-          All Books{' '}
+          {titleText}{' '}
           <span className="muted">
             ({matchCount}{matchCount !== totalCount ? ` of ${totalCount}` : ''})
           </span>

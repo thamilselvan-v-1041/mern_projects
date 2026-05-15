@@ -15,9 +15,9 @@ const SORTERS = {
  * Encapsulates search/filter/sort/paginate state for a book list.
  * All filtering is in-memory and O(n) per keystroke; cheap up to ~10k rows.
  */
-export default function useBookFilters(books, { pageSize = PAGE_SIZE } = {}) {
+export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialStatus = 'all' } = {}) {
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('all');     // all | available | lent
+  const [status, setStatus] = useState(initialStatus); // all | available | lent
   const [author, setAuthor] = useState('all');
   const [sort, setSort] = useState('title-asc');
   const [page, setPage] = useState(1);
@@ -57,7 +57,7 @@ export default function useBookFilters(books, { pageSize = PAGE_SIZE } = {}) {
   );
 
   const reset = () => {
-    setQuery(''); setStatus('all'); setAuthor('all'); setSort('title-asc'); setPage(1);
+    setQuery(''); setStatus(initialStatus); setAuthor('all'); setSort('title-asc'); setPage(1);
   };
 
   // any filter mutation should snap back to page 1

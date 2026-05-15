@@ -15,6 +15,7 @@ const rateLimit = require('express-rate-limit');
 
 const booksRouter = require('./routes/books');
 const authRouter  = require('./routes/auth');
+const seedRouter  = require('./routes/seed');
 const { attachCatalystApp } = require('./middleware/catalystAuth');
 
 const app = express();
@@ -66,13 +67,15 @@ app.get('/', (_req, res) => {
       'GET    /books/me/loans     (member|admin)',
       'GET    /auth/providers     (public)',
       'POST   /auth/oauth/authorize (public)',
-      'POST   /auth/oauth/exchange  (public)'
+      'POST   /auth/oauth/exchange  (public)',
+      'POST   /seed/library       (admin, one-shot demo seed)'
     ]
   });
 });
 
 app.use('/auth',  authRouter);
 app.use('/books', booksRouter);
+app.use('/seed',  seedRouter);
 
 // ─── 404 ───────────────────────────────────────────────────────────────────
 app.use((req, res) => {
