@@ -39,8 +39,8 @@ api.interceptors.response.use(
 
 export const booksApi = {
   list:    ()         => api.get('/books').then(r => r.data),
-  popular: (startIndex = 0, size = 30) =>
-    api.get('/books/popular', { params: { startIndex, size } }).then(r => r.data),
+  popular: (startIndex = 0, size = 30, { language = '', category = '' } = {}) =>
+    api.get('/books/popular', { params: { startIndex, size, language, category } }).then(r => r.data),
   search:  (q, startIndex = 0, size = 30) =>
     api.get('/books/search',  { params: { q, startIndex, size } }).then(r => r.data),
   add:     (payload)  => api.post('/books', payload).then(r => r.data),

@@ -23,6 +23,47 @@ import Pagination from './Pagination.jsx';
  *   source         string                        — upstream label (e.g. 'google-books')
  *   showCheckbox   boolean                       — per-row select toggle visible only when signed in
  */
+// Two-letter / three-letter ISO codes Open Library accepts in `language:`.
+// Empty value = "any" (don't constrain).
+const LANGUAGES = [
+  { code: '',    label: 'Any language' },
+  { code: 'eng', label: 'English'      },
+  { code: 'hin', label: 'Hindi'        },
+  { code: 'tam', label: 'Tamil'        },
+  { code: 'ben', label: 'Bengali'      },
+  { code: 'tel', label: 'Telugu'       },
+  { code: 'mar', label: 'Marathi'      },
+  { code: 'guj', label: 'Gujarati'     },
+  { code: 'kan', label: 'Kannada'      },
+  { code: 'mal', label: 'Malayalam'    },
+  { code: 'pan', label: 'Punjabi'      },
+  { code: 'urd', label: 'Urdu'         },
+  { code: 'san', label: 'Sanskrit'     }
+];
+
+// OL subjects are arbitrary strings; we expose a curated set that maps
+// reliably to Open Library's catalog tags.
+const CATEGORIES = [
+  { value: '',                       label: 'Any category'  },
+  { value: 'romance',                label: 'Romance'       },
+  { value: 'literature',             label: 'Literature'    },
+  { value: 'short_stories',          label: 'Short stories' },
+  { value: 'children',               label: 'Children'      },
+  { value: 'mystery',                label: 'Mystery'       },
+  { value: 'thrillers',              label: 'Thriller'      },
+  { value: 'fantasy',                label: 'Fantasy'       },
+  { value: 'science_fiction',        label: 'Science Fiction' },
+  { value: 'historical_fiction',     label: 'Historical Fiction' },
+  { value: 'biography',              label: 'Biography'     },
+  { value: 'history',                label: 'History'       },
+  { value: 'philosophy',             label: 'Philosophy'    },
+  { value: 'poetry',                 label: 'Poetry'        },
+  { value: 'self-help',              label: 'Self-help'     },
+  { value: 'business',               label: 'Business'      },
+  { value: 'cooking',                label: 'Cooking'       },
+  { value: 'religion',               label: 'Religion'      }
+];
+
 export default function BookList({
   books = [],
   defaultStatus = 'all',
@@ -33,7 +74,9 @@ export default function BookList({
   source,
   showCheckbox = false,
   searchQuery,
-  onSearchChange
+  onSearchChange,
+  popularFilters,
+  onPopularFiltersChange
 }) {
   const lazyMode = typeof onLoadMore === 'function';
   const externalSearch = typeof onSearchChange === 'function';
@@ -63,6 +106,14 @@ export default function BookList({
   // (client-side substring filter on already-loaded books).
   const queryValue   = externalSearch ? (searchQuery ?? '') : state.query;
   const handleQuery  = externalSearch ? onSearchChange      : set.query;
+
+  // Server-side filters (language + category) — rendered only when the parent
+  // wires up `popularFilters` + `onPopularFiltersChange` (home page only).
+  const serverFilters = typeof onPopularFiltersChange === 'function' && popularFilters;
+  const updateServerFilter = (key, value) => {
+    if (!serverFilters) return;
+    onPopularFiltersChange({ ...popularFilters, [key]: value });
+  };
 
   const isFiltered =
     queryValue.trim() !== '' ||
@@ -120,6 +171,39 @@ export default function BookList({
           </button>
         </div>
       </header>
+
+      {serverFilters && (
+        <div className="filters filters-server" role="group" aria-label="Catalogue filters">
+          <select
+            value={popularFilters.language}
+            onChange={(e) => updateServerFilter('language', e.target.value)}
+            aria-label="Filter by language"
+          >
+            {LANGUAGES.map((l) => (
+              <option key={l.code || 'any'} value={l.code}>{l.label}</option>
+            ))}
+          </select>
+          <select
+            value={popularFilters.category}
+            onChange={(e) => updateServerFilter('category', e.target.value)}
+            aria-label="Filter by category"
+          >
+            {CATEGORIES.map((c) => (
+              <option key={c.value || 'any'} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+          {(popularFilters.language || popularFilters.category) && (
+            <button
+              type="button"
+              className="btn-link"
+              onClick={() => onPopularFiltersChange({ language: '', category: '' })}
+              aria-label="Clear catalogue filters"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="filters" role="search">
         <input

@@ -415,3 +415,10 @@ button.btn-danger { background: #E42527; }
 .btn-page:hover { background: #f3f4f6; border-color: #9ca3af; }
 .btn-page:active { background: #e5e7eb; }
 .book-reader-page-info { font-size: 12px; }
+
+/* ─── Server-side popular filters (language + category) ──────────────────── */
+.filters-server { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+.filters-server select {
+  padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px;
+  background: #fff; font-size: 13px;
+}

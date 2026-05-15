@@ -24,22 +24,51 @@ const ctxFrom = (req) => ({ catalystApp: req.catalystApp, user: req.user });
  *   navigation without re-hitting the upstream.
  */
 const { popularWithCovers } = require('../seeds/popularBooks');
+const { popularIndianWithCovers } = require('../seeds/popularIndianBooks');
 
 const POPULAR_CACHE_TTL_MS = 60 * 60 * 1000;
 const popularPageCache = new Map(); // key = `${source}:${startIndex}:${size}` → { at, payload }
 
-async function fetchFromOpenLibrary({ startIndex, size, query }) {
+// Map ISO 639-2 codes to the Open Library subject tag for that language's
+// literature. We use this to bias the search toward books *originally
+// written* in the language rather than every English bestseller that happens
+// to have a translation.
+const LANGUAGE_LIT_SUBJECT = {
+  hin: 'Hindi_literature',  tam: 'Tamil_literature',  ben: 'Bengali_literature',
+  tel: 'Telugu_literature', mar: 'Marathi_literature', guj: 'Gujarati_literature',
+  kan: 'Kannada_literature', mal: 'Malayalam_literature', pan: 'Punjabi_literature',
+  urd: 'Urdu_literature',   san: 'Sanskrit_literature'
+};
+
+async function fetchFromOpenLibrary({ startIndex, size, query, language, category }) {
   if (typeof globalThis.fetch !== 'function') throw new Error('fetch missing');
-  // sort=editions ≈ popularity (high edition count → frequently reprinted).
-  // When the caller supplies an explicit query (search mode), use it verbatim;
-  // otherwise default to 'programming' for the popular feed.
-  const q = (query && query.trim()) || 'programming';
-  const url = 'https://openlibrary.org/search.json'
-    + `?q=${encodeURIComponent(q)}`
-    + (query ? '' : '&sort=editions')
-    + `&limit=${size}`
-    + `&offset=${startIndex}`
-    + '&fields=key,title,author_name,first_publish_year,isbn,cover_i,subject,publisher';
+  // Build the OL request. OL's free-text uses `q=`; `subject:` works *inside*
+  // `q=`; but `language` is a top-level URL param, NOT a q-modifier.
+  //
+  // Strategy when there's no user-supplied free-text query:
+  //  - language only      → q=subject:<lang>_literature
+  //                         + language=<code> + sort=new (recent first)
+  //  - language + category → both subjects ANDed, sort=new
+  //  - category only      → q=subject:<category>, sort=editions (popular first)
+  //  - nothing            → q=subject:fiction, sort=editions
+  let q = (query && query.trim()) || '';
+  const langSubject = language ? LANGUAGE_LIT_SUBJECT[language] : null;
+  if (!q) {
+    const subjects = [];
+    if (category)    subjects.push(`subject:${category.replace(/\s+/g, '_')}`);
+    if (langSubject) subjects.push(`subject:${langSubject}`);
+    q = subjects.length ? subjects.join(' AND ') : 'subject:fiction';
+  }
+  const params = new URLSearchParams();
+  params.set('q', q);
+  if (language) params.set('language', language);
+  // When a language is set, prefer recency (sort=new) so we surface actual
+  // recent original-language work; otherwise rank by edition count.
+  if (!query) params.set('sort', language ? 'new' : 'editions');
+  params.set('limit', String(size));
+  params.set('offset', String(startIndex));
+  params.set('fields', 'key,title,author_name,first_publish_year,isbn,cover_i,subject,publisher,ia');
+  const url = `https://openlibrary.org/search.json?${params.toString()}`;
   const resp = await globalThis.fetch(url, {
     headers: { Accept: 'application/json', 'User-Agent': 'LibraryMan/2.0 (demo)' }
   });
@@ -50,12 +79,16 @@ async function fetchFromOpenLibrary({ startIndex, size, query }) {
     const thumbnail = d.cover_i
       ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`
       : (isbn ? `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg` : null);
+    // `ia` is an Internet Archive identifier — when present, the book has a
+    // scanned copy viewable via https://archive.org/embed/<ia>.
+    const iaId = Array.isArray(d.ia) && d.ia.length > 0 ? d.ia[0] : null;
     return {
       id:          d.key || `ol-${startIndex + idx}`,
       title:       d.title || 'Untitled',
       subtitle:    null,
       author:      (d.author_name || []).slice(0, 3).join(', ') || 'Unknown',
       isbn:        isbn || null,
+      iaId,
       status:      'available',
       thumbnail,
       publisher:   Array.isArray(d.publisher) ? d.publisher[0] : null,
@@ -117,33 +150,46 @@ router.get('/popular', async (req, res, next) => {
   try {
     const startIndex = Math.max(0, parseInt(req.query.startIndex || '0', 10) || 0);
     const size = Math.min(30, Math.max(1, parseInt(req.query.size || '30', 10) || 30));
-    // Source priority: explicit query param wins. Default = 'google' so the
-    // home page can lazy-load through many batches (Google subject:computers
-    // returns thousands). Google → Open Library → curated 30-item list, in
-    // that order, on any upstream failure.
-    const preferred = (req.query.source || 'google').toLowerCase();
+    const language = (req.query.language || '').trim().toLowerCase();   // e.g. 'hin', 'tam', 'eng'
+    const category = (req.query.category || '').trim().toLowerCase();   // e.g. 'romance', 'children'
 
-    const cacheKey = `${preferred}:${startIndex}:${size}`;
+    // Source priority:
+    //  - With NO filters → curated Popular-in-India list (30 hand-picked titles,
+    //    all with IA scans, biased to the last 20 years).
+    //  - With a language or category filter → Open Library search with those
+    //    filters applied (categories map to subject:, languages to language:).
+    //  - Caller can override with ?source=openlibrary|google|curated.
+    const requested = (req.query.source || '').toLowerCase();
+    const filtered  = Boolean(language || category);
+    const preferred = requested || (filtered ? 'openlibrary' : 'india-curated');
+
+    const cacheKey = `${preferred}:${language}:${category}:${startIndex}:${size}`;
     const cached = popularPageCache.get(cacheKey);
     if (cached && Date.now() - cached.at < POPULAR_CACHE_TTL_MS) {
       return res.json({ ...cached.payload, cached: true });
     }
 
-    const all = popularWithCovers();
+    const indianAll  = popularIndianWithCovers();
+    const csAll      = popularWithCovers();
+    const useIndian  = async () => ({
+      items: indianAll.slice(startIndex, startIndex + size),
+      total: indianAll.length
+    });
     const useCurated = async () => ({
-      items: all.slice(startIndex, startIndex + size),
-      total: all.length
+      items: csAll.slice(startIndex, startIndex + size),
+      total: csAll.length
     });
 
     let fetchers;
-    if (preferred === 'google')      fetchers = [['google',      fetchFromGoogleBooks], ['openlibrary', fetchFromOpenLibrary], ['curated', useCurated]];
-    else if (preferred === 'openlibrary') fetchers = [['openlibrary', fetchFromOpenLibrary], ['google',      fetchFromGoogleBooks], ['curated', useCurated]];
-    else                              fetchers = [['curated',     useCurated]];
+    if (preferred === 'india-curated') fetchers = [['india-curated', useIndian], ['openlibrary', fetchFromOpenLibrary]];
+    else if (preferred === 'curated')  fetchers = [['curated',      useCurated]];
+    else if (preferred === 'google')   fetchers = [['google',       fetchFromGoogleBooks], ['openlibrary', fetchFromOpenLibrary], ['india-curated', useIndian]];
+    else                                fetchers = [['openlibrary',  fetchFromOpenLibrary], ['google',       fetchFromGoogleBooks], ['india-curated', useIndian]];
 
     let items, total, source, lastError;
     for (const [name, fn] of fetchers) {
       try {
-        const r = await fn({ startIndex, size });
+        const r = await fn({ startIndex, size, language, category });
         if (r.items.length) {
           items  = r.items;
           total  = r.total;
@@ -157,7 +203,7 @@ router.get('/popular', async (req, res, next) => {
 
     if (!items || !items.length) {
       // Absolute last resort
-      const r = await useCurated();
+      const r = filtered ? await useCurated() : await useIndian();
       items  = r.items;
       total  = r.total;
       source = `fallback (${lastError || 'no upstream items'})`;

@@ -8,23 +8,36 @@ import ReturnBook from './components/ReturnBook.jsx';
 import DeleteBook from './components/DeleteBook.jsx';
 import { booksApi } from './api/booksApi';
 import { useAuth } from './auth/AuthContext';
-import SignInGate from './auth/SignInGate.jsx';
 import RequireRole from './auth/RequireRole.jsx';
-import OAuthCallback from './auth/OAuthCallback.jsx';
 import useDebouncedValue from './hooks/useDebouncedValue';
+
+/**
+ * Catalyst Slate hosts a built-in login page at /__catalyst/auth/login under
+ * the same origin as the deployed client. Redirecting there hands the entire
+ * sign-in/sign-up UX to Catalyst — no in-app modal, no embedded iframe, no
+ * federated-provider boilerplate. The URL is derived from window.location
+ * at runtime so the same code works locally and across every Slate subdomain
+ * Catalyst hands us on redeploy.
+ */
+function goToCatalystSignIn() {
+  if (typeof window === 'undefined') return;
+  window.location.assign(`${window.location.origin}/__catalyst/auth/login`);
+}
 
 export default function App() {
   const { user, loading: authLoading, isAdmin, isAuthenticated, signOut, role, provider } = useAuth();
   const [books, setBooks] = useState([]);                  // Data Store inventory (lend/return)
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
-  const [signinOpen, setSigninOpen] = useState(false);
 
   // Public catalogue for the home page, lazy-loaded in 30-item batches.
+  // `popularFilters` drives the server-side feed (language + category); when
+  // either changes we reset the loaded set and refetch from page 0.
   const [popular, setPopular]                   = useState([]);
   const [popularHasMore, setPopularHasMore]     = useState(true);
   const [popularLoading, setPopularLoading]     = useState(false);
   const [popularSource, setPopularSource]       = useState(null);
+  const [popularFilters, setPopularFilters]     = useState({ language: '', category: '' });
 
   // Server-side search (Google Books → Open Library fallback) — replaces the
   // popular feed when the user has a non-empty search query.
@@ -35,9 +48,6 @@ export default function App() {
   const [searchSource,  setSearchSource]  = useState(null);
   const debouncedSearch = useDebouncedValue(searchQuery, 350);
   const isSearching = debouncedSearch.trim().length > 0;
-
-  // Auto-close the sign-in modal once the user is authenticated
-  useEffect(() => { if (isAuthenticated) setSigninOpen(false); }, [isAuthenticated]);
 
   const showToast = (msg, type = 'info') => {
     setToast({ msg, type });
@@ -57,15 +67,10 @@ export default function App() {
   }, []);
 
   const loadMorePopular = useCallback(async () => {
-    setPopularLoading((isLoading) => {
-      // Use a functional setState to read the current loading flag without a
-      // stale-closure race when multiple scrolls fire in quick succession.
-      if (isLoading) return isLoading;
-      return true;
-    });
+    setPopularLoading((isLoading) => isLoading ? isLoading : true);
     try {
       const startIndex = popular.length;
-      const res = await booksApi.popular(startIndex, 30);
+      const res = await booksApi.popular(startIndex, 30, popularFilters);
       setPopular((prev) => [...prev, ...(res.data || [])]);
       setPopularHasMore(Boolean(res.hasMore));
       setPopularSource(res.source || null);
@@ -75,7 +80,34 @@ export default function App() {
     } finally {
       setPopularLoading(false);
     }
-  }, [popular.length]);
+  }, [popular.length, popularFilters]);
+
+  // When language or category changes, blow away the loaded set and refetch
+  // from page 0 with the new filters. Skip on the very first render because
+  // the initial-load effect below also primes the feed.
+  const didInitialFetchRef = React.useRef(false);
+  useEffect(() => {
+    if (!didInitialFetchRef.current) return; // initial load handled separately
+    let cancelled = false;
+    (async () => {
+      setPopularLoading(true);
+      try {
+        const res = await booksApi.popular(0, 30, popularFilters);
+        if (cancelled) return;
+        setPopular(res.data || []);
+        setPopularHasMore(Boolean(res.hasMore));
+        setPopularSource(res.source || null);
+      } catch {
+        if (!cancelled) {
+          showToast('Failed to load popular books', 'error');
+          setPopularHasMore(false);
+        }
+      } finally {
+        if (!cancelled) setPopularLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [popularFilters]);
 
   // Server-side search: fire on debounced query change. A fresh query resets
   // the result list and pagination; an empty query clears everything (we just
@@ -129,7 +161,10 @@ export default function App() {
   // Initial loads
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
-    if (popular.length === 0 && popularHasMore && !popularLoading) loadMorePopular();
+    if (popular.length === 0 && popularHasMore && !popularLoading) {
+      didInitialFetchRef.current = true;
+      loadMorePopular();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -173,9 +208,8 @@ export default function App() {
           ) : (
             <button
               className="btn-signin"
-              onClick={() => setSigninOpen(true)}
-              aria-haspopup="dialog"
-              aria-expanded={signinOpen}
+              onClick={goToCatalystSignIn}
+              aria-label="Sign in via Catalyst"
             >
               Sign in
             </button>
@@ -191,7 +225,7 @@ export default function App() {
           <Route path="/" element={
             <BookList
               books={isSearching ? searchResults : popular}
-              heading={isSearching ? `Search: "${debouncedSearch.trim()}"` : 'Popular Books'}
+              heading={isSearching ? `Search: "${debouncedSearch.trim()}"` : 'Popular Books in India'}
               hasMore={isSearching ? searchHasMore : popularHasMore}
               onLoadMore={isSearching ? loadMoreSearch : loadMorePopular}
               loadingMore={isSearching ? searchLoading : popularLoading}
@@ -199,10 +233,11 @@ export default function App() {
               showCheckbox={isAuthenticated}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
+              popularFilters={isSearching ? null : popularFilters}
+              onPopularFiltersChange={isSearching ? null : setPopularFilters}
             />
           } />
           <Route path="/book/:id" element={<BookPreview showToast={showToast} />} />
-          <Route path="/auth/callback" element={<OAuthCallback />} />
 
           <Route path="/lend" element={
             <RequireRole roles={['member', 'admin']}>
@@ -230,27 +265,6 @@ export default function App() {
         </Routes>
 
       </main>
-
-      {signinOpen && !isAuthenticated && (
-        <div
-          className="signin-modal-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="signin-title"
-          onClick={() => setSigninOpen(false)}
-        >
-          <div className="signin-modal-content" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="signin-modal-close"
-              onClick={() => setSigninOpen(false)}
-              aria-label="Close sign-in"
-            >
-              ✕
-            </button>
-            <SignInGate />
-          </div>
-        </div>
-      )}
 
       <footer className="footer">Hosted on Zoho Catalyst · Auth + Data Store</footer>
     </div>

@@ -109,14 +109,63 @@ export default function BookPreview({ showToast }) {
         </div>
       </div>
 
-      {book.isbn ? (
-        <GoogleBooksReader isbn={book.isbn} title={book.title} fallbackUrl={book.previewLink} />
-      ) : (
-        <p className="muted book-reader-fallback">
-          No ISBN on file for this book — Google Books needs an ISBN to load its preview pages.
-        </p>
-      )}
+      <BookReader book={book} />
     </section>
+  );
+}
+
+/* ─── Reader dispatch ────────────────────────────────────────────────────────
+ * Priority:
+ *   1. Internet Archive BookReader  (book.iaId present)
+ *      — full scanned pages with built-in pagination, no quotas.
+ *   2. Google Books embedded viewer (ISBN present, no iaId)
+ *      — preview pages only; many copyrighted titles return "no preview".
+ *   3. Nothing to render — show metadata-only fallback.
+ */
+function BookReader({ book }) {
+  if (book.iaId) {
+    return <InternetArchiveReader iaId={book.iaId} title={book.title} />;
+  }
+  if (book.isbn) {
+    return <GoogleBooksReader isbn={book.isbn} title={book.title} fallbackUrl={book.previewLink} />;
+  }
+  return (
+    <p className="muted book-reader-fallback">
+      No previewable copy is available for this book. We need either an Internet
+      Archive scan (Open Library&apos;s <code>ia</code> field) or an ISBN to load
+      a reader.
+    </p>
+  );
+}
+
+/* ─── Internet Archive BookReader (preferred for public-domain works) ────── */
+
+function InternetArchiveReader({ iaId, title }) {
+  // archive.org/embed serves the same BookReader you get on the IA site
+  // (full-page flip, zoom, search, table-of-contents — all keyboard-navigable
+  // inside the iframe). No API key, no quota. For public-domain works the
+  // entire book is viewable; for "borrowable" titles the reader shows a 14-day
+  // borrow prompt inside the iframe, which is acceptable graceful degradation.
+  const src = `https://archive.org/embed/${encodeURIComponent(iaId)}`;
+  return (
+    <div className="book-reader">
+      <h3 className="book-reader-heading">Read preview</h3>
+      <iframe
+        title={`Internet Archive reader for ${title}`}
+        src={src}
+        className="book-reader-canvas"
+        allowFullScreen
+        loading="lazy"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+      />
+      <p className="muted book-reader-status">
+        Powered by the Internet Archive — use the toolbar inside the reader to
+        flip pages, zoom, or open the table of contents. Open the full reader on{' '}
+        <a href={`https://archive.org/details/${encodeURIComponent(iaId)}`} target="_blank" rel="noreferrer">
+          archive.org ↗
+        </a>.
+      </p>
+    </div>
   );
 }
 
@@ -178,14 +227,17 @@ function GoogleBooksReader({ isbn, title, fallbackUrl }) {
         const viewer = new gb.DefaultViewer(canvasRef.current);
         viewerRef.current = viewer;
         const cleanIsbn = String(isbn).replace(/[^0-9Xx]/g, '');
+        // JSAPI signature: load(id, notFoundCallback, successCallback, initialPageId)
+        // — note: NOT (success, notFound). Mixing them up means the viewer
+        // appears empty even when it loaded fine.
         viewer.load(
           `ISBN:${cleanIsbn}`,
-          () => {                                          // success
+          () => { if (!cancelled) setState('unavailable'); },   // not-found / no preview
+          () => {                                                // success
             if (cancelled) return;
             setState('ready');
             refreshPageInfo(viewer);
-          },
-          () => { if (!cancelled) setState('unavailable'); } // not found / no preview
+          }
         );
       })
       .catch(() => { if (!cancelled) setState('error'); });

@@ -26,10 +26,18 @@ export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialSta
   // skip client-side query filtering — the books prop is already the result set.
   const debouncedQuery = useDebouncedValue(query, 200);
 
+  // De-dupe authors using the same normalization as the filter so a single
+  // "William Shakespeare" can't appear twice (e.g. one with a trailing
+  // space and one without). We keep the *first-seen* original casing as
+  // the display label so the dropdown reads naturally.
   const authors = useMemo(() => {
-    const set = new Set();
-    for (const b of books) if (b.author) set.add(b.author);
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    const seen = new Map(); // normalized key → first-seen display value
+    for (const b of books) {
+      if (!b.author) continue;
+      const key = String(b.author).trim().toLowerCase().replace(/\s+/g, ' ');
+      if (key && !seen.has(key)) seen.set(key, b.author.trim());
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
   }, [books]);
 
   const filtered = useMemo(() => {
@@ -44,7 +52,17 @@ export default function useBookFilters(books, { pageSize = PAGE_SIZE, initialSta
       );
     }
     if (status !== 'all') out = out.filter(b => b.status === status);
-    if (author !== 'all') out = out.filter(b => b.author === author);
+    if (author !== 'all') {
+      // Normalize whitespace + casing on both sides so trivial drift in
+      // upstream data (e.g. a stray nbsp or mixed case) doesn't make the
+      // dropdown selection silently drop every row.
+      const target = author.trim().toLowerCase().replace(/\s+/g, ' ');
+      out = out.filter(b => {
+        if (!b.author) return false;
+        const a = String(b.author).trim().toLowerCase().replace(/\s+/g, ' ');
+        return a === target;
+      });
+    }
 
     const sorter = SORTERS[sort] || SORTERS['title-asc'];
     // copy before sort — never mutate caller's array
