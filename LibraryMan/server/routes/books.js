@@ -6,6 +6,169 @@ const { addBookSchema, idParamSchema, validate } = require('../validators/bookVa
 
 const ctxFrom = (req) => ({ catalystApp: req.catalystApp, user: req.user });
 
+/* ─── /books/popular ────────────────────────────────────────────────────────
+ * Paginated public book feed for the home page, used by both the grid and
+ * the list view. The client fetches the first 30 immediately, then lazily
+ * loads more in 30-book batches as the user scrolls / clicks "Load more".
+ *
+ *   Query params:
+ *     startIndex  (default 0)
+ *     size        (default 30, max 30)
+ *
+ *   Source order:
+ *     1. Open Library Search API (free, no API key, generous rate limit)
+ *     2. Google Books (kept as alternate via ?source=google, in case OL is down)
+ *     3. Curated fallback list (server/seeds/popularBooks.js) on any error
+ *
+ *   Per-page result cached in-process for 1h to absorb back-and-forth
+ *   navigation without re-hitting the upstream.
+ */
+const { popularWithCovers } = require('../seeds/popularBooks');
+
+const POPULAR_CACHE_TTL_MS = 60 * 60 * 1000;
+const popularPageCache = new Map(); // key = `${source}:${startIndex}:${size}` → { at, payload }
+
+async function fetchFromOpenLibrary({ startIndex, size }) {
+  if (typeof globalThis.fetch !== 'function') throw new Error('fetch missing');
+  // sort=editions ≈ popularity (high edition count → frequently reprinted)
+  const url = 'https://openlibrary.org/search.json'
+    + '?q=programming'
+    + '&sort=editions'
+    + `&limit=${size}`
+    + `&offset=${startIndex}`
+    + '&fields=key,title,author_name,first_publish_year,isbn,cover_i,subject,publisher';
+  const resp = await globalThis.fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': 'LibraryMan/2.0 (demo)' }
+  });
+  if (!resp.ok) throw new Error(`openlibrary HTTP ${resp.status}`);
+  const body = await resp.json();
+  const items = (body.docs || []).map((d, idx) => {
+    const isbn = Array.isArray(d.isbn) ? d.isbn.find(i => /^\d{10,13}$/.test(i)) : null;
+    const thumbnail = d.cover_i
+      ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`
+      : (isbn ? `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg` : null);
+    return {
+      id:          d.key || `ol-${startIndex + idx}`,
+      title:       d.title || 'Untitled',
+      subtitle:    null,
+      author:      (d.author_name || []).slice(0, 3).join(', ') || 'Unknown',
+      isbn:        isbn || null,
+      status:      'available',
+      thumbnail,
+      publisher:   Array.isArray(d.publisher) ? d.publisher[0] : null,
+      publishedAt: d.first_publish_year ? String(d.first_publish_year) : null,
+      pageCount:   null,
+      categories:  Array.isArray(d.subject) ? d.subject.slice(0, 4) : [],
+      description: null
+    };
+  });
+  return { items, total: body.numFound || items.length };
+}
+
+async function fetchFromGoogleBooks({ startIndex, size }) {
+  if (typeof globalThis.fetch !== 'function') throw new Error('fetch missing');
+  const url = 'https://www.googleapis.com/books/v1/volumes'
+    + '?q=subject:computers'
+    + '&orderBy=relevance'
+    + '&printType=books'
+    + `&maxResults=${size}`
+    + `&startIndex=${startIndex}`
+    + '&projection=lite';
+  const resp = await globalThis.fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': 'LibraryMan/2.0 (demo)' }
+  });
+  if (!resp.ok) throw new Error(`google-books HTTP ${resp.status}`);
+  const body = await resp.json();
+  const items = (body.items || []).map((item) => {
+    const v = item.volumeInfo || {};
+    const ids = Array.isArray(v.industryIdentifiers) ? v.industryIdentifiers : [];
+    const isbn13 = ids.find(i => i.type === 'ISBN_13')?.identifier;
+    const isbn10 = ids.find(i => i.type === 'ISBN_10')?.identifier;
+    const thumbnail = (v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail || '')
+                       .replace(/^http:\/\//, 'https://') || null;
+    return {
+      id:          item.id,
+      title:       v.title || 'Untitled',
+      subtitle:    v.subtitle || null,
+      author:      (v.authors || []).join(', ') || 'Unknown',
+      isbn:        isbn13 || isbn10 || null,
+      status:      'available',
+      thumbnail,
+      publisher:   v.publisher || null,
+      publishedAt: v.publishedDate || null,
+      pageCount:   v.pageCount || null,
+      categories:  v.categories || [],
+      description: v.description || null
+    };
+  });
+  return { items, total: body.totalItems || items.length };
+}
+
+router.get('/popular', async (req, res, next) => {
+  try {
+    const startIndex = Math.max(0, parseInt(req.query.startIndex || '0', 10) || 0);
+    const size = Math.min(30, Math.max(1, parseInt(req.query.size || '30', 10) || 30));
+    // Source priority: explicit query param wins. Default = 'curated'
+    // (hand-picked popular CS titles with Open Library cover URLs), which is
+    // instant + key-less + always returns relevant results. Set 'google' or
+    // 'openlibrary' to fetch from the corresponding upstream search API.
+    const preferred = (req.query.source || 'curated').toLowerCase();
+
+    const cacheKey = `${preferred}:${startIndex}:${size}`;
+    const cached = popularPageCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < POPULAR_CACHE_TTL_MS) {
+      return res.json({ ...cached.payload, cached: true });
+    }
+
+    const all = popularWithCovers();
+    const useCurated = async () => ({
+      items: all.slice(startIndex, startIndex + size),
+      total: all.length
+    });
+
+    let fetchers;
+    if (preferred === 'google')      fetchers = [['google',      fetchFromGoogleBooks], ['openlibrary', fetchFromOpenLibrary], ['curated', useCurated]];
+    else if (preferred === 'openlibrary') fetchers = [['openlibrary', fetchFromOpenLibrary], ['google',      fetchFromGoogleBooks], ['curated', useCurated]];
+    else                              fetchers = [['curated',     useCurated]];
+
+    let items, total, source, lastError;
+    for (const [name, fn] of fetchers) {
+      try {
+        const r = await fn({ startIndex, size });
+        if (r.items.length) {
+          items  = r.items;
+          total  = r.total;
+          source = name;
+          break;
+        }
+      } catch (e) {
+        lastError = `${name}: ${e.message}`;
+      }
+    }
+
+    if (!items || !items.length) {
+      // Absolute last resort
+      const r = await useCurated();
+      items  = r.items;
+      total  = r.total;
+      source = `fallback (${lastError || 'no upstream items'})`;
+    }
+
+    const payload = {
+      success:    true,
+      data:       items,
+      startIndex,
+      size:       items.length,
+      total,
+      hasMore:    startIndex + items.length < total,
+      source,
+      cached:     false
+    };
+    popularPageCache.set(cacheKey, { at: Date.now(), payload });
+    res.json(payload);
+  } catch (err) { next(err); }
+});
+
 /** Public — anyone can browse the catalog. */
 router.get('/', async (req, res, next) => {
   try {

@@ -57,7 +57,11 @@ export default function SignInGate() {
           </button>
         ))}
         {providers.length === 0 && (
-          <p className="muted">No federated providers are configured. Use email/password below.</p>
+          <p className="muted">
+            {isMock
+              ? 'No federated providers configured for dev. Pick a synthetic identity below.'
+              : 'No federated providers are configured. Use email/password below.'}
+          </p>
         )}
       </div>
 

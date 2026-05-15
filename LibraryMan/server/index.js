@@ -8,6 +8,9 @@
  *   - joi validators    → input sanitisation per route
  *   - Catalyst auth     → identity (cookie/session) + role-based authz
  */
+// Load local-dev secrets from server/.env when present (no-op in production
+// where AppSail / AdvancedIO env vars come from the Catalyst console).
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
